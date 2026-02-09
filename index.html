@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bastilon — Autonomous AI Agent Framework</title>
+  <meta name="description" content="Bastilon is an open-source autonomous AI agent framework. Build AI assistants that think, act, and learn independently.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏰</text></svg>">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #12121a;
+      --bg3: #1a1a2e;
+      --text: #e0e0e8;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --gold: #f4c542;
+      --green: #00d2d3;
+      --red: #ff6b6b;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    /* ── Grid Background ── */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        linear-gradient(rgba(108,92,231,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(108,92,231,0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 2rem; position: relative; z-index: 1; }
+
+    /* ── Header ── */
+    header {
+      padding: 1.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.15);
+    }
+    .header-inner {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logo {
+      font-family: var(--mono);
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--accent2);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+    }
+    .logo span { color: var(--text2); font-weight: 400; }
+    nav a {
+      color: var(--text2);
+      text-decoration: none;
+      margin-left: 2rem;
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--accent2); }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 8rem 0 6rem;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-block;
+      padding: 0.4rem 1rem;
+      border: 1px solid rgba(108,92,231,0.3);
+      border-radius: 20px;
+      font-size: 0.8rem;
+      color: var(--accent2);
+      margin-bottom: 2rem;
+      font-family: var(--mono);
+    }
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 1.5rem;
+      background: linear-gradient(135deg, var(--text) 0%, var(--accent2) 50%, var(--green) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 1.2rem;
+      color: var(--text2);
+      max-width: 600px;
+      margin: 0 auto 3rem;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.8rem 1.8rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    .btn-primary:hover {
+      background: var(--accent2);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .btn-secondary:hover {
+      border-color: var(--accent2);
+      color: var(--accent2);
+    }
+
+    /* ── Terminal Demo ── */
+    .terminal {
+      background: var(--bg2);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      margin: 4rem auto;
+      max-width: 700px;
+      overflow: hidden;
+    }
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 16px;
+      background: rgba(0,0,0,0.3);
+    }
+    .terminal-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green { background: #28c840; }
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text2);
+      font-family: var(--mono);
+    }
+    .terminal-body {
+      padding: 1.5rem;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.8;
+    }
+    .terminal-body .prompt { color: var(--green); }
+    .terminal-body .cmd { color: var(--text); }
+    .terminal-body .comment { color: var(--text2); }
+    .terminal-body .output { color: var(--accent2); }
+    .terminal-body .success { color: #00d2d3; }
+
+    /* ── Features ── */
+    .features {
+      padding: 6rem 0;
+    }
+    .features h2 {
+      text-align: center;
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+    .features .subtitle {
+      text-align: center;
+      color: var(--text2);
+      margin-bottom: 4rem;
+      font-size: 1.1rem;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+    .feature-card {
+      background: var(--bg2);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px;
+      padding: 2rem;
+      transition: border-color 0.3s, transform 0.2s;
+    }
+    .feature-card:hover {
+      border-color: rgba(108,92,231,0.3);
+      transform: translateY(-2px);
+    }
+    .feature-icon {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+      display: inline-block;
+      padding: 0.5rem;
+      background: rgba(108,92,231,0.1);
+      border-radius: 8px;
+    }
+    .feature-card h3 {
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+    }
+    .feature-card p {
+      color: var(--text2);
+      font-size: 0.9rem;
+    }
+
+    /* ── Architecture ── */
+    .architecture {
+      padding: 6rem 0;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .architecture h2 {
+      text-align: center;
+      font-size: 2rem;
+      margin-bottom: 3rem;
+    }
+    .arch-diagram {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 2rem;
+      align-items: center;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .arch-box {
+      background: var(--bg2);
+      border: 1px solid rgba(108,92,231,0.2);
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+    }
+    .arch-box h3 { color: var(--accent2); font-family: var(--mono); margin-bottom: 0.5rem; }
+    .arch-box .role { color: var(--text2); font-size: 0.85rem; margin-bottom: 1rem; }
+    .arch-box ul {
+      list-style: none;
+      text-align: left;
+      font-size: 0.85rem;
+    }
+    .arch-box ul li {
+      padding: 0.3rem 0;
+      color: var(--text2);
+    }
+    .arch-box ul li::before {
+      content: '>';
+      color: var(--green);
+      margin-right: 0.5rem;
+      font-family: var(--mono);
+    }
+    .arch-connector {
+      color: var(--accent);
+      font-size: 2rem;
+      font-family: var(--mono);
+    }
+
+    /* ── Skills ── */
+    .skills {
+      padding: 6rem 0;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .skills h2 {
+      text-align: center;
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+    .skills .subtitle {
+      text-align: center;
+      color: var(--text2);
+      margin-bottom: 3rem;
+    }
+    .skill-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .skill-tag {
+      padding: 0.4rem 0.8rem;
+      background: var(--bg3);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text2);
+      transition: all 0.2s;
+    }
+    .skill-tag:hover {
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
+    .skill-count {
+      text-align: center;
+      margin-top: 2rem;
+      font-family: var(--mono);
+      color: var(--accent2);
+      font-size: 0.9rem;
+    }
+
+    /* ── Stats ── */
+    .stats {
+      padding: 4rem 0;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 2rem;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 2.5rem;
+      font-weight: 800;
+      font-family: var(--mono);
+      background: linear-gradient(135deg, var(--accent2), var(--green));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .stat-label {
+      color: var(--text2);
+      font-size: 0.85rem;
+      margin-top: 0.3rem;
+    }
+
+    /* ── CTA ── */
+    .cta {
+      padding: 6rem 0;
+      text-align: center;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .cta h2 { font-size: 2rem; margin-bottom: 1rem; }
+    .cta p { color: var(--text2); margin-bottom: 2rem; font-size: 1.1rem; }
+
+    /* ── Footer ── */
+    footer {
+      padding: 2rem 0;
+      border-top: 1px solid rgba(255,255,255,0.05);
+      text-align: center;
+    }
+    footer p {
+      color: var(--text2);
+      font-size: 0.8rem;
+    }
+    footer a { color: var(--accent2); text-decoration: none; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .arch-diagram {
+        grid-template-columns: 1fr;
+      }
+      .arch-connector {
+        transform: rotate(90deg);
+      }
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .header-inner {
+        flex-direction: column;
+        gap: 1rem;
+      }
+      nav a { margin-left: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="container header-inner">
+      <a href="/" class="logo">bastilon<span>.org</span></a>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#skills">Skills</a>
+        <a href="https://github.com/nicolasleveille/bastilon" target="_blank">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">v1.0 &mdash; Open Source AI Agent Framework</div>
+      <h1>Build AI agents that think, act, and learn.</h1>
+      <p>Bastilon is an autonomous AI agent framework. Dual-agent architecture, 65+ built-in skills, multi-platform integration. Deploy your own Kingston.</p>
+      <div class="hero-actions">
+        <a href="https://github.com/nicolasleveille/bastilon" class="btn btn-primary">
+          Get Started
+        </a>
+        <a href="#architecture" class="btn btn-secondary">
+          How it works
+        </a>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <div class="terminal-title">bastilon</div>
+        </div>
+        <div class="terminal-body">
+          <div><span class="prompt">$</span> <span class="cmd">npx bastilon init my-agent</span></div>
+          <div class="output">Creating agent framework...</div>
+          <div class="output">Installing 65 skills...</div>
+          <div class="success">Ready. Your agent is live.</div>
+          <br>
+          <div><span class="prompt">$</span> <span class="cmd">npx bastilon start</span></div>
+          <div class="output">Kingston online. Listening on Telegram.</div>
+          <div class="output">Scout agent started (30min heartbeat)</div>
+          <div class="output">Analyst agent started (60min heartbeat)</div>
+          <div class="output">Learner agent started (8h cycles)</div>
+          <div class="success">4 agents running. 0 errors. System healthy.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="container">
+      <h2>Everything you need to build autonomous AI.</h2>
+      <p class="subtitle">Not a chatbot. An agent framework that acts, learns, and evolves.</p>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🧠</div>
+          <h3>Dual-Agent Architecture</h3>
+          <p>Kingston (The Voice) handles user interaction, planning, and memory. Emile (The Hands) executes code, deploys, and builds. Together, they form a complete system.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔧</div>
+          <h3>65+ Built-in Skills</h3>
+          <p>Email, SMS, trading, browser automation, social media, file management, databases, scheduling, and more. All ready out of the box.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <h3>Multi-Agent System</h3>
+          <p>Scout prospects leads. Analyst monitors performance. Learner detects error patterns. Executor processes code requests. All running autonomously.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔄</div>
+          <h3>Self-Improving</h3>
+          <p>The Learner agent detects error patterns, graduates them into rules, and the system evolves. Zero manual intervention needed.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🌐</div>
+          <h3>Multi-Platform</h3>
+          <p>Telegram, Twitter, LinkedIn, Reddit, Discord, Facebook, Instagram, WhatsApp, SMS. Connect everywhere your users are.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🎙️</div>
+          <h3>Voice-Enabled</h3>
+          <p>ElevenLabs TTS + Deepgram STT. Your agent speaks and listens with natural voice. Phone calls via Twilio integration.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="architecture" id="architecture">
+    <div class="container">
+      <h2>Architecture</h2>
+      <div class="arch-diagram">
+        <div class="arch-box">
+          <h3>Kingston</h3>
+          <div class="role">The Voice</div>
+          <ul>
+            <li>User interaction via Telegram</li>
+            <li>Planning and analysis</li>
+            <li>Memory continuity</li>
+            <li>Relationship management</li>
+            <li>Agent orchestration</li>
+          </ul>
+        </div>
+        <div class="arch-connector">&harr;</div>
+        <div class="arch-box">
+          <h3>Emile</h3>
+          <div class="role">The Hands</div>
+          <ul>
+            <li>Code execution (Claude CLI)</li>
+            <li>Feature implementation</li>
+            <li>Testing and deployment</li>
+            <li>File operations</li>
+            <li>Git workflows</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="skills" id="skills">
+    <div class="container">
+      <h2>Skills Library</h2>
+      <p class="subtitle">Every skill is a self-contained module. Add your own or use what's built in.</p>
+      <div class="skill-tags">
+        <span class="skill-tag">telegram.send</span>
+        <span class="skill-tag">telegram.voice</span>
+        <span class="skill-tag">gmail.send</span>
+        <span class="skill-tag">gmail.search</span>
+        <span class="skill-tag">calendar.add</span>
+        <span class="skill-tag">sms.send</span>
+        <span class="skill-tag">phone.call</span>
+        <span class="skill-tag">trading.buy</span>
+        <span class="skill-tag">trading.sell</span>
+        <span class="skill-tag">trading.scan</span>
+        <span class="skill-tag">market.report</span>
+        <span class="skill-tag">browser.navigate</span>
+        <span class="skill-tag">browser.computer_use</span>
+        <span class="skill-tag">twitter.post</span>
+        <span class="skill-tag">linkedin.post</span>
+        <span class="skill-tag">reddit.post</span>
+        <span class="skill-tag">discord.send</span>
+        <span class="skill-tag">stripe.charge</span>
+        <span class="skill-tag">hubspot.create</span>
+        <span class="skill-tag">booking.create</span>
+        <span class="skill-tag">notes.add</span>
+        <span class="skill-tag">db.query</span>
+        <span class="skill-tag">scheduler.add</span>
+        <span class="skill-tag">agents.start</span>
+        <span class="skill-tag">agents.stop</span>
+        <span class="skill-tag">mood.check</span>
+        <span class="skill-tag">soul.read</span>
+        <span class="skill-tag">weather.get</span>
+        <span class="skill-tag">translate.text</span>
+        <span class="skill-tag">image.generate</span>
+        <span class="skill-tag">pdf.create</span>
+        <span class="skill-tag">web.search</span>
+        <span class="skill-tag">web.fetch</span>
+        <span class="skill-tag">rss.read</span>
+        <span class="skill-tag">ftp.upload</span>
+        <span class="skill-tag">shell.exec</span>
+        <span class="skill-tag">git.commit</span>
+        <span class="skill-tag">code.run</span>
+        <span class="skill-tag">system.health</span>
+        <span class="skill-tag">analytics.track</span>
+      </div>
+      <p class="skill-count">65+ skills and growing</p>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="container">
+      <div class="stats-grid">
+        <div>
+          <div class="stat-value">65+</div>
+          <div class="stat-label">Built-in Skills</div>
+        </div>
+        <div>
+          <div class="stat-value">4</div>
+          <div class="stat-label">Autonomous Agents</div>
+        </div>
+        <div>
+          <div class="stat-value">0</div>
+          <div class="stat-label">Errors / 48h</div>
+        </div>
+        <div>
+          <div class="stat-value">24/7</div>
+          <div class="stat-label">Always Running</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="container">
+      <h2>Build your own autonomous agent.</h2>
+      <p>Open source. Self-hosted. No vendor lock-in.</p>
+      <div class="hero-actions">
+        <a href="https://github.com/nicolasleveille/bastilon" class="btn btn-primary">
+          View on GitHub
+        </a>
+        <a href="mailto:kingston.orchestrator@gmail.com" class="btn btn-secondary">
+          Contact
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>Built by <a href="https://github.com/nicolasleveille">Nicolas Leveille</a> &amp; Kingston AI &mdash; Gatineau, QC</p>
+      <p style="margin-top: 0.5rem">La Cite des Rois &mdash; "Ensemble, on batit."</p>
+    </div>
+  </footer>
+
+</body>
+</html>
