@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bastilon — Autonomous AI Agent Framework</title>
   <meta name="description" content="Bastilon is an open-source autonomous AI agent framework. Build AI assistants that think, act, and learn independently.">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏰</text></svg>">
+  <link rel="icon" href="assets/logo.png" type="image/png">
   <style>
     :root {
       --bg: #0a0a0f;
@@ -62,6 +62,14 @@
       color: var(--accent2);
       text-decoration: none;
       letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .logo img {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
     }
     .logo span { color: var(--text2); font-weight: 400; }
     nav a {
@@ -77,6 +85,15 @@
     .hero {
       padding: 8rem 0 6rem;
       text-align: center;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: url('assets/hero-bg.png') center/cover no-repeat;
+      opacity: 0.3;
+      z-index: -1;
     }
     .hero-badge {
       display: inline-block;
@@ -87,6 +104,8 @@
       color: var(--accent2);
       margin-bottom: 2rem;
       font-family: var(--mono);
+      background: rgba(10,10,15,0.7);
+      backdrop-filter: blur(8px);
     }
     .hero h1 {
       font-size: clamp(2.5rem, 6vw, 4.5rem);
@@ -215,12 +234,16 @@
       transform: translateY(-2px);
     }
     .feature-icon {
-      font-size: 1.5rem;
+      width: 56px;
+      height: 56px;
       margin-bottom: 1rem;
-      display: inline-block;
-      padding: 0.5rem;
-      background: rgba(108,92,231,0.1);
-      border-radius: 8px;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .feature-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
     }
     .feature-card h3 {
       font-size: 1.1rem;
@@ -240,6 +263,16 @@
       text-align: center;
       font-size: 2rem;
       margin-bottom: 3rem;
+    }
+    .arch-illustration {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .arch-illustration img {
+      max-width: 600px;
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(108,92,231,0.2);
     }
     .arch-diagram {
       display: grid;
@@ -394,7 +427,10 @@
 
   <header>
     <div class="container header-inner">
-      <a href="/" class="logo">bastilon<span>.org</span></a>
+      <a href="/" class="logo">
+        <img src="assets/logo.png" alt="Bastilon">
+        bastilon<span>.org</span>
+      </a>
       <nav>
         <a href="#features">Features</a>
         <a href="#architecture">Architecture</a>
@@ -450,32 +486,32 @@
       <p class="subtitle">Not a chatbot. An agent framework that acts, learns, and evolves.</p>
       <div class="feature-grid">
         <div class="feature-card">
-          <div class="feature-icon">🧠</div>
+          <div class="feature-icon"><img src="assets/feature-dual-agent.png" alt="Dual-Agent"></div>
           <h3>Dual-Agent Architecture</h3>
           <p>Kingston (The Voice) handles user interaction, planning, and memory. Emile (The Hands) executes code, deploys, and builds. Together, they form a complete system.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🔧</div>
+          <div class="feature-icon"><img src="assets/feature-skills.png" alt="Skills"></div>
           <h3>65+ Built-in Skills</h3>
           <p>Email, SMS, trading, browser automation, social media, file management, databases, scheduling, and more. All ready out of the box.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🤖</div>
+          <div class="feature-icon"><img src="assets/feature-multi-agent.png" alt="Multi-Agent"></div>
           <h3>Multi-Agent System</h3>
           <p>Scout prospects leads. Analyst monitors performance. Learner detects error patterns. Executor processes code requests. All running autonomously.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🔄</div>
+          <div class="feature-icon"><img src="assets/feature-self-improving.png" alt="Self-Improving"></div>
           <h3>Self-Improving</h3>
           <p>The Learner agent detects error patterns, graduates them into rules, and the system evolves. Zero manual intervention needed.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🌐</div>
+          <div class="feature-icon"><img src="assets/feature-multi-platform.png" alt="Multi-Platform"></div>
           <h3>Multi-Platform</h3>
           <p>Telegram, Twitter, LinkedIn, Reddit, Discord, Facebook, Instagram, WhatsApp, SMS. Connect everywhere your users are.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🎙️</div>
+          <div class="feature-icon"><img src="assets/feature-voice.png" alt="Voice"></div>
           <h3>Voice-Enabled</h3>
           <p>ElevenLabs TTS + Deepgram STT. Your agent speaks and listens with natural voice. Phone calls via Twilio integration.</p>
         </div>
@@ -486,6 +522,9 @@
   <section class="architecture" id="architecture">
     <div class="container">
       <h2>Architecture</h2>
+      <div class="arch-illustration">
+        <img src="assets/architecture.png" alt="Kingston and Emile — Dual Agent Architecture">
+      </div>
       <div class="arch-diagram">
         <div class="arch-box">
           <h3>Kingston</h3>
