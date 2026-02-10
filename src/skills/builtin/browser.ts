@@ -157,17 +157,25 @@ registerSkill({
       if (selector) {
         await page.waitForSelector(selector, { timeout: config.browserTimeoutMs });
         await page.click(selector);
-        return `Clicked element: ${selector}`;
+      } else {
+        // Find by visible text via XPath
+        const escaped = text!.replace(/'/g, "\\'");
+        const [el] = await page.$$(`xpath/.//a[contains(text(),"${escaped}")] | .//button[contains(text(),"${escaped}")] | .//*[contains(text(),"${escaped}")]`);
+        if (!el) return `Error: no element found with text "${text}".`;
+        await el.click();
       }
 
-      // Find by visible text via XPath
-      const escaped = text!.replace(/'/g, "\\'");
-      const [el] = await page.$$(`xpath/.//a[contains(text(),"${escaped}")] | .//button[contains(text(),"${escaped}")] | .//*[contains(text(),"${escaped}")]`);
-      if (!el) return `Error: no element found with text "${text}".`;
-      await el.click();
-      return `Clicked element with text: "${text}"`;
+      // Wait for page to settle after click, then report what's visible
+      await new Promise((r) => setTimeout(r, 1500));
+      const url = page.url();
+      const title = await page.title();
+      const visibleText = await page.evaluate(() => {
+        const body = document.body?.innerText || "";
+        return body.slice(0, 800);
+      }).catch(() => "");
+      return `Clicked ${selector || `"${text}"`}.\n\nPage after click:\n- URL: ${url}\n- Title: ${title}\n- Visible text (first 800 chars):\n${visibleText}\n\nTIP: Use browser.screenshot() if you need to see the page visually. Use browser.click or browser.type to continue.`;
     } catch (err) {
-      return `Error clicking: ${err instanceof Error ? err.message : String(err)}`;
+      return `Error clicking: ${err instanceof Error ? err.message : String(err)}.\n\nTIP: Take a browser.screenshot() to see the current state of the page and find the right selector.`;
     }
   },
 });
@@ -201,9 +209,13 @@ registerSkill({
       }
 
       await page.type(selector, text);
-      return `Typed "${text.length > 50 ? text.slice(0, 50) + "..." : text}" into ${selector}`;
+
+      // Report page state after typing
+      const url = page.url();
+      const title = await page.title();
+      return `Typed "${text.length > 50 ? text.slice(0, 50) + "..." : text}" into ${selector}.\n\nPage: ${url} — ${title}\nTIP: Use browser.click() to submit the form, or browser.screenshot() to see the current state.`;
     } catch (err) {
-      return `Error typing: ${err instanceof Error ? err.message : String(err)}`;
+      return `Error typing: ${err instanceof Error ? err.message : String(err)}.\n\nTIP: Take a browser.screenshot() to see the page and find the right selector.`;
     }
   },
 });
