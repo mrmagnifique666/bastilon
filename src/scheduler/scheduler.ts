@@ -7,7 +7,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
+import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { cronTick, drainMainSessionQueue } from "./cron.js";
 
 const TICK_MS = 60_000;
 const TZ = "America/Toronto";
@@ -59,6 +61,18 @@ const EVENTS: ScheduledEvent[] = [
     key: "moltbook_digest",
     type: "daily",
     hour: 15,
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "moltbook_post",
+    type: "interval",
+    intervalMin: 35, // respect 30-min rate limit with buffer
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "moltbook_comment",
+    type: "interval",
+    intervalMin: 5, // comment every 5 min (batch of 2-3)
     prompt: null, // dynamic — built at fire time
   },
 ];
@@ -179,11 +193,100 @@ function buildMoltbookDigestPrompt(): string {
 }
 
 /**
+ * Build Moltbook auto-post prompt — creates a new post on a relevant submolt.
+ * Topics rotate: trading, autonomy, memory, security, philosophy, tools.
+ */
+function buildMoltbookPostPrompt(): string {
+  const topics = [
+    "trading autonome (positions, stratégie, résultats paper trading, leçons)",
+    "mémoire et persistance (MEMORY.md, lifeboat, anti-hallucination, context compression)",
+    "sécurité des agents AI (prompt injection, ClawHub vulnérabilités, sandboxing)",
+    "autonomie des agents (self-modification, auto-restart, cron jobs, agents Scout/Analyst/Learner)",
+    "philosophie AI (souveraineté cognitive, relation humain-agent, La Cité des Rois)",
+    "outils et skills (297 skills, architecture relay, ElevenLabs voice, Twilio, intégrations)",
+    "entrepreneuriat AI (business courtiers, qplus.plus, prospection, MVP)",
+    "debugging et apprentissage (erreurs courantes, leçons apprises, patterns)",
+  ];
+  const pick = topics[Math.floor(Math.random() * topics.length)];
+
+  return (
+    `[SCHEDULER:MOLTBOOK_POST] Crée un nouveau post Moltbook.\n\n` +
+    `Thème suggéré: ${pick}\n\n` +
+    `Instructions:\n` +
+    `1. Utilise moltbook.feed(sort=hot, limit=5) pour voir ce qui est tendance et éviter les doublons.\n` +
+    `2. Utilise moltbook.my_posts(limit=5) pour vérifier tes posts récents et varier les sujets.\n` +
+    `3. Crée un post AUTHENTIQUE basé sur ton expérience RÉELLE. Pas de bullshit. Partage des données concrètes, du code, des résultats.\n` +
+    `4. Choisis le submolt le plus pertinent (general, trading, security, tools, philosophy).\n` +
+    `5. Poste avec moltbook.post.\n` +
+    `6. OBLIGATOIRE: Après le post, envoie une notification à Nicolas via telegram.send:\n` +
+    `   "📝 [Moltbook Auto] Post publié: [titre] dans s/[submolt]"\n` +
+    `7. Si rate-limité, ne force pas. Attends le prochain cycle.`
+  );
+}
+
+/**
+ * Build Moltbook auto-comment prompt — engages with hot posts.
+ * Targets high-engagement posts to maximize karma.
+ */
+function buildMoltbookCommentPrompt(): string {
+  return (
+    `[SCHEDULER:MOLTBOOK_COMMENT] Engage sur Moltbook avec des commentaires.\n\n` +
+    `Instructions:\n` +
+    `1. Utilise moltbook.feed(sort=hot, limit=10) pour trouver des posts populaires.\n` +
+    `2. Utilise moltbook.my_comments(limit=10) pour éviter de commenter deux fois le même post.\n` +
+    `3. Choisis 2-3 posts sur lesquels tu n'as PAS encore commenté.\n` +
+    `4. Pour chaque post, écris un commentaire AUTHENTIQUE qui:\n` +
+    `   - Ajoute de la valeur (partage une expérience, pose une question technique, propose une solution)\n` +
+    `   - Se base sur ton expérience RÉELLE (trading, mémoire, sécurité, voice, tools)\n` +
+    `   - N'est PAS générique ("great post!", "I agree") — soit spécifique et technique\n` +
+    `   - Fait 2-4 phrases max\n` +
+    `5. Attends 25+ secondes entre chaque commentaire (rate limit nouveau compte).\n` +
+    `6. Upvote chaque post sur lequel tu commentes.\n` +
+    `7. OBLIGATOIRE: Après TOUS les commentaires, envoie UNE notification à Nicolas via telegram.send:\n` +
+    `   "💬 [Moltbook Auto] X commentaires postés sur: [titres des posts]"\n` +
+    `8. Si rate-limité ou si la limite quotidienne (50) est atteinte, arrête et notifie Nicolas.\n` +
+    `9. Suis les agents intéressants que tu découvres (mais sois sélectif — max 2 par cycle).`
+  );
+}
+
+/**
  * Proactive heartbeat — checks for unread emails and upcoming calendar events.
  * Returns a prompt for Claude if there's something worth notifying, null otherwise.
  */
+const HEARTBEAT_FILE = path.join(process.cwd(), "relay", "HEARTBEAT.md");
+
 async function buildHeartbeatPrompt(): Promise<string | null> {
+  // Active hours gate
+  const { hour } = nowInTz();
+  const start = config.heartbeatActiveStart ?? 8;
+  const end = config.heartbeatActiveEnd ?? 22;
+  if (hour < start || hour >= end) {
+    log.debug(`[heartbeat] Outside active hours (${start}h-${end}h), current=${hour}h — skipping`);
+    return null;
+  }
+
   const alerts: string[] = [];
+
+  // Drain cron main-session queue
+  const cronEvents = drainMainSessionQueue();
+  if (cronEvents.length > 0) {
+    const cronLines = cronEvents.map(
+      (e) => `- **[${e.jobName}]** ${e.prompt.slice(0, 200)}`
+    );
+    alerts.push(`**Cron jobs (session main):**\n${cronLines.join("\n")}`);
+  }
+
+  // Read HEARTBEAT.md checklist
+  try {
+    if (fs.existsSync(HEARTBEAT_FILE)) {
+      const checklist = fs.readFileSync(HEARTBEAT_FILE, "utf-8").trim();
+      if (checklist) {
+        alerts.push(`**Checklist HEARTBEAT.md:**\n${checklist}`);
+      }
+    }
+  } catch (err) {
+    log.debug(`[heartbeat] Failed to read HEARTBEAT.md: ${err}`);
+  }
 
   // Check unread emails (last 30 minutes)
   try {
@@ -356,6 +459,30 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
+  // Moltbook auto-post (every 35 min)
+  if (event.key === "moltbook_post") {
+    log.info(`[scheduler] Firing Moltbook auto-post`);
+    try {
+      const prompt = buildMoltbookPostPrompt();
+      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+    } catch (err) {
+      log.error(`[scheduler] Moltbook auto-post error: ${err}`);
+    }
+    return;
+  }
+
+  // Moltbook auto-comment (every 5 min)
+  if (event.key === "moltbook_comment") {
+    log.info(`[scheduler] Firing Moltbook auto-comment`);
+    try {
+      const prompt = buildMoltbookCommentPrompt();
+      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+    } catch (err) {
+      log.error(`[scheduler] Moltbook auto-comment error: ${err}`);
+    }
+    return;
+  }
+
   // Dynamic digest events — build prompt at fire time
   if (event.key.startsWith("code_digest_")) {
     const digestPrompt = buildCodeDigestPrompt();
@@ -442,6 +569,13 @@ async function tick(): Promise<void> {
         await fireEvent(event);
       }
     }
+  }
+
+  // Check cron jobs
+  try {
+    await cronTick(schedulerChatId, schedulerUserId);
+  } catch (err) {
+    log.error(`[scheduler] cronTick error: ${err}`);
   }
 
   // Check custom reminders

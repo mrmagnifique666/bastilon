@@ -174,7 +174,7 @@ const TIER1_PREFIXES = [
   "scheduler.", "errors.", "image.", "time.", "translate.", "git.", "memory.",
   "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
   "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
-  "trading.", "mood.", "soul.",
+  "trading.", "mood.", "soul.", "cron.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -301,7 +301,7 @@ const OLLAMA_TIER1_PREFIXES = [
   "help", "notes.", "files.read", "files.list", "files.write",
   "shell.exec", "web.search", "web.fetch", "telegram.",
   "system.status", "code.", "memory.", "analytics.",
-  "contacts.", "errors.", "ftp.", "git.", "time.",
+  "contacts.", "errors.", "ftp.", "git.", "time.", "cron.",
 ];
 
 /**
@@ -446,6 +446,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/power-tools.js");
   await import("./builtin/soul.js");
   await import("./builtin/mood.js");
+  await import("./builtin/cron.js");
   await import("./builtin/youtube.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
