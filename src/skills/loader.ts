@@ -174,7 +174,8 @@ const TIER1_PREFIXES = [
   "scheduler.", "errors.", "image.", "time.", "translate.", "git.", "memory.",
   "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
   "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
-  "trading.", "mood.", "soul.", "cron.",
+  "trading.", "mood.", "soul.", "cron.", "planner.", "revenue.", "client.",
+  "selfimprove.", "content.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -302,6 +303,7 @@ const OLLAMA_TIER1_PREFIXES = [
   "shell.exec", "web.search", "web.fetch", "telegram.",
   "system.status", "code.", "memory.", "analytics.",
   "contacts.", "errors.", "ftp.", "git.", "time.", "cron.",
+  "planner.", "selfimprove.", "client.", "revenue.", "content.",
 ];
 
 /**
@@ -447,6 +449,11 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/soul.js");
   await import("./builtin/mood.js");
   await import("./builtin/cron.js");
+  await import("./builtin/planner.js");
+  await import("./builtin/revenue.js");
+  await import("./builtin/client.js");
+  await import("./builtin/selfimprove.js");
+  await import("./builtin/content.js");
   await import("./builtin/youtube.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");

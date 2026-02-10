@@ -129,6 +129,60 @@ export function getDb(): Database.Database {
         completed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_agent_tasks_to ON agent_tasks(to_agent, status);
+
+      CREATE TABLE IF NOT EXISTS plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        goal TEXT NOT NULL,
+        steps TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'pending',
+        current_step INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT DEFAULT 'kingston',
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE TABLE IF NOT EXISTS revenue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT NOT NULL,
+        amount REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'CAD',
+        type TEXT NOT NULL DEFAULT 'income',
+        status TEXT NOT NULL DEFAULT 'recorded',
+        description TEXT,
+        due_date INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_revenue_type ON revenue(type, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT,
+        phone TEXT,
+        company TEXT,
+        status TEXT NOT NULL DEFAULT 'lead',
+        needs TEXT,
+        notes TEXT,
+        last_contact_at INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
+
+      CREATE TABLE IF NOT EXISTS content_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        topic TEXT NOT NULL,
+        platform TEXT NOT NULL DEFAULT 'general',
+        content_type TEXT NOT NULL DEFAULT 'post',
+        body TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        scheduled_at INTEGER,
+        published_at INTEGER,
+        performance TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_content_status ON content_items(status, platform);
     `);
     // Migrate: add new columns to error_log if missing
     try {
