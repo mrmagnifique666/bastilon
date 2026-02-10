@@ -40,6 +40,7 @@ async function generateImage(prompt: string): Promise<{ filePath: string; textRe
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
+        responseModalities: ["IMAGE", "TEXT"],
         temperature: 1.0,
         topP: 0.95,
         topK: 64,
@@ -200,6 +201,7 @@ registerSkill({
           "Text prompt describing what to do with the image (e.g. 'Make this into a watercolor painting', 'Add sunglasses', 'Convert to anime style')",
       },
       chatId: { type: "string", description: "Telegram chat ID to send the result to" },
+      save_to: { type: "string", description: "Optional: save a copy to this absolute path" },
     },
     required: ["imagePath", "prompt", "chatId"],
   },
@@ -212,8 +214,22 @@ registerSkill({
       return "Error: invalid chatId.";
     }
 
+    const saveTo = args.save_to as string | undefined;
+
     try {
       const { filePath, textResponse } = await editImage(imagePath, prompt);
+
+      // Save a copy if requested
+      if (saveTo) {
+        try {
+          const destDir = path.dirname(saveTo);
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          fs.copyFileSync(filePath, saveTo);
+          log.info(`[image.edit] Saved copy to ${saveTo}`);
+        } catch (copyErr) {
+          log.warn(`[image.edit] Failed to save copy: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`);
+        }
+      }
 
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
@@ -221,7 +237,8 @@ registerSkill({
         await sendPhoto(chatId, filePath, caption);
         fs.unlinkSync(filePath);
         const extra = textResponse ? `\nGemini note: ${textResponse.slice(0, 200)}` : "";
-        return `Image edited and sent to chat ${chatId}.${extra}`;
+        const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
+        return `Image edited and sent to chat ${chatId}.${extra}${saved}`;
       }
 
       return `Image edited and saved to ${filePath} (bot not available to send).`;
@@ -243,6 +260,7 @@ registerSkill({
     properties: {
       prompt: { type: "string", description: "Image description / prompt" },
       chatId: { type: "string", description: "Telegram chat ID to send the image to" },
+      save_to: { type: "string", description: "Optional: save a copy to this absolute path (e.g. C:\\Users\\Nicolas\\Pictures\\meme.png)" },
     },
     required: ["prompt", "chatId"],
   },
@@ -254,18 +272,33 @@ registerSkill({
       return "Error: invalid chatId.";
     }
 
+    const saveTo = args.save_to as string | undefined;
+
     try {
       const { filePath, textResponse } = await generateImage(prompt);
+
+      // Save a copy if requested
+      if (saveTo) {
+        try {
+          const destDir = path.dirname(saveTo);
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          fs.copyFileSync(filePath, saveTo);
+          log.info(`[image] Saved copy to ${saveTo}`);
+        } catch (copyErr) {
+          log.warn(`[image] Failed to save copy: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`);
+        }
+      }
 
       // Send to Telegram
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
         const caption = prompt.length > 200 ? prompt.slice(0, 197) + "..." : prompt;
         await sendPhoto(chatId, filePath, caption);
-        // Clean up file after sending
+        // Clean up temp file after sending
         fs.unlinkSync(filePath);
         const extra = textResponse ? `\nGemini note: ${textResponse.slice(0, 200)}` : "";
-        return `Image generated and sent to chat ${chatId}.${extra}`;
+        const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
+        return `Image generated and sent to chat ${chatId}.${extra}${saved}`;
       }
 
       return `Image generated and saved to ${filePath} (bot not available to send).`;
@@ -274,6 +307,76 @@ registerSkill({
         return "Error: Gemini API request timed out (60s).";
       }
       return `Error generating image: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+registerSkill({
+  name: "image.meme",
+  description:
+    "Generate a meme image with AI. Automatically adds meme-style formatting to the prompt. Saves to disk and sends to Telegram.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      top_text: { type: "string", description: "Text at the top of the meme" },
+      bottom_text: { type: "string", description: "Text at the bottom of the meme" },
+      concept: { type: "string", description: "Meme concept/scene description (e.g. 'distracted boyfriend', 'drake hotline bling')" },
+      chatId: { type: "string", description: "Telegram chat ID" },
+      save_to: { type: "string", description: "Optional: save to this path (e.g. C:\\Users\\Nicolas\\Pictures\\meme.png)" },
+    },
+    required: ["concept", "chatId"],
+  },
+  async execute(args): Promise<string> {
+    const topText = (args.top_text as string) || "";
+    const bottomText = (args.bottom_text as string) || "";
+    const concept = args.concept as string;
+    const chatId = Number((args.chatId ?? args.chat_id) as string);
+    const saveTo = args.save_to as string | undefined;
+
+    if (!chatId || isNaN(chatId)) {
+      return "Error: invalid chatId.";
+    }
+
+    // Build a meme-optimized prompt
+    const memePrompt =
+      `Create a funny meme image. Style: classic internet meme with bold white Impact font text with black outline. ` +
+      `Scene: ${concept}. ` +
+      (topText ? `TOP TEXT in large white Impact font with black outline at the top: "${topText}". ` : "") +
+      (bottomText ? `BOTTOM TEXT in large white Impact font with black outline at the bottom: "${bottomText}". ` : "") +
+      `The text must be clearly readable, large, and in classic meme style. Make it funny and shareable.`;
+
+    try {
+      const { filePath, textResponse } = await generateImage(memePrompt);
+
+      // Save a copy if requested
+      if (saveTo) {
+        try {
+          const destDir = path.dirname(saveTo);
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          fs.copyFileSync(filePath, saveTo);
+          log.info(`[image.meme] Saved copy to ${saveTo}`);
+        } catch (copyErr) {
+          log.warn(`[image.meme] Failed to save copy: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`);
+        }
+      }
+
+      const sendPhoto = getBotPhotoFn();
+      if (sendPhoto) {
+        const caption = topText && bottomText
+          ? `${topText} / ${bottomText}`
+          : topText || bottomText || concept;
+        await sendPhoto(chatId, filePath, caption.slice(0, 200));
+        fs.unlinkSync(filePath);
+        const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
+        return `Meme generated and sent!${saved}`;
+      }
+
+      return `Meme saved to ${filePath} (bot not available to send).`;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return "Error: Gemini API request timed out (60s).";
+      }
+      return `Error generating meme: ${err instanceof Error ? err.message : String(err)}`;
     }
   },
 });
