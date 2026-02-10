@@ -97,6 +97,26 @@ export function getDb(): Database.Database {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_hash ON memory_items(content_hash);
       CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
       CREATE INDEX IF NOT EXISTS idx_memory_salience ON memory_items(salience DESC);
+
+      CREATE TABLE IF NOT EXISTS cron_jobs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        schedule_type TEXT NOT NULL,
+        schedule_value TEXT NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'America/Toronto',
+        prompt TEXT NOT NULL,
+        session_target TEXT NOT NULL DEFAULT 'isolated',
+        delivery_mode TEXT NOT NULL DEFAULT 'announce',
+        model_override TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        last_run_at INTEGER,
+        next_run_at INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_cron_next ON cron_jobs(enabled, next_run_at);
     `);
     // Migrate: add new columns to error_log if missing
     try {

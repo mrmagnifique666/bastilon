@@ -110,6 +110,12 @@ function buildConfig() {
     ollamaMaxTools: Number(optional("OLLAMA_MAX_TOOLS", "40")),
     ollamaNumPredict: Number(optional("OLLAMA_NUM_PREDICT", "2048")),
 
+    // Heartbeat + Cron
+    heartbeatActiveStart: Number(optional("HEARTBEAT_ACTIVE_START", "8")),
+    heartbeatActiveEnd: Number(optional("HEARTBEAT_ACTIVE_END", "22")),
+    cronChatIdBase: Number(optional("CRON_CHATID_BASE", "200")),
+    cronMaxRetries: Number(optional("CRON_MAX_RETRIES", "3")),
+
     // Weather location for mood skill
     weatherLocation: optional("WEATHER_LOCATION", "Ottawa"),
 
@@ -131,6 +137,13 @@ function buildConfig() {
     alpacaApiKey: optional("ALPACA_API_KEY", ""),
     alpacaSecretKey: optional("ALPACA_SECRET_KEY", ""),
     alpacaBaseUrl: optional("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2"),
+
+    // Facebook / Meta Graph API
+    facebookAppId: optional("FACEBOOK_APP_ID", ""),
+    facebookAppSecret: optional("FACEBOOK_APP_SECRET", ""),
+    facebookPageAccessToken: optional("FACEBOOK_PAGE_ACCESS_TOKEN", ""),
+    facebookPageId: optional("FACEBOOK_PAGE_ID", ""),
+    instagramBusinessAccountId: optional("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""),
 
     // Agents
     agentScoutEnabled: optional("AGENT_SCOUT_ENABLED", "false") === "true",
