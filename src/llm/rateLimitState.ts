@@ -11,8 +11,8 @@ import { log } from "../utils/log.js";
 let rateLimitUntil = 0;
 let lastProbeAt = 0;
 
-/** Probe interval: try Claude every 5 minutes during rate limit */
-const PROBE_INTERVAL_MS = 5 * 60_000;
+/** Probe interval: try Claude every 2 minutes during rate limit */
+const PROBE_INTERVAL_MS = 2 * 60_000;
 
 /** Is Claude CLI currently rate-limited? */
 export function isClaudeRateLimited(): boolean {

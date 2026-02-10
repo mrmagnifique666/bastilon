@@ -498,6 +498,12 @@
       <span class="nav-label">Debug</span>
     </a>
 
+    <div class="nav-group-title">Trading</div>
+    <a class="nav-item" data-view="trading" onclick="navigate('trading')">
+      <span class="nav-icon">&#128200;</span>
+      <span class="nav-label">Portfolio</span>
+    </a>
+
     <div class="nav-group-title">System</div>
     <a class="nav-item" data-view="system" onclick="navigate('system')">
       <span class="nav-icon">&#128187;</span>
@@ -631,6 +637,14 @@
       <div class="view-body" id="debug-body"></div>
     </div>
 
+    <!-- ═══ VIEW: Trading ═══ -->
+    <div class="view" id="view-trading">
+      <div class="view-header">Trading Portfolio</div>
+      <div class="view-body" id="trading-body" style="padding:16px;">
+        <div id="trading-loading" style="color:var(--text2);">Loading...</div>
+      </div>
+    </div>
+
     <!-- ═══ VIEW: System ═══ -->
     <div class="view" id="view-system">
       <div class="view-header">System Information</div>
@@ -685,6 +699,7 @@ function loadView(view) {
     case 'logs': loadLogs(); break;
     case 'debug': loadDebug(); break;
     case 'system': loadSystem(); break;
+    case 'trading': loadTrading(); break;
   }
 }
 
@@ -1306,6 +1321,153 @@ async function loadSystem() {
   } catch (err) {
     document.getElementById('system-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Trading
+// ══════════════════════════════════════════════════════════════
+let tradingRefreshTimer = null;
+async function loadTrading() {
+  if (tradingRefreshTimer) clearInterval(tradingRefreshTimer);
+  try {
+    const data = await api('trading');
+    if (data.error) { document.getElementById('trading-body').innerHTML = `<p style="color:var(--red);">${escapeHtml(data.error)}</p>`; return; }
+    renderTrading(data);
+    // Auto-refresh every 30s while on trading view
+    tradingRefreshTimer = setInterval(async () => {
+      if (currentView !== 'trading') { clearInterval(tradingRefreshTimer); return; }
+      try { const d = await api('trading'); renderTrading(d); } catch {}
+    }, 30000);
+  } catch (err) {
+    document.getElementById('trading-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+function renderTrading(data) {
+  const a = data.account || {};
+  const positions = data.positions || [];
+  const orders = data.orders || [];
+  const clock = data.clock || {};
+  const watchlist = data.watchlist || [];
+
+  const equity = parseFloat(a.portfolio_value || 0);
+  const cash = parseFloat(a.cash || 0);
+  const bp = parseFloat(a.buying_power || 0);
+  const lastEquity = parseFloat(a.last_equity || equity);
+  const dayPL = equity - lastEquity;
+  const dayPLPct = lastEquity > 0 ? (dayPL / lastEquity * 100) : 0;
+  const plColor = dayPL >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+  const marketStatus = clock.is_open ? '<span style="color:var(--green, #22c55e);">OPEN</span>' : '<span style="color:var(--red, #ef4444);">CLOSED</span>';
+
+  // Calculate total unrealized P&L
+  let totalPL = 0;
+  for (const p of positions) totalPL += parseFloat(p.unrealized_pl || 0);
+
+  let html = `
+    <div class="cards-grid">
+      <div class="card">
+        <div class="card-title">Portfolio Value</div>
+        <div class="card-value" style="font-size:22px;">$${equity.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
+        <div class="card-sub">Cash: $${cash.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Day P&L</div>
+        <div class="card-value" style="font-size:22px;color:${plColor};">${dayPL >= 0 ? '+' : ''}$${dayPL.toFixed(2)}</div>
+        <div class="card-sub" style="color:${plColor};">${dayPLPct >= 0 ? '+' : ''}${dayPLPct.toFixed(2)}%</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Unrealized P&L</div>
+        <div class="card-value" style="font-size:22px;color:${totalPL >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)'};">${totalPL >= 0 ? '+' : ''}$${totalPL.toFixed(2)}</div>
+        <div class="card-sub">${positions.length} positions</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Market</div>
+        <div class="card-value" style="font-size:20px;">${marketStatus}</div>
+        <div class="card-sub">Buying Power: $${bp.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
+      </div>
+    </div>
+
+    <h3 style="margin:20px 0 8px;color:var(--text1);">Positions</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);text-align:left;">
+          <th style="padding:8px;">Symbol</th>
+          <th style="padding:8px;text-align:right;">Qty</th>
+          <th style="padding:8px;text-align:right;">Entry</th>
+          <th style="padding:8px;text-align:right;">Current</th>
+          <th style="padding:8px;text-align:right;">P&L $</th>
+          <th style="padding:8px;text-align:right;">P&L %</th>
+          <th style="padding:8px;text-align:right;">Day Chg</th>
+          <th style="padding:8px;text-align:right;">Mkt Value</th>
+        </tr>
+      </thead>
+      <tbody>`;
+
+  for (const p of positions) {
+    const pl = parseFloat(p.unrealized_pl || 0);
+    const plPct = parseFloat(p.unrealized_plpc || 0) * 100;
+    const dayChg = parseFloat(p.change_today || 0) * 100;
+    const c = pl >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+    const dc = dayChg >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+    html += `
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px;font-weight:bold;">${escapeHtml(p.symbol)}</td>
+          <td style="padding:8px;text-align:right;">${p.qty}</td>
+          <td style="padding:8px;text-align:right;">$${parseFloat(p.avg_entry_price).toFixed(2)}</td>
+          <td style="padding:8px;text-align:right;">$${parseFloat(p.current_price).toFixed(2)}</td>
+          <td style="padding:8px;text-align:right;color:${c};">${pl >= 0 ? '+' : ''}$${pl.toFixed(2)}</td>
+          <td style="padding:8px;text-align:right;color:${c};">${plPct >= 0 ? '+' : ''}${plPct.toFixed(2)}%</td>
+          <td style="padding:8px;text-align:right;color:${dc};">${dayChg >= 0 ? '+' : ''}${dayChg.toFixed(2)}%</td>
+          <td style="padding:8px;text-align:right;">$${parseFloat(p.market_value).toFixed(2)}</td>
+        </tr>`;
+  }
+  if (positions.length === 0) {
+    html += `<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--text2);">No open positions</td></tr>`;
+  }
+  html += `</tbody></table>`;
+
+  // Active orders
+  const activeOrders = orders.filter(o => ['new','partially_filled','accepted','pending_new'].includes(o.status));
+  if (activeOrders.length > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Active Orders (${activeOrders.length})</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="border-bottom:1px solid var(--border);text-align:left;">
+        <th style="padding:8px;">Symbol</th><th style="padding:8px;">Side</th><th style="padding:8px;">Type</th>
+        <th style="padding:8px;text-align:right;">Qty</th><th style="padding:8px;">Status</th><th style="padding:8px;">Created</th>
+      </tr></thead><tbody>`;
+    for (const o of activeOrders) {
+      const sideColor = o.side === 'buy' ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+      html += `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px;font-weight:bold;">${escapeHtml(o.symbol)}</td>
+        <td style="padding:8px;color:${sideColor};text-transform:uppercase;">${o.side}</td>
+        <td style="padding:8px;">${o.type}</td>
+        <td style="padding:8px;text-align:right;">${o.qty}</td>
+        <td style="padding:8px;">${o.status}</td>
+        <td style="padding:8px;">${new Date(o.created_at).toLocaleString()}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // Watchlist
+  if (watchlist.length > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Watchlist (${watchlist.length})</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="border-bottom:1px solid var(--border);text-align:left;">
+        <th style="padding:8px;">Symbol</th><th style="padding:8px;">Reason</th><th style="padding:8px;">Added</th>
+      </tr></thead><tbody>`;
+    for (const w of watchlist) {
+      html += `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px;font-weight:bold;">${escapeHtml(w.symbol || '')}</td>
+        <td style="padding:8px;color:var(--text2);font-size:12px;">${escapeHtml(w.reason || '')}</td>
+        <td style="padding:8px;">${w.addedAt ? new Date(w.addedAt).toLocaleDateString() : ''}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  html += `<p style="margin-top:16px;font-size:11px;color:var(--text2);">Auto-refresh every 30s | Paper trading (Alpaca)</p>`;
+  document.getElementById('trading-body').innerHTML = html;
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -22,6 +22,16 @@ import type { DraftController } from "../bot/draftMessage.js";
 /**
  * Callback to send intermediate progress updates to the user.
  */
+/** Fire-and-forget background compaction — runs after response is sent, adds no latency */
+function backgroundCompact(chatId: number, userId: number): void {
+  const turns = getTurns(chatId);
+  if (turns.length <= 20) return;
+  log.info(`[router] Background compaction: ${turns.length} turns exceed threshold (20)`);
+  autoCompact(chatId, userId).catch(err =>
+    log.warn(`[router] Background compaction failed: ${err instanceof Error ? err.message : String(err)}`)
+  );
+}
+
 /** Fire-and-forget background memory extraction — adds no latency */
 function backgroundExtract(chatId: number, userMessage: string, assistantResponse: string): void {
   // Only extract for real user chats, not agents/scheduler/dashboard
@@ -134,16 +144,19 @@ export async function handleMessage(
   userId: number,
   contextHint: "user" | "scheduler" = "user"
 ): Promise<string> {
-  const userIsAdmin = isAdmin(userId);
+  const response = await handleMessageInner(chatId, userMessage, userId, contextHint);
+  // Fire-and-forget compaction AFTER response — never blocks the user
+  backgroundCompact(chatId, userId);
+  return response;
+}
 
-  // Auto-compact if context is bloated (prevents session timeouts)
-  const currentTurns = getTurns(chatId);
-  if (currentTurns.length > 20) {
-    log.info(`[router] Auto-compacting: ${currentTurns.length} turns exceed threshold (20)`);
-    await autoCompact(chatId, userId).catch(err =>
-      log.warn(`[router] Auto-compact failed: ${err instanceof Error ? err.message : String(err)}`)
-    );
-  }
+async function handleMessageInner(
+  chatId: number,
+  userMessage: string,
+  userId: number,
+  contextHint: "user" | "scheduler" = "user"
+): Promise<string> {
+  const userIsAdmin = isAdmin(userId);
 
   // Store user turn
   addTurn(chatId, { role: "user", content: userMessage });
@@ -499,16 +512,19 @@ export async function handleMessageStreaming(
   userId: number,
   draft: DraftController
 ): Promise<string> {
-  const userIsAdmin = isAdmin(userId);
+  const response = await handleMessageStreamingInner(chatId, userMessage, userId, draft);
+  // Fire-and-forget compaction AFTER response — never blocks the user
+  backgroundCompact(chatId, userId);
+  return response;
+}
 
-  // Auto-compact if context is bloated
-  const streamTurns = getTurns(chatId);
-  if (streamTurns.length > 20) {
-    log.info(`[router-stream] Auto-compacting: ${streamTurns.length} turns exceed threshold (20)`);
-    await autoCompact(chatId, userId).catch(err =>
-      log.warn(`[router-stream] Auto-compact failed: ${err instanceof Error ? err.message : String(err)}`)
-    );
-  }
+async function handleMessageStreamingInner(
+  chatId: number,
+  userMessage: string,
+  userId: number,
+  draft: DraftController
+): Promise<string> {
+  const userIsAdmin = isAdmin(userId);
 
   addTurn(chatId, { role: "user", content: userMessage });
 

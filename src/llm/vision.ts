@@ -39,6 +39,67 @@ function detectMediaType(
 }
 
 /**
+ * Analyze a base64-encoded image using Gemini Flash vision.
+ * Used by webcam / voice interface — no temp file needed.
+ * @param base64Data - Raw base64 image data (no data URL prefix).
+ * @param mimeType - MIME type (e.g. "image/jpeg").
+ * @param userPrompt - Optional text prompt to guide the analysis.
+ */
+export async function describeImageBuffer(
+  base64Data: string,
+  mimeType: string,
+  userPrompt: string
+): Promise<string> {
+  if (!config.geminiApiKey) {
+    return "Error: GEMINI_API_KEY not configured for image analysis.";
+  }
+
+  const promptText = userPrompt
+    ? `${SYSTEM_PROMPT}\n\n${userPrompt}`
+    : SYSTEM_PROMPT;
+
+  const body = {
+    contents: [
+      {
+        parts: [
+          { inline_data: { mime_type: mimeType, data: base64Data } },
+          { text: promptText },
+        ],
+      },
+    ],
+    generationConfig: { maxOutputTokens: 512 },
+  };
+
+  const url = `${API_BASE}/${VISION_MODEL}:generateContent?key=${config.geminiApiKey}`;
+
+  try {
+    log.info(`[vision] Webcam frame analysis via ${VISION_MODEL}`);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      log.warn(`[vision] Gemini API error ${res.status}: ${errText.slice(0, 200)}`);
+      return "";
+    }
+
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      error?: { message: string };
+    };
+
+    if (data.error) return "";
+    return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  } catch (err) {
+    log.warn(`[vision] Webcam analysis failed: ${(err as Error).message}`);
+    return "";
+  }
+}
+
+/**
  * Analyze an image using Gemini Flash vision.
  * @param imagePath - Absolute path to the image file on disk.
  * @param userPrompt - Optional text prompt to guide the analysis.

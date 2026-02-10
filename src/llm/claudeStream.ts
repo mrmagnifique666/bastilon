@@ -33,25 +33,35 @@ export interface StreamHandle {
   cancel(): void;
 }
 
-/** Load AUTONOMOUS.md if it exists */
+/** Cached file contents — loaded once, avoids repeated disk I/O */
+let _cachedAutonomous: string | null = null;
+let _cachedSoul: string | null = null;
+
+/** Load AUTONOMOUS.md if it exists (cached after first call) */
 function loadAutonomousPrompt(): string {
+  if (_cachedAutonomous !== null) return _cachedAutonomous;
   try {
     const p = path.resolve(process.cwd(), "AUTONOMOUS.md");
     if (fs.existsSync(p)) {
-      return fs.readFileSync(p, "utf-8");
+      _cachedAutonomous = fs.readFileSync(p, "utf-8");
+      return _cachedAutonomous;
     }
   } catch { /* ignore */ }
+  _cachedAutonomous = "";
   return "";
 }
 
-/** Load SOUL.md if it exists */
+/** Load SOUL.md if it exists (cached after first call) */
 function loadSoulPrompt(): string {
+  if (_cachedSoul !== null) return _cachedSoul;
   try {
     const p = path.resolve(process.cwd(), "relay", "SOUL.md");
     if (fs.existsSync(p)) {
-      return fs.readFileSync(p, "utf-8");
+      _cachedSoul = fs.readFileSync(p, "utf-8");
+      return _cachedSoul;
     }
   } catch { /* ignore */ }
+  _cachedSoul = "";
   return "";
 }
 
@@ -158,28 +168,33 @@ async function buildMemoryContext(chatId: number, userMessage?: string): Promise
   const db = getDb();
   const parts: string[] = [];
 
-  // 1. Recent notes (Kingston's long-term memory)
-  try {
-    const notes = db
-      .prepare("SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 15")
-      .all() as { id: number; text: string; created_at: number }[];
-    if (notes.length > 0) {
-      parts.push("[NOTES — Long-term memory]");
-      for (const n of notes.reverse()) {
-        const text = n.text.length > 200 ? n.text.slice(0, 200) + "..." : n.text;
-        parts.push(`#${n.id}: ${text}`);
-      }
-    }
-  } catch { /* notes table may not exist yet */ }
-
-  // 2. Semantic memory (relevant to current message)
-  if (userMessage) {
+  // Run notes query + semantic search in parallel (saves ~500ms)
+  const notesPromise = Promise.resolve().then(() => {
     try {
-      const semanticCtx = await buildSemanticContext(userMessage, 10);
-      if (semanticCtx) {
-        parts.push("\n" + semanticCtx);
-      }
-    } catch { /* semantic memory not available yet */ }
+      return db
+        .prepare("SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 15")
+        .all() as { id: number; text: string; created_at: number }[];
+    } catch { return []; }
+  });
+
+  const semanticPromise = userMessage
+    ? buildSemanticContext(userMessage, 10).catch(() => "")
+    : Promise.resolve("");
+
+  const [notes, semanticCtx] = await Promise.all([notesPromise, semanticPromise]);
+
+  // 1. Recent notes
+  if (notes.length > 0) {
+    parts.push("[NOTES — Long-term memory]");
+    for (const n of notes.reverse()) {
+      const text = n.text.length > 200 ? n.text.slice(0, 200) + "..." : n.text;
+      parts.push(`#${n.id}: ${text}`);
+    }
+  }
+
+  // 2. Semantic memory
+  if (semanticCtx) {
+    parts.push("\n" + semanticCtx);
   }
 
   // 3. Recent conversation activity (last 48h, user messages only, from this chat)
@@ -286,10 +301,10 @@ export function runClaudeStream(
       callbacks.onError(new Error("Claude CLI stream timed out"));
     }, config.cliTimeoutMs);
 
-    // Stall detection: if no output for 5 minutes, kill the stream.
-    // Must be generous — CLI with --dangerously-skip-permissions can be silent
-    // for extended periods while executing internal tools (Read/Write/Bash).
-    const STALL_TIMEOUT_MS = 300_000;
+    // Stall detection: if no output for 2 minutes, kill the stream.
+    // CLI with --dangerously-skip-permissions can be silent during tool execution,
+    // but 2min is generous enough for any single operation.
+    const STALL_TIMEOUT_MS = 120_000;
     let lastActivity = Date.now();
     const stallInterval = setInterval(() => {
       if (Date.now() - lastActivity > STALL_TIMEOUT_MS) {

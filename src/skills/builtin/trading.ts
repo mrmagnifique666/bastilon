@@ -796,3 +796,251 @@ registerSkill({
     return lines.join("\n");
   },
 });
+
+// ── trading.insiders ──
+
+registerSkill({
+  name: "trading.insiders",
+  description: "Check SEC EDGAR for recent insider transactions (buys/sells by executives). Useful for conviction signals.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      symbol: { type: "string", description: "Stock ticker to check (e.g. TSLA). Omit to check all portfolio positions." },
+      days: { type: "number", description: "Look back N days (default: 30)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const days = Math.min(Number(args.days) || 30, 90);
+    const symbol = args.symbol as string | undefined;
+
+    // If no symbol, check all portfolio positions
+    let tickers: string[];
+    if (symbol) {
+      tickers = [symbol.toUpperCase()];
+    } else {
+      try {
+        const positions = await alpacaGet("/v2/positions");
+        tickers = positions.map((p: any) => p.symbol as string);
+      } catch {
+        tickers = ["TSLA", "VST", "NVST", "BBVA", "AVXL", "DVA", "ADNT"];
+      }
+    }
+
+    const dateTo = new Date().toISOString().slice(0, 10);
+    const dateFrom = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+
+    const lines = [`**Insider Transactions** (${days} derniers jours)\n`];
+    let totalFound = 0;
+
+    for (const ticker of tickers) {
+      try {
+        // SEC EDGAR full-text search for insider filings (Form 4)
+        const resp = await fetch(
+          `https://efts.sec.gov/LATEST/search-index?q=%22${ticker}%22&forms=4&dateRange=custom&startdt=${dateFrom}&enddt=${dateTo}&from=0&size=5`,
+          { headers: { "User-Agent": "Kingston/1.0 (nicolas@bastilon.org)", Accept: "application/json" } }
+        );
+
+        if (resp.ok) {
+          const data = await resp.json();
+          const hits = data?.hits?.hits || [];
+
+          if (hits.length > 0) {
+            lines.push(`**${ticker}** — ${hits.length} filings Form 4:`);
+            for (const hit of hits.slice(0, 3)) {
+              const src = hit._source || {};
+              const name = src.display_names?.[0] || "Unknown";
+              const date = src.file_date || "N/A";
+              lines.push(`  - ${date}: ${name}`);
+            }
+            totalFound += hits.length;
+          } else {
+            lines.push(`${ticker}: Aucun Form 4 récent`);
+          }
+        } else {
+          lines.push(`${ticker}: API SEC non disponible (${resp.status})`);
+        }
+      } catch (err) {
+        lines.push(`${ticker}: Erreur — ${err instanceof Error ? err.message : String(err)}`);
+      }
+      lines.push("");
+    }
+
+    lines.push(`**Total:** ${totalFound} transactions d'insiders trouvées`);
+    lines.push(`\n💡 Insiders qui ACHÈTENT = signal haussier fort`);
+    lines.push(`⚠️ Insiders qui VENDENT = pas nécessairement baissier (diversification, impôts)`);
+
+    return lines.join("\n");
+  },
+});
+
+// ── trading.watchlist ──
+
+registerSkill({
+  name: "trading.watchlist",
+  description: "Manage a dynamic watchlist — add, remove, list tickers to monitor for opportunities.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "Action: add, remove, list, scan (default: list)" },
+      symbol: { type: "string", description: "Ticker to add/remove" },
+      reason: { type: "string", description: "Why watching this stock (for notes)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const action = (args.action as string) || "list";
+    const symbol = (args.symbol as string)?.toUpperCase();
+    const reason = (args.reason as string) || "";
+
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const watchlistPath = path.join(process.cwd(), "relay", "watchlist.json");
+
+    interface WatchItem { symbol: string; addedAt: string; reason: string; }
+    let watchlist: WatchItem[] = [];
+    try {
+      if (fs.existsSync(watchlistPath)) {
+        watchlist = JSON.parse(fs.readFileSync(watchlistPath, "utf-8"));
+      }
+    } catch { /* fresh list */ }
+
+    function saveList() {
+      const dir = path.dirname(watchlistPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(watchlistPath, JSON.stringify(watchlist, null, 2));
+    }
+
+    if (action === "add" && symbol) {
+      if (watchlist.some(w => w.symbol === symbol)) {
+        return `${symbol} est déjà dans la watchlist.`;
+      }
+      watchlist.push({ symbol, addedAt: new Date().toISOString(), reason });
+      saveList();
+      return `**Ajouté à la watchlist:** ${symbol}${reason ? ` — ${reason}` : ""}`;
+    }
+
+    if (action === "remove" && symbol) {
+      const before = watchlist.length;
+      watchlist = watchlist.filter(w => w.symbol !== symbol);
+      if (watchlist.length === before) return `${symbol} n'est pas dans la watchlist.`;
+      saveList();
+      return `**Retiré de la watchlist:** ${symbol}`;
+    }
+
+    if (action === "scan") {
+      if (watchlist.length === 0) return "Watchlist vide. Ajoute des tickers avec action=add.";
+      const scanTickers = watchlist.map(w => w.symbol);
+      const scanLines = [`**Watchlist Scan** (${scanTickers.length} tickers)\n`];
+
+      for (const t of scanTickers) {
+        const q = await yfQuote(t);
+        if (!q) { scanLines.push(`❓ ${t}: Données indisponibles`); continue; }
+
+        const dir = q.changePct >= 0 ? "+" : "";
+        const rsi = q.rsi14 ? `RSI:${q.rsi14.toFixed(0)}` : "";
+        const alert =
+          (q.rsi14 && q.rsi14 < 30) ? " 🟢 SURVENDU" :
+          (q.rsi14 && q.rsi14 > 70) ? " 🔴 SURACHETÉ" :
+          (Math.abs(q.changePct) > 5) ? " ⚡ MOUVEMENT" : "";
+
+        const item = watchlist.find(w => w.symbol === t);
+        scanLines.push(
+          `${alert ? "🔔" : "📊"} **${t}** $${q.price.toFixed(2)} (${dir}${q.changePct.toFixed(1)}%) ${rsi}${alert}` +
+          (item?.reason ? `\n   Note: ${item.reason}` : "")
+        );
+      }
+
+      return scanLines.join("\n");
+    }
+
+    // Default: list
+    if (watchlist.length === 0) return "**Watchlist vide.** Utilise action=add pour ajouter des tickers.";
+    const listLines = [`**Watchlist** (${watchlist.length} tickers)\n`];
+    for (const w of watchlist) {
+      const date = new Date(w.addedAt).toLocaleDateString("fr-CA");
+      listLines.push(`- **${w.symbol}** (ajouté ${date})${w.reason ? ` — ${w.reason}` : ""}`);
+    }
+    return listLines.join("\n");
+  },
+});
+
+// ── trading.morning ──
+
+registerSkill({
+  name: "trading.morning",
+  description: "Generate morning briefing — portfolio status, market conditions, top opportunities.",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    const lines = [`**BRIEFING MATINAL — ${new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" })}**\n`];
+
+    // 1. Account status
+    try {
+      const acct = await alpacaGet("/v2/account");
+      const equity = Number(acct.equity);
+      const lastEquity = Number(acct.last_equity);
+      const dailyPL = equity - lastEquity;
+      const goal = 120000;
+      const progress = ((equity / goal) * 100).toFixed(1);
+
+      lines.push(`**Portfolio:** $${equity.toFixed(2)}`);
+      lines.push(`**P&L hier:** ${dailyPL >= 0 ? "+" : ""}$${dailyPL.toFixed(2)}`);
+      lines.push(`**Cash dispo:** $${Number(acct.buying_power).toFixed(2)}`);
+      lines.push(`**Objectif $120K:** ${progress}% (reste $${(goal - equity).toFixed(0)})`);
+      lines.push("");
+    } catch (err) {
+      lines.push(`Account: Erreur — ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+
+    // 2. Positions summary
+    try {
+      const positions = await alpacaGet("/v2/positions");
+      if (positions.length > 0) {
+        lines.push(`**Positions (${positions.length}):**`);
+        let totalPL = 0;
+        for (const p of positions) {
+          const pl = Number(p.unrealized_pl);
+          totalPL += pl;
+          const emoji = pl >= 0 ? "🟢" : "🔴";
+          lines.push(`${emoji} ${p.symbol} x${p.qty} @ $${Number(p.current_price).toFixed(2)} (${pl >= 0 ? "+" : ""}$${pl.toFixed(2)})`);
+        }
+        lines.push(`**P&L total:** ${totalPL >= 0 ? "+" : ""}$${totalPL.toFixed(2)}\n`);
+      }
+    } catch { /* skip */ }
+
+    // 3. Market indices
+    try {
+      const indices = ["SPY", "QQQ", "IWM"];
+      const indexQuotes = await Promise.all(indices.map(yfQuote));
+      lines.push("**Marché:**");
+      for (const q of indexQuotes) {
+        if (!q) continue;
+        const emoji = q.changePct >= 0 ? "📈" : "📉";
+        lines.push(`${emoji} ${q.symbol}: $${q.price.toFixed(2)} (${q.changePct >= 0 ? "+" : ""}${q.changePct.toFixed(1)}%)`);
+      }
+      lines.push("");
+    } catch { /* skip */ }
+
+    // 4. Top movers from watchlist
+    try {
+      const movers = ["IONQ", "RGTI", "QUBT", "SOUN", "MARA", "RIOT", "HOOD", "SOFI", "HIMS", "PLTR", "AMD", "COIN"];
+      const quotes = await Promise.all(movers.map(yfQuote));
+      const valid = quotes.filter((q): q is QuoteData => q !== null);
+      const sorted = valid.sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)).slice(0, 3);
+
+      if (sorted.length > 0) {
+        lines.push("**Top movers:**");
+        for (const q of sorted) {
+          const dir = q.changePct >= 0 ? "+" : "";
+          const rsi = q.rsi14 ? ` RSI:${q.rsi14.toFixed(0)}` : "";
+          lines.push(`- ${q.symbol}: ${dir}${q.changePct.toFixed(1)}% ($${q.price.toFixed(2)})${rsi}`);
+        }
+        lines.push("");
+      }
+    } catch { /* skip */ }
+
+    lines.push("_Bon trading! 🎯_");
+    return lines.join("\n");
+  },
+});

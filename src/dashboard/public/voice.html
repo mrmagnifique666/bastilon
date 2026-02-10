@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kingston Voice</title>
+<title>Kingston Voice — Gemini Live</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -16,7 +16,6 @@
     overflow: hidden;
   }
 
-  /* Header */
   .header {
     display: flex;
     align-items: center;
@@ -27,497 +26,582 @@
   }
   .header h1 { font-size: 18px; font-weight: 600; }
   .header h1 span { color: #6c8cff; }
-  .header-controls { display: flex; gap: 10px; align-items: center; }
-  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #444; display: inline-block; }
-  .status-dot.active { background: #4caf50; }
-  .status-dot.listening { background: #ff9800; animation: pulse 1s infinite; }
-  @keyframes pulse { 50% { opacity: 0.5; } }
+  .header-right { display: flex; gap: 10px; align-items: center; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block; transition: background 0.3s;
+  }
+  .status-dot.disconnected { background: #666; }
+  .status-dot.connecting { background: #ff9800; animation: blink 1s infinite; }
+  .status-dot.ready { background: #4caf50; }
+  .status-dot.listening { background: #ff9800; animation: blink 0.6s infinite; }
+  .status-dot.speaking { background: #6c8cff; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+  #statusLabel { font-size: 13px; color: #888; }
 
-  /* Main layout */
-  .main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* Chat transcript */
-  .transcript {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .msg {
-    max-width: 80%;
-    padding: 10px 14px;
-    border-radius: 12px;
-    font-size: 15px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-  }
-  .msg.user {
-    align-self: flex-end;
-    background: #1a3a6a;
-    border-bottom-right-radius: 4px;
-  }
-  .msg.assistant {
-    align-self: flex-start;
-    background: #1e1e2a;
-    border-bottom-left-radius: 4px;
-  }
-  .msg.system {
-    align-self: center;
-    background: transparent;
-    color: #666;
-    font-size: 13px;
-    font-style: italic;
-  }
-  .msg .label {
-    font-size: 11px;
-    color: #888;
-    margin-bottom: 4px;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
   /* Webcam */
-  .webcam-container {
-    position: absolute;
-    top: 60px;
-    right: 16px;
-    width: 180px;
-    height: 135px;
-    border-radius: 10px;
-    overflow: hidden;
-    border: 2px solid #333;
-    background: #000;
-    z-index: 10;
-    cursor: pointer;
-    transition: all 0.3s;
+  .webcam-box {
+    position: absolute; top: 10px; right: 16px;
+    width: 180px; height: 135px; border-radius: 10px;
+    overflow: hidden; border: 2px solid #333; background: #000;
+    z-index: 10; transition: border-color 0.3s;
   }
-  .webcam-container:hover { border-color: #6c8cff; }
-  .webcam-container.off { display: none; }
-  .webcam-container video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    transform: scaleX(-1);
+  .webcam-box.hidden { display: none; }
+  .webcam-box.vision { border-color: #a78bfa; }
+  .webcam-box video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .webcam-tag {
+    position: absolute; bottom: 4px; left: 6px;
+    font-size: 10px; background: rgba(0,0,0,0.7); padding: 2px 6px;
+    border-radius: 4px; color: #aaa;
   }
-  .webcam-label {
-    position: absolute;
-    bottom: 4px;
-    left: 6px;
-    font-size: 10px;
-    background: rgba(0,0,0,0.6);
-    padding: 2px 6px;
-    border-radius: 4px;
-    color: #aaa;
+
+  /* Transcript */
+  .transcript {
+    flex: 1; overflow-y: auto; padding: 20px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg {
+    max-width: 80%; padding: 10px 14px; border-radius: 12px;
+    font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .msg.user { align-self: flex-end; background: #1a3a6a; border-bottom-right-radius: 4px; }
+  .msg.model { align-self: flex-start; background: #1e1e2a; border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; color: #666; font-size: 13px; font-style: italic; }
+  .msg.tool {
+    align-self: flex-start; background: #1a1a2e; border-left: 3px solid #6c8cff;
+    font-size: 13px; color: #aaa; max-width: 90%;
+  }
+  .msg .lbl {
+    font-size: 10px; color: #666; margin-bottom: 3px;
+    text-transform: uppercase; font-weight: 600;
   }
 
   /* Controls */
   .controls {
-    padding: 16px 20px 24px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    background: #111118;
-    border-top: 1px solid #222;
+    padding: 14px 20px 22px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    background: #111118; border-top: 1px solid #222;
   }
-  .mic-btn {
-    width: 72px;
-    height: 72px;
-    border-radius: 50%;
-    border: 3px solid #333;
-    background: #1a1a24;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-    position: relative;
+  .big-btn {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 3px solid #333; background: #1a1a24;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 32px; transition: all 0.2s; position: relative;
   }
-  .mic-btn:hover { border-color: #6c8cff; background: #1e1e30; }
-  .mic-btn.listening {
-    border-color: #ff9800;
-    background: #2a1a00;
-    animation: mic-pulse 1.5s infinite;
-  }
-  .mic-btn.speaking {
-    border-color: #4caf50;
-    background: #0a2a0a;
-  }
-  .mic-btn.processing {
-    border-color: #6c8cff;
-    background: #0a0a2a;
-  }
-  @keyframes mic-pulse { 50% { box-shadow: 0 0 20px rgba(255,152,0,0.4); } }
-  .mic-icon { font-size: 28px; }
-  .controls-row { display: flex; gap: 12px; align-items: center; }
-  .ctrl-btn {
-    padding: 6px 14px;
-    border-radius: 6px;
-    border: 1px solid #333;
-    background: #1a1a24;
-    color: #aaa;
-    cursor: pointer;
-    font-size: 13px;
-    transition: all 0.2s;
-  }
-  .ctrl-btn:hover { border-color: #6c8cff; color: #fff; }
-  .ctrl-btn.active { border-color: #4caf50; color: #4caf50; }
-  .hint { color: #555; font-size: 12px; }
+  .big-btn:hover { border-color: #6c8cff; }
+  .big-btn.active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
+  .big-btn.speaking { border-color: #6c8cff; background: #0a0a2a; }
+  @keyframes glow { 50% { box-shadow: 0 0 20px rgba(76,175,80,0.3); } }
 
-  /* Text input fallback */
-  .text-input-row {
-    display: flex;
-    gap: 8px;
-    width: 100%;
-    max-width: 600px;
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .ctrl {
+    padding: 6px 12px; border-radius: 6px; border: 1px solid #333;
+    background: #1a1a24; color: #aaa; cursor: pointer; font-size: 12px;
+    transition: all 0.2s;
   }
-  .text-input-row input {
-    flex: 1;
-    padding: 10px 14px;
-    border-radius: 8px;
-    border: 1px solid #333;
-    background: #1a1a24;
-    color: #e0e0e0;
-    font-size: 14px;
-    outline: none;
+  .ctrl:hover { border-color: #6c8cff; color: #fff; }
+  .ctrl.on { border-color: #4caf50; color: #4caf50; }
+
+  .text-row { display: flex; gap: 8px; width: 100%; max-width: 600px; }
+  .text-row input {
+    flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #333;
+    background: #1a1a24; color: #e0e0e0; font-size: 14px; outline: none;
   }
-  .text-input-row input:focus { border-color: #6c8cff; }
-  .text-input-row button {
-    padding: 10px 18px;
-    border-radius: 8px;
-    border: none;
-    background: #6c8cff;
-    color: #fff;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
+  .text-row input:focus { border-color: #6c8cff; }
+  .text-row button {
+    padding: 10px 16px; border-radius: 8px; border: none;
+    background: #6c8cff; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600;
   }
+  .hint { color: #555; font-size: 11px; }
+
+  canvas { display: none; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1><span>Kingston</span> Voice</h1>
-  <div class="header-controls">
-    <span class="status-dot" id="statusDot"></span>
-    <span id="statusText" style="font-size:13px;color:#888">Prêt</span>
+  <h1><span>Kingston</span> Voice <small style="font-size:11px;color:#555;margin-left:6px">Gemini Live</small></h1>
+  <div class="header-right">
+    <span class="status-dot disconnected" id="dot"></span>
+    <span id="statusLabel">Déconnecté</span>
   </div>
 </div>
 
-<div class="main" style="position:relative">
-  <div class="webcam-container" id="webcamBox">
-    <video id="webcamVideo" autoplay playsinline muted></video>
-    <div class="webcam-label">Webcam</div>
+<div class="main">
+  <div class="webcam-box hidden" id="camBox">
+    <video id="camVideo" autoplay playsinline muted></video>
+    <canvas id="camCanvas"></canvas>
+    <div class="webcam-tag" id="camTag">Webcam</div>
   </div>
-
   <div class="transcript" id="transcript">
-    <div class="msg system">Appuie sur le micro ou maintiens Espace pour parler. Kingston te répondra à voix haute.</div>
+    <div class="msg system">Appuie sur le bouton pour démarrer la conversation. Kingston te parle en temps réel via Gemini Live.</div>
   </div>
 </div>
 
 <div class="controls">
-  <button class="mic-btn" id="micBtn" title="Appuie pour parler (ou maintiens Espace)">
-    <span class="mic-icon" id="micIcon">🎤</span>
-  </button>
-  <div class="controls-row">
-    <button class="ctrl-btn" id="webcamToggle">📷 Webcam</button>
-    <button class="ctrl-btn" id="ttsToggle" data-active="true">🔊 TTS</button>
-    <button class="ctrl-btn" id="autoToggle">🔄 Auto-listen</button>
+  <button class="big-btn" id="mainBtn" title="Démarrer / Arrêter">🎤</button>
+  <div class="btn-row">
+    <button class="ctrl" id="camBtn">📷 Webcam</button>
+    <button class="ctrl" id="visionBtn">👁 Vision</button>
   </div>
-  <div class="text-input-row">
-    <input type="text" id="textInput" placeholder="Ou tape ton message ici..." />
+  <div class="text-row">
+    <input id="textIn" placeholder="Ou tape ton message..." />
     <button id="textSend">Envoyer</button>
   </div>
-  <div class="hint">Espace = push-to-talk &nbsp;|&nbsp; Entrée = envoyer texte</div>
+  <div class="hint">Gemini Live — conversation naturelle en temps réel &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; La voix c'est mieux!</div>
 </div>
 
 <script>
-// --- Config ---
+// ═══════════════════════════════════════════════════════
+// Kingston Voice — Gemini Live (WebSocket + PCM audio)
+// ═══════════════════════════════════════════════════════
+
 const API_BASE = window.location.origin;
+const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/voice';
 const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
-const VOICE_CHAT_ID = 5; // dedicated chatId for voice
 
-// --- State ---
-let isListening = false;
-let isProcessing = false;
-let isSpeaking = false;
-let ttsEnabled = true;
-let autoListen = false;
-let webcamOn = false;
-let recognition = null;
-let currentAudio = null;
-
-// --- DOM ---
-const transcript = document.getElementById('transcript');
-const micBtn = document.getElementById('micBtn');
-const micIcon = document.getElementById('micIcon');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
-const textInput = document.getElementById('textInput');
-const webcamVideo = document.getElementById('webcamVideo');
-const webcamBox = document.getElementById('webcamBox');
-
-// --- Auth prompt ---
+// Auth prompt
 if (!AUTH_TOKEN) {
-  const token = prompt('Token Bastilon (DASHBOARD_TOKEN):');
-  if (token) {
-    localStorage.setItem('bastilon_token', token);
-    window.location.reload();
+  const t = prompt('Token Bastilon (DASHBOARD_TOKEN):');
+  if (t) { localStorage.setItem('bastilon_token', t); location.reload(); }
+}
+
+// ─── State ───
+let ws = null;
+let sessionActive = false;
+let micStream = null;
+let audioCtx = null;
+let workletNode = null;
+let playCtx = null;          // separate context for playback
+let nextPlayTime = 0;        // scheduler for gapless playback
+let playQueue = [];           // queued AudioBufferSourceNodes
+let webcamOn = false;
+let visionOn = false;
+let visionInterval = null;
+let currentTranscriptEl = null;  // for streaming model text
+let isSpeaking = false;
+
+// ─── DOM ───
+const dot = document.getElementById('dot');
+const statusLabel = document.getElementById('statusLabel');
+const transcript = document.getElementById('transcript');
+const mainBtn = document.getElementById('mainBtn');
+const textIn = document.getElementById('textIn');
+const camVideo = document.getElementById('camVideo');
+const camCanvas = document.getElementById('camCanvas');
+const camBox = document.getElementById('camBox');
+const camTag = document.getElementById('camTag');
+
+// ═══════════════════════════════════════════════════════
+// Status
+// ═══════════════════════════════════════════════════════
+function setStatus(state, label) {
+  dot.className = 'status-dot ' + state;
+  statusLabel.textContent = label;
+  if (state === 'ready' || state === 'listening') {
+    mainBtn.className = 'big-btn active';
+    mainBtn.textContent = '🔴';
+  } else if (state === 'speaking') {
+    mainBtn.className = 'big-btn speaking';
+    mainBtn.textContent = '🔊';
+  } else {
+    mainBtn.className = 'big-btn';
+    mainBtn.textContent = '🎤';
   }
 }
 
-// --- Status helpers ---
-function setStatus(state, text) {
-  statusDot.className = 'status-dot ' + state;
-  statusText.textContent = text;
-  micBtn.className = 'mic-btn ' + state;
-  if (state === 'listening') micIcon.textContent = '🔴';
-  else if (state === 'processing') micIcon.textContent = '⏳';
-  else if (state === 'speaking') micIcon.textContent = '🔊';
-  else micIcon.textContent = '🎤';
-}
-
-function addMessage(role, text) {
+function addMsg(role, text) {
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  const label = document.createElement('div');
-  label.className = 'label';
-  label.textContent = role === 'user' ? 'Toi' : 'Kingston';
-  div.appendChild(label);
-  const content = document.createElement('div');
-  content.textContent = text;
-  div.appendChild(content);
+  if (role === 'user' || role === 'model') {
+    const lbl = document.createElement('div');
+    lbl.className = 'lbl';
+    lbl.textContent = role === 'user' ? 'Toi' : 'Kingston';
+    div.appendChild(lbl);
+  }
+  const span = document.createElement('span');
+  span.textContent = text;
+  div.appendChild(span);
   transcript.appendChild(div);
   transcript.scrollTop = transcript.scrollHeight;
   return div;
 }
 
-// --- Speech Recognition (STT) ---
-function initRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    addMessage('system', 'Web Speech API non supportée. Utilise Chrome.');
-    return;
+// ═══════════════════════════════════════════════════════
+// WebSocket connection
+// ═══════════════════════════════════════════════════════
+function connectWS() {
+  if (ws) return;
+  setStatus('connecting', 'Connexion...');
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    // Send auth + config
+    ws.send(JSON.stringify({
+      type: 'auth',
+      token: AUTH_TOKEN,
+      voice: 'Enceladus',
+      language: 'fr',
+    }));
+    setStatus('connecting', 'Authentification...');
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    handleServerMessage(msg);
+  };
+
+  ws.onerror = () => {
+    addMsg('system', 'Erreur de connexion WebSocket.');
+  };
+
+  ws.onclose = () => {
+    ws = null;
+    if (sessionActive) {
+      addMsg('system', 'Connexion perdue. Appuie sur le bouton pour reconnecter.');
+      stopSession();
+    }
+    setStatus('disconnected', 'Déconnecté');
+  };
+}
+
+function handleServerMessage(msg) {
+  switch (msg.type) {
+    case 'ready':
+      setStatus('ready', 'Kingston écoute...');
+      addMsg('system', 'Connecté! Parle naturellement — Kingston t\'entend en temps réel.');
+      startMic();
+      break;
+
+    case 'audio':
+      playAudioChunk(msg.data);
+      if (!isSpeaking) {
+        isSpeaking = true;
+        setStatus('speaking', 'Kingston parle...');
+      }
+      break;
+
+    case 'transcript':
+      if (msg.role === 'model') {
+        // Append to current model message or create new
+        if (!currentTranscriptEl || currentTranscriptEl.dataset.role !== 'model') {
+          currentTranscriptEl = addMsg('model', msg.text);
+          currentTranscriptEl.dataset.role = 'model';
+        } else {
+          const span = currentTranscriptEl.querySelector('span');
+          if (span) span.textContent += msg.text;
+          transcript.scrollTop = transcript.scrollHeight;
+        }
+      } else {
+        currentTranscriptEl = addMsg('user', msg.text);
+        currentTranscriptEl.dataset.role = 'user';
+      }
+      break;
+
+    case 'interrupted':
+      stopPlayback();
+      isSpeaking = false;
+      setStatus('ready', 'Kingston écoute...');
+      currentTranscriptEl = null;
+      break;
+
+    case 'turn_complete':
+      isSpeaking = false;
+      setStatus('ready', 'Kingston écoute...');
+      currentTranscriptEl = null;
+      break;
+
+    case 'tool':
+      if (msg.status === 'calling') {
+        addMsg('tool', `🔧 ${msg.name}...`);
+      } else if (msg.status === 'done') {
+        addMsg('tool', `✓ ${msg.name}: ${(msg.result || '').slice(0, 200)}`);
+      }
+      break;
+
+    case 'session_closed':
+      addMsg('system', 'Session Gemini expirée — reconnexion...');
+      break;
+
+    case 'error':
+      addMsg('system', 'Erreur: ' + msg.message);
+      break;
   }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'fr-FR';
-  recognition.continuous = false;
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-
-  recognition.onresult = (event) => {
-    const text = event.results[0][0].transcript.trim();
-    if (text) {
-      stopListening();
-      sendMessage(text);
-    }
-  };
-  recognition.onerror = (event) => {
-    if (event.error !== 'aborted' && event.error !== 'no-speech') {
-      console.warn('STT error:', event.error);
-    }
-    stopListening();
-  };
-  recognition.onend = () => {
-    if (isListening) stopListening();
-  };
 }
 
-function startListening() {
-  if (isProcessing || isSpeaking) return;
-  // Stop any playing audio
-  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-  isListening = true;
-  setStatus('listening', 'Écoute...');
-  try { recognition.start(); } catch(e) { /* already started */ }
-}
-
-function stopListening() {
-  isListening = false;
-  try { recognition.stop(); } catch(e) {}
-  if (!isProcessing && !isSpeaking) setStatus('active', 'Prêt');
-}
-
-function toggleListening() {
-  if (isListening) stopListening();
-  else startListening();
-}
-
-// --- Send message to Kingston ---
-async function sendMessage(text) {
-  if (!text.trim() || isProcessing) return;
-  addMessage('user', text);
-  isProcessing = true;
-  setStatus('processing', 'Kingston réfléchit...');
-
+// ═══════════════════════════════════════════════════════
+// Microphone capture → PCM 16kHz mono int16 → base64
+// ═══════════════════════════════════════════════════════
+async function startMic() {
   try {
-    const resp = await fetch(API_BASE + '/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + AUTH_TOKEN,
-      },
-      body: JSON.stringify({
-        model: 'bastilon',
-        messages: [{ role: 'user', content: text }],
-        stream: false,
-      }),
+    audioCtx = new AudioContext({ sampleRate: 16000 });
+    // Resume if suspended (Chrome autoplay policy)
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
     });
 
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json();
-    const reply = data.choices?.[0]?.message?.content || '(pas de réponse)';
+    // AudioWorklet for low-latency capture
+    const workletCode = `
+      class PCMSender extends AudioWorkletProcessor {
+        constructor() {
+          super();
+          this.buffer = [];
+        }
+        process(inputs) {
+          const ch = inputs[0]?.[0];
+          if (!ch) return true;
+          // Accumulate ~100ms of audio at 16kHz = 1600 samples
+          for (let i = 0; i < ch.length; i++) this.buffer.push(ch[i]);
+          if (this.buffer.length >= 1600) {
+            const f32 = new Float32Array(this.buffer.splice(0, 1600));
+            this.port.postMessage(f32);
+          }
+          return true;
+        }
+      }
+      registerProcessor('pcm-sender', PCMSender);
+    `;
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    await audioCtx.audioWorklet.addModule(blobUrl);
+    URL.revokeObjectURL(blobUrl);
 
-    addMessage('assistant', reply);
-    isProcessing = false;
+    const source = audioCtx.createMediaStreamSource(micStream);
+    workletNode = new AudioWorkletNode(audioCtx, 'pcm-sender');
 
-    if (ttsEnabled && reply.length < 2000) {
-      await speak(reply);
-    } else {
-      setStatus('active', 'Prêt');
-      if (autoListen) setTimeout(() => startListening(), 500);
-    }
+    workletNode.port.onmessage = (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const float32 = e.data;
+      // Float32 → Int16
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
+      }
+      // Int16 → base64
+      const bytes = new Uint8Array(int16.buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const b64 = btoa(binary);
+      ws.send(JSON.stringify({ type: 'audio', data: b64 }));
+    };
+
+    source.connect(workletNode);
+    workletNode.connect(audioCtx.destination); // needed to keep the worklet alive
   } catch (err) {
-    isProcessing = false;
-    addMessage('system', 'Erreur: ' + err.message);
-    setStatus('active', 'Prêt');
+    // Fallback: ScriptProcessorNode (deprecated but wider support)
+    console.warn('AudioWorklet failed, using ScriptProcessor fallback:', err);
+    await startMicFallback();
   }
 }
 
-// --- TTS (ElevenLabs via server proxy) ---
-async function speak(text) {
-  isSpeaking = true;
-  setStatus('speaking', 'Kingston parle...');
+async function startMicFallback() {
+  audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-  try {
-    const resp = await fetch(API_BASE + '/api/tts', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + AUTH_TOKEN,
-      },
-      body: JSON.stringify({ text: text.slice(0, 1000) }),
-    });
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const source = audioCtx.createMediaStreamSource(micStream);
+  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-    if (!resp.ok) {
-      // Fallback to browser TTS
-      browserTTS(text);
-      return;
+  const nativeSR = audioCtx.sampleRate;
+  const targetSR = 16000;
+  const ratio = nativeSR / targetSR;
+
+  processor.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const input = e.inputBuffer.getChannelData(0);
+    // Downsample
+    const len = Math.floor(input.length / ratio);
+    const int16 = new Int16Array(len);
+    for (let i = 0; i < len; i++) {
+      const sample = input[Math.round(i * ratio)];
+      int16[i] = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
     }
-
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    currentAudio = new Audio(url);
-    currentAudio.onended = () => {
-      isSpeaking = false;
-      setStatus('active', 'Prêt');
-      URL.revokeObjectURL(url);
-      if (autoListen) setTimeout(() => startListening(), 500);
-    };
-    currentAudio.onerror = () => {
-      isSpeaking = false;
-      setStatus('active', 'Prêt');
-      browserTTS(text);
-    };
-    currentAudio.play();
-  } catch (err) {
-    console.warn('TTS proxy failed, using browser TTS:', err);
-    browserTTS(text);
-  }
-}
-
-function browserTTS(text) {
-  const utterance = new SpeechSynthesisUtterance(text.slice(0, 500));
-  utterance.lang = 'fr-FR';
-  utterance.rate = 1.05;
-  utterance.onend = () => {
-    isSpeaking = false;
-    setStatus('active', 'Prêt');
-    if (autoListen) setTimeout(() => startListening(), 500);
+    const bytes = new Uint8Array(int16.buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    ws.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
   };
-  speechSynthesis.speak(utterance);
+
+  source.connect(processor);
+  processor.connect(audioCtx.destination);
 }
 
-// --- Webcam ---
-async function toggleWebcam() {
+function stopMic() {
+  if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+}
+
+// ═══════════════════════════════════════════════════════
+// Audio playback — PCM 24kHz from Gemini
+// ═══════════════════════════════════════════════════════
+function ensurePlayCtx() {
+  if (!playCtx) {
+    playCtx = new AudioContext({ sampleRate: 24000 });
+  }
+  if (playCtx.state === 'suspended') playCtx.resume();
+}
+
+function playAudioChunk(base64Pcm24k) {
+  ensurePlayCtx();
+
+  // Base64 → Uint8Array → Int16Array → Float32Array
+  const raw = atob(base64Pcm24k);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  const int16 = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  // Create buffer and schedule for gapless playback
+  const buffer = playCtx.createBuffer(1, float32.length, 24000);
+  buffer.getChannelData(0).set(float32);
+
+  const source = playCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(playCtx.destination);
+
+  const now = playCtx.currentTime;
+  const startAt = Math.max(now + 0.01, nextPlayTime);
+  source.start(startAt);
+  nextPlayTime = startAt + buffer.duration;
+
+  playQueue.push(source);
+  // Clean up old refs
+  source.onended = () => {
+    const idx = playQueue.indexOf(source);
+    if (idx >= 0) playQueue.splice(idx, 1);
+  };
+}
+
+function stopPlayback() {
+  playQueue.forEach(s => { try { s.stop(); } catch {} });
+  playQueue = [];
+  nextPlayTime = 0;
+}
+
+// ═══════════════════════════════════════════════════════
+// Webcam + Vision
+// ═══════════════════════════════════════════════════════
+async function toggleCam() {
   if (webcamOn) {
-    const tracks = webcamVideo.srcObject?.getTracks();
-    tracks?.forEach(t => t.stop());
-    webcamVideo.srcObject = null;
+    camVideo.srcObject?.getTracks().forEach(t => t.stop());
+    camVideo.srcObject = null;
     webcamOn = false;
-    webcamBox.classList.add('off');
-    document.getElementById('webcamToggle').classList.remove('active');
+    camBox.classList.add('hidden');
+    document.getElementById('camBtn').classList.remove('on');
+    if (visionOn) toggleVision();
   } else {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      webcamVideo.srcObject = stream;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
+      });
+      camVideo.srcObject = stream;
       webcamOn = true;
-      webcamBox.classList.remove('off');
-      document.getElementById('webcamToggle').classList.add('active');
-    } catch (err) {
-      addMessage('system', 'Webcam non disponible: ' + err.message);
+      camBox.classList.remove('hidden');
+      document.getElementById('camBtn').classList.add('on');
+    } catch (e) {
+      addMsg('system', 'Webcam non disponible: ' + e.message);
     }
   }
 }
 
-// --- Event listeners ---
-micBtn.addEventListener('click', toggleListening);
+function toggleVision() {
+  visionOn = !visionOn;
+  document.getElementById('visionBtn').classList.toggle('on', visionOn);
+  camBox.classList.toggle('vision', visionOn);
+  camTag.textContent = visionOn ? 'Vision active' : 'Webcam';
 
-document.getElementById('webcamToggle').addEventListener('click', toggleWebcam);
+  if (visionOn) {
+    if (!webcamOn) toggleCam();
+    // Send a frame every 5 seconds
+    visionInterval = setInterval(sendVisionFrame, 5000);
+    sendVisionFrame(); // send one immediately
+  } else {
+    if (visionInterval) { clearInterval(visionInterval); visionInterval = null; }
+  }
+}
 
-document.getElementById('ttsToggle').addEventListener('click', () => {
-  ttsEnabled = !ttsEnabled;
-  document.getElementById('ttsToggle').classList.toggle('active', ttsEnabled);
-});
-document.getElementById('ttsToggle').classList.add('active');
+function sendVisionFrame() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !webcamOn || !visionOn) return;
+  if (!camVideo.videoWidth) return;
 
-document.getElementById('autoToggle').addEventListener('click', () => {
-  autoListen = !autoListen;
-  document.getElementById('autoToggle').classList.toggle('active', autoListen);
-});
+  camCanvas.width = Math.min(camVideo.videoWidth, 640);
+  camCanvas.height = Math.min(camVideo.videoHeight, 480);
+  camCanvas.getContext('2d').drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
 
-textInput.addEventListener('keydown', (e) => {
+  const dataUrl = camCanvas.toDataURL('image/jpeg', 0.6);
+  ws.send(JSON.stringify({ type: 'image', data: dataUrl }));
+
+  // Flash border
+  camBox.style.borderColor = '#a78bfa';
+  setTimeout(() => { camBox.style.borderColor = ''; }, 300);
+}
+
+// ═══════════════════════════════════════════════════════
+// Session management
+// ═══════════════════════════════════════════════════════
+function startSession() {
+  if (sessionActive) return;
+  sessionActive = true;
+  connectWS();
+}
+
+function stopSession() {
+  sessionActive = false;
+  stopMic();
+  stopPlayback();
+  if (visionInterval) { clearInterval(visionInterval); visionInterval = null; }
+  if (ws) { ws.close(); ws = null; }
+  isSpeaking = false;
+  currentTranscriptEl = null;
+  setStatus('disconnected', 'Déconnecté');
+}
+
+function toggleSession() {
+  if (sessionActive) stopSession();
+  else startSession();
+}
+
+// ═══════════════════════════════════════════════════════
+// Event listeners
+// ═══════════════════════════════════════════════════════
+mainBtn.addEventListener('click', toggleSession);
+document.getElementById('camBtn').addEventListener('click', toggleCam);
+document.getElementById('visionBtn').addEventListener('click', toggleVision);
+
+textIn.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    const text = textInput.value.trim();
-    if (text) { textInput.value = ''; sendMessage(text); }
+    sendText();
   }
 });
-document.getElementById('textSend').addEventListener('click', () => {
-  const text = textInput.value.trim();
-  if (text) { textInput.value = ''; sendMessage(text); }
-});
+document.getElementById('textSend').addEventListener('click', sendText);
 
-// --- Push-to-talk (Space) ---
-let spaceHeld = false;
+function sendText() {
+  const text = textIn.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  textIn.value = '';
+  addMsg('user', text);
+  ws.send(JSON.stringify({ type: 'text', text }));
+}
+
+// Escape = stop everything
 document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !spaceHeld && document.activeElement !== textInput) {
-    e.preventDefault();
-    spaceHeld = true;
-    startListening();
-  }
-});
-document.addEventListener('keyup', (e) => {
-  if (e.code === 'Space' && spaceHeld) {
-    e.preventDefault();
-    spaceHeld = false;
-    // Give a small delay for the last words to be captured
-    setTimeout(() => stopListening(), 300);
+  if (e.key === 'Escape' && sessionActive) {
+    stopSession();
+    addMsg('system', 'Session arrêtée.');
   }
 });
 
-// --- Init ---
-initRecognition();
-webcamBox.classList.add('off');
-setStatus('active', 'Prêt');
+// Init
+setStatus('disconnected', 'Prêt — appuie sur le micro pour commencer');
 </script>
 </body>
 </html>

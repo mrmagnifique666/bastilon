@@ -17,6 +17,8 @@ import { isRateLimited, getRateLimitReset } from "../agents/base.js";
 import { addClient, broadcast, getClientCount } from "./broadcast.js";
 import { getAllSkills } from "../skills/loader.js";
 import { getMemoryStats } from "../memory/semantic.js";
+import { describeImageBuffer } from "../llm/vision.js";
+import { GeminiLiveSession, type LiveCallbacks } from "../llm/geminiLive.js";
 import {
   getAllPatterns,
   evaluateEffectiveness,
@@ -365,6 +367,43 @@ function apiSystem(): unknown {
   };
 }
 
+// ── Trading API ──
+const ALPACA_PAPER = "https://paper-api.alpaca.markets";
+function alpacaHeaders(): Record<string, string> {
+  return {
+    "APCA-API-KEY-ID": process.env.ALPACA_API_KEY || "",
+    "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY || "",
+  };
+}
+
+async function apiTrading(): Promise<unknown> {
+  try {
+    const headers = alpacaHeaders();
+    if (!headers["APCA-API-KEY-ID"]) return { error: "ALPACA_API_KEY not configured" };
+
+    const [acctRes, posRes, ordRes, clockRes] = await Promise.all([
+      fetch(`${ALPACA_PAPER}/v2/account`, { headers }),
+      fetch(`${ALPACA_PAPER}/v2/positions`, { headers }),
+      fetch(`${ALPACA_PAPER}/v2/orders?status=all&limit=20`, { headers }),
+      fetch(`${ALPACA_PAPER}/v2/clock`, { headers }),
+    ]);
+
+    const account = acctRes.ok ? await acctRes.json() : null;
+    const positions = posRes.ok ? await posRes.json() : [];
+    const orders = ordRes.ok ? await ordRes.json() : [];
+    const clock = clockRes.ok ? await clockRes.json() : null;
+
+    // Read watchlist
+    let watchlist: unknown[] = [];
+    const wlPath = path.resolve("relay", "watchlist.json");
+    try { if (fs.existsSync(wlPath)) watchlist = JSON.parse(fs.readFileSync(wlPath, "utf-8")); } catch {}
+
+    return { account, positions, orders, clock, watchlist };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
 // Dashboard has its own chatIds — separate from Telegram sessions
 const KINGSTON_DASHBOARD_ID = 2;
 const EMILE_DASHBOARD_ID = 3;
@@ -581,6 +620,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!checkAuth(req, res)) return;
       return json(res, apiSystem());
     }
+    if (pathname === "/api/trading" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      return json(res, await apiTrading());
+    }
     if (pathname === "/api/chat/reset" && method === "POST") {
       if (!checkAuth(req, res)) return;
       // Reset dashboard sessions for fresh starts
@@ -686,12 +729,33 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!userMessage) {
         return sendJson(res, 400, { error: { message: "No user message found", type: "invalid_request_error" } });
       }
-      // Use dedicated chatId=4 for VisionClaw (separate conversation memory)
-      const VISIONCLAW_CHAT_ID = 4;
+
+      // Optional: image field (data URL from webcam) → analyze with Gemini vision
+      let visionContext = "";
+      const imageDataUrl = body.image as string | undefined;
+      if (imageDataUrl && imageDataUrl.startsWith("data:image/")) {
+        const match = imageDataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+        if (match) {
+          const [, mimeType, base64Data] = match;
+          visionContext = await describeImageBuffer(base64Data, mimeType, userMessage);
+          if (visionContext) {
+            log.info(`[voice] Vision context: ${visionContext.slice(0, 80)}...`);
+          }
+        }
+      }
+
+      // Optional: custom chat_id (default 4 for VisionClaw, 5 for Voice)
+      const chatId = Number(body.chat_id) || 4;
       const userId = getDashboardUserId();
-      log.info(`[visionclaw] POST /v1/chat/completions: ${userMessage.slice(0, 100)}...`);
+
+      // Build the final message with optional vision context
+      const finalMessage = visionContext
+        ? `[Contexte visuel — webcam: ${visionContext}]\n\n${userMessage}`
+        : userMessage;
+
+      log.info(`[visionclaw] POST /v1/chat/completions (chat=${chatId}): ${userMessage.slice(0, 100)}...`);
       try {
-        const response = await handleMessage(VISIONCLAW_CHAT_ID, userMessage, userId, "user");
+        const response = await handleMessage(chatId, finalMessage, userId, "user");
         return sendJson(res, 200, {
           id: `chatcmpl-${Date.now()}`,
           object: "chat.completion",
@@ -754,10 +818,113 @@ export function startDashboard(): void {
     ws.send(JSON.stringify({ event: "init", data: apiAgents(), ts: Date.now() }));
   });
 
+  // Voice WebSocket server (Gemini Live proxy)
+  const voiceWss = new WebSocketServer({ noServer: true });
+  voiceWss.on("connection", (ws) => {
+    // Auth check: first message must be { type: "auth", token: "..." }
+    let authenticated = false;
+    let liveSession: GeminiLiveSession | null = null;
+
+    const authTimeout = setTimeout(() => {
+      if (!authenticated) {
+        ws.send(JSON.stringify({ type: "error", message: "Auth timeout" }));
+        ws.close();
+      }
+    }, 5000);
+
+    ws.on("message", (raw) => {
+      let msg: any;
+      try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+      // --- Auth handshake ---
+      if (!authenticated) {
+        if (msg.type === "auth") {
+          const token = config.dashboardToken;
+          if (token && msg.token !== token) {
+            ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
+            ws.close();
+            return;
+          }
+          authenticated = true;
+          clearTimeout(authTimeout);
+
+          // Create Gemini Live session
+          const VOICE_CHAT_ID = 5;
+          const userId = getDashboardUserId();
+          const callbacks: LiveCallbacks = {
+            onAudio(data) { trySend({ type: "audio", data }); },
+            onText(text, role) { trySend({ type: "transcript", text, role }); },
+            onInterrupted() { trySend({ type: "interrupted" }); },
+            onTurnComplete() { trySend({ type: "turn_complete" }); },
+            onToolCall(name, args) { trySend({ type: "tool", name, status: "calling", args }); },
+            onToolResult(name, result) { trySend({ type: "tool", name, status: "done", result: result.slice(0, 500) }); },
+            onReady() { trySend({ type: "ready" }); },
+            onError(message) { trySend({ type: "error", message }); },
+            onClose() {
+              trySend({ type: "session_closed" });
+              // Don't auto-reconnect here — GeminiLiveSession.reconnect() handles it
+              // with proper retry limits. Only the 14-min timer triggers reconnect.
+            },
+          };
+
+          liveSession = new GeminiLiveSession({
+            chatId: VOICE_CHAT_ID,
+            userId,
+            isAdmin: true,
+            callbacks,
+            voiceName: msg.voice || "Enceladus",
+            language: msg.language || "fr",
+          });
+          liveSession.connect();
+
+          log.info(`[voice-ws] Client authenticated, starting Gemini Live session`);
+          return;
+        }
+        return;
+      }
+
+      // --- Authenticated messages ---
+      if (!liveSession) return;
+
+      switch (msg.type) {
+        case "audio":
+          liveSession.sendAudio(msg.data);
+          break;
+        case "text":
+          liveSession.sendText(msg.text);
+          break;
+        case "image":
+          // Strip data URL prefix if present
+          const b64 = (msg.data || "").replace(/^data:image\/\w+;base64,/, "");
+          if (b64) liveSession.sendImage(b64);
+          break;
+      }
+    });
+
+    function trySend(obj: any) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+      }
+    }
+
+    ws.on("close", () => {
+      clearTimeout(authTimeout);
+      if (liveSession) {
+        liveSession.close();
+        liveSession = null;
+      }
+      log.info("[voice-ws] Client disconnected");
+    });
+  });
+
   server.on("upgrade", (req, socket, head) => {
     if (req.url === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
+      });
+    } else if (req.url === "/ws/voice") {
+      voiceWss.handleUpgrade(req, socket, head, (ws) => {
+        voiceWss.emit("connection", ws, req);
       });
     } else {
       socket.destroy();

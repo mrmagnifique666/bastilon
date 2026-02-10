@@ -86,9 +86,22 @@ export function selectModel(
     return "sonnet";
   }
 
-  // Default: opus (best reasoning for production user interactions)
-  log.debug(`[model] User message → opus`);
-  return "opus";
+  // Short/medium messages and direct commands → sonnet (fast, capable)
+  if (message.length < 150) {
+    log.debug(`[model] Short message (<150 chars) → sonnet`);
+    return "sonnet";
+  }
+
+  // Complex tasks requiring deep reasoning → opus
+  const complexPatterns = /\b(analyse|analyze|stratégie|strategy|rédige|write|rédaction|plan|compare|évalue|evaluate|refactor|architecture|design|explain|explique)\b/i;
+  if (complexPatterns.test(message) || message.length > 500) {
+    log.debug(`[model] Complex/long message → opus`);
+    return "opus";
+  }
+
+  // Default: sonnet (good balance of speed + quality)
+  log.debug(`[model] User message → sonnet`);
+  return "sonnet";
 }
 
 /**

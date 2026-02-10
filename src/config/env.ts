@@ -78,7 +78,7 @@ function buildConfig() {
     geminiApiKey: optional("GEMINI_API_KEY", ""),
     geminiOrchestratorEnabled: optional("GEMINI_ORCHESTRATOR_ENABLED", "true") === "true",
     geminiOrchestratorModel: optional("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.0-flash"),
-    geminiTimeoutMs: Number(optional("GEMINI_TIMEOUT_MS", "60000")),
+    geminiTimeoutMs: Number(optional("GEMINI_TIMEOUT_MS", "25000")),
 
     // Anthropic API (for vision / computer-use)
     anthropicApiKey: optional("ANTHROPIC_API_KEY", ""),
