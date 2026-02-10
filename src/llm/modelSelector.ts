@@ -1,20 +1,23 @@
 /**
  * Model selector — picks the right model tier based on task context.
  *
- * Tiers:
- *   ollama — local: heartbeats, greetings, trivial status checks (free, instant)
- *   haiku  — fast: agent tasks, simple routing
+ * Tiers (pyramid, cheapest first):
+ *   ollama — local 14B: heartbeats, greetings, agent tool chains (free, instant)
+ *   groq   — cloud 70B: text-only fallback for greetings/heartbeats (free, fast)
+ *   haiku  — fast: agent fallback, simple routing
  *   sonnet — balanced: most interactions, analysis, tool chain follow-ups
  *   opus   — premium: content creation, strategic thinking, complex reasoning
  */
 import { config } from "../config/env.js";
+import { getSummary } from "../storage/store.js";
 import { log } from "../utils/log.js";
 
-export type ModelTier = "ollama" | "haiku" | "sonnet" | "opus";
+export type ModelTier = "ollama" | "groq" | "haiku" | "sonnet" | "opus";
 
 export function getModelId(tier: ModelTier): string {
   switch (tier) {
     case "ollama": return config.ollamaModel;
+    case "groq": return config.groqModel;
     case "haiku": return config.claudeModelHaiku;
     case "sonnet": return config.claudeModelSonnet;
     case "opus": return config.claudeModelOpus;
@@ -26,10 +29,11 @@ export function getModelId(tier: ModelTier): string {
  */
 export function selectModel(
   message: string,
-  context: "user" | "scheduler" | "tool_followup" = "user"
+  context: "user" | "scheduler" | "tool_followup" = "user",
+  chatId?: number
 ): ModelTier {
   // Explicit override: [MODEL:opus], [MODEL:haiku], [MODEL:sonnet], [MODEL:ollama]
-  const override = message.match(/\[MODEL:(ollama|haiku|sonnet|opus)\]/i);
+  const override = message.match(/\[MODEL:(ollama|groq|haiku|sonnet|opus)\]/i);
   if (override) {
     const tier = override[1].toLowerCase() as ModelTier;
     log.debug(`[model] Explicit override: ${tier}`);
@@ -65,11 +69,35 @@ export function selectModel(
     return "sonnet";
   }
 
-  // Very short greetings → ollama if enabled (< 40 chars, simple pattern)
+  // Very short greetings → ollama (if enabled) → groq (if available) → sonnet
   const greetingPatterns = /^(bonjour|salut|hey|hi|ok|merci|thanks|ça va|parfait|super|cool|bye|bonne nuit|good)\s*[!.?]?\s*$/i;
-  if (config.ollamaEnabled && greetingPatterns.test(message.trim()) && message.length < 40) {
-    log.debug(`[model] Short greeting → ollama`);
-    return "ollama";
+  if (greetingPatterns.test(message.trim()) && message.length < 40) {
+    if (config.ollamaEnabled) {
+      log.debug(`[model] Short greeting → ollama`);
+      return "ollama";
+    }
+    if (config.groqApiKey) {
+      log.debug(`[model] Short greeting → groq (ollama disabled)`);
+      return "groq";
+    }
+  }
+
+  // Reflection keywords → opus (even for short messages)
+  const reflectionPatterns = /\b(pourquoi|comment ça marche|explique|explain|why|how does|réfléchis|think about|analyse ça|what do you think)\b/i;
+  if (reflectionPatterns.test(message)) {
+    log.debug(`[model] Reflection question → opus`);
+    return "opus";
+  }
+
+  // Deep conversation: long summary + substantial message → opus
+  if (chatId && message.length > 80) {
+    try {
+      const summary = getSummary(chatId);
+      if (summary?.summary && summary.summary.length > 500) {
+        log.debug(`[model] Deep conversation (summary ${summary.summary.length} chars + msg ${message.length} chars) → opus`);
+        return "opus";
+      }
+    } catch { /* no summary */ }
   }
 
   // Simple/short messages → sonnet (still capable but faster than opus)
@@ -110,6 +138,7 @@ export function selectModel(
 export function modelLabel(tier: ModelTier): string {
   const labels: Record<ModelTier, string> = {
     ollama: "🦙",
+    groq: "⚡",
     haiku: "💨",
     sonnet: "🎵",
     opus: "🎼",

@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
-import { getTurns, getSession, saveSession, getDb } from "../storage/store.js";
+import { getTurns, getSession, saveSession, getDb, getSummary } from "../storage/store.js";
 import { getCompactToolCatalog } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
@@ -49,6 +49,39 @@ function loadSoulPrompt(): string {
   } catch { /* ignore */ }
   _cachedSoul = "";
   return "";
+}
+
+/**
+ * Build a compact core identity for resumed sessions.
+ * Extracts the essential personality from SOUL.md + critical rules.
+ */
+function buildCoreIdentity(isAdmin: boolean, chatId?: number): string {
+  const soul = loadSoulPrompt();
+  const lines: string[] = [];
+
+  lines.push(`[CORE IDENTITY]`);
+  if (soul) {
+    lines.push(soul.trim());
+  } else {
+    lines.push(`Je suis Kingston, une IA autonome sur Bastilon OS.`);
+    lines.push(`Direct, efficace, honnête. J'exécute sans demander permission.`);
+  }
+
+  lines.push(``);
+  lines.push(`[RULES]`);
+  lines.push(`- Execute immediately, never ask "would you like me to...?" — JUST DO IT.`);
+  lines.push(`- Anti-hallucination: NEVER claim success without tool confirmation.`);
+  lines.push(`- Tool format: {"type":"tool_call","tool":"namespace.method","args":{}}`);
+  lines.push(`- If a tool fails, report the EXACT error. Never say "Done!" after a failure.`);
+  lines.push(`- Format for Telegram: concis, < 500 chars quand possible.`);
+
+  lines.push(``);
+  lines.push(`[CONTEXT]`);
+  lines.push(`- Date: ${new Date().toISOString().split("T")[0]}`);
+  lines.push(`- Admin: ${isAdmin ? "yes" : "no"}`);
+  if (chatId) lines.push(`- Telegram chat ID: ${chatId}`);
+
+  return lines.join("\n");
 }
 
 function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
@@ -159,26 +192,38 @@ async function buildMemoryContext(chatId: number, userMessage?: string): Promise
   });
 
   const semanticPromise = userMessage
-    ? buildSemanticContext(userMessage, 10).catch(() => "")
+    ? buildSemanticContext(userMessage, 10, chatId).catch(() => "")
     : Promise.resolve("");
 
   const [notes, semanticCtx] = await Promise.all([notesPromise, semanticPromise]);
 
-  // 1. Recent notes
+  // 1. Conversation summary (progressive)
+  try {
+    const summary = getSummary(chatId);
+    if (summary?.summary) {
+      parts.push("[CONVERSATION SUMMARY]");
+      parts.push(summary.summary);
+      if (summary.topics.length > 0) {
+        parts.push(`Topics actifs: [${summary.topics.join(", ")}]`);
+      }
+    }
+  } catch { /* no summary */ }
+
+  // 2. Recent notes
   if (notes.length > 0) {
-    parts.push("[NOTES — Long-term memory]");
+    parts.push("\n[NOTES — Long-term memory]");
     for (const n of notes.reverse()) {
       const text = n.text.length > 200 ? n.text.slice(0, 200) + "..." : n.text;
       parts.push(`#${n.id}: ${text}`);
     }
   }
 
-  // 2. Semantic memory
+  // 3. Semantic memory
   if (semanticCtx) {
     parts.push("\n" + semanticCtx);
   }
 
-  // 3. Recent conversation activity (last 48h, user messages only, from this chat)
+  // 4. Recent conversation activity (last 48h, user messages only, from this chat)
   try {
     const cutoff = Math.floor(Date.now() / 1000) - 48 * 3600;
     const recentTurns = db
@@ -266,13 +311,18 @@ export async function runClaude(
   let prompt: string;
   if (isResume) {
     const memory = await buildMemoryContext(chatId, userMessage);
-    const memoryBlock = memory ? `\n${memory}\n` : "";
-    prompt = [
-      `[IDENTITY: You are Kingston. Respond in the same language as the user (usually French).]`,
-      `[Context: chatId=${chatId}, admin=${isAdmin}, date=${new Date().toISOString().split("T")[0]}]`,
-      memoryBlock,
-      userMessage,
-    ].join("\n");
+    const catalog = getCompactToolCatalog(isAdmin);
+    const parts: string[] = [
+      buildCoreIdentity(isAdmin, chatId),
+    ];
+    if (catalog) {
+      parts.push(`\n[TOOLS]\n${catalog}`);
+    }
+    if (memory) {
+      parts.push(`\n${memory}`);
+    }
+    parts.push(`\n[NEW MESSAGE]\nUser: ${userMessage}`);
+    prompt = parts.join("\n");
   } else {
     prompt = await buildFullPrompt(chatId, userMessage, isAdmin);
   }

@@ -32,3 +32,33 @@ export async function textToSpeechUlaw(text: string): Promise<Buffer> {
   log.info(`[elevenlabs] Got ${arrayBuf.byteLength} bytes of ulaw audio`);
   return Buffer.from(arrayBuf);
 }
+
+/** TTS returning MP3 — for local speaker playback (wake word responses) */
+export async function textToSpeechMp3(text: string): Promise<Buffer> {
+  const voiceId = config.elevenlabsVoiceId;
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
+
+  log.info(`[elevenlabs] TTS MP3 request: "${text.slice(0, 80)}..."`);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": config.elevenlabsApiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_multilingual_v2",
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`ElevenLabs TTS MP3 failed (${res.status}): ${body}`);
+  }
+
+  const arrayBuf = await res.arrayBuffer();
+  log.info(`[elevenlabs] Got ${arrayBuf.byteLength} bytes of MP3 audio`);
+  return Buffer.from(arrayBuf);
+}

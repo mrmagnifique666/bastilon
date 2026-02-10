@@ -10,6 +10,7 @@ import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
 import { runOllama, runOllamaChat, isOllamaAvailable } from "../llm/ollamaClient.js";
+import { runGroq, isGroqAvailable } from "../llm/groqClient.js";
 import { addTurn, logError, getTurns, clearSession } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
@@ -19,9 +20,27 @@ import { selectModel, getModelId, modelLabel, type ModelTier } from "../llm/mode
 import { isClaudeRateLimited, detectAndSetRateLimit, clearRateLimit, rateLimitRemainingMinutes, shouldProbeRateLimit, markProbeAttempt } from "../llm/rateLimitState.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
-/**
- * Callback to send intermediate progress updates to the user.
- */
+const GROQ_SYSTEM_PROMPT = [
+  "Tu es Kingston, un assistant IA personnel pour Nicolas.",
+  "Tu es concis, amical et tu réponds en français par défaut.",
+  "Tu ne peux PAS exécuter d'outils — réponds uniquement avec du texte.",
+  "Si on te demande quelque chose qui nécessite un outil, dis que tu vas transmettre la demande.",
+].join(" ");
+
+/** Try Groq as text-only fallback. Returns null on failure. */
+async function tryGroqFallback(chatId: number, userMessage: string, label: string): Promise<string | null> {
+  if (!isGroqAvailable()) return null;
+  try {
+    log.info(`[router] ⚡ Groq fallback (${label}): ${userMessage.slice(0, 100)}...`);
+    const result = await runGroq(GROQ_SYSTEM_PROMPT, userMessage);
+    log.info(`[router] Groq fallback success (${result.length} chars)`);
+    return result;
+  } catch (err) {
+    log.warn(`[router] Groq fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 /** Fire-and-forget background compaction — runs after response is sent, adds no latency */
 function backgroundCompact(chatId: number, userId: number): void {
   const turns = getTurns(chatId);
@@ -61,14 +80,14 @@ async function safeProgress(chatId: number, message: string): Promise<void> {
 function shouldUseGemini(chatId: number): boolean {
   // Must be enabled and have API key
   if (!config.geminiOrchestratorEnabled || !config.geminiApiKey) return false;
-  // Agents (chatId 100-104) always use Claude CLI to preserve Gemini rate limit for user
-  if (chatId >= 100 && chatId <= 104) return false;
+  // Agents (chatId 100-106) always use Ollama-first path to preserve Gemini rate limit for user
+  if (chatId >= 100 && chatId <= 106) return false;
   return true;
 }
 
 /**
  * Fallback chain when Claude CLI is unavailable (rate-limited or down).
- * Tries: Gemini Flash (full tool chain) → Ollama (text-only) → error message.
+ * Tries: Gemini Flash (full tool chain) → Ollama-chat (tool chain) → Groq (text-only) → error message.
  * Ensures the bot NEVER goes silent.
  */
 async function fallbackWithoutClaude(
@@ -124,9 +143,18 @@ async function fallbackWithoutClaude(
     }
   }
 
+  // --- Try Groq (text-only, llama-3.3-70b, $0) ---
+  const groqFallback = await tryGroqFallback(chatId, userMessage, "Claude+Gemini+Ollama down");
+  if (groqFallback) {
+    await safeProgress(chatId, `⚡ Mode Groq (services principaux indisponibles ~${remainingMinutes}min)`);
+    addTurn(chatId, { role: "assistant", content: groqFallback });
+    backgroundExtract(chatId, userMessage, groqFallback);
+    return groqFallback;
+  }
+
   // --- All models down — return a useful error instead of silence ---
   const msg = `⚠️ Tous les modèles sont temporairement indisponibles. Claude se réinitialise dans ~${remainingMinutes} minutes. Réessaie bientôt.`;
-  log.error(`[router] ALL models unavailable — Claude (rate-limited), Gemini (${config.geminiApiKey ? "failed" : "no key"}), Ollama (${config.ollamaEnabled ? "failed" : "disabled"})`);
+  log.error(`[router] ALL models unavailable — Claude (rate-limited), Gemini (${config.geminiApiKey ? "failed" : "no key"}), Ollama (${config.ollamaEnabled ? "failed" : "disabled"}), Groq (${isGroqAvailable() ? "failed" : "no key"})`);
   addTurn(chatId, { role: "assistant", content: msg });
   return msg;
 }
@@ -185,13 +213,13 @@ async function handleMessageInner(
 
   // --- Claude CLI path (fallback or agents) ---
   // Select model tier based on message content
-  const tier = selectModel(userMessage, contextHint);
+  const tier = selectModel(userMessage, contextHint, chatId);
   const model = getModelId(tier);
 
   // --- Ollama path ---
   if (tier === "ollama") {
-    // Agents (chatId 100-104) get full tool chain via /api/chat
-    const isAgent = chatId >= 100 && chatId <= 104;
+    // Agents (chatId 100-106) get full tool chain via /api/chat
+    const isAgent = chatId >= 100 && chatId <= 106;
 
     if (isAgent) {
       try {
@@ -231,7 +259,15 @@ async function handleMessageInner(
       return ollamaResult.text;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log.warn(`[router] Ollama failed, falling back to Haiku: ${errMsg}`);
+      log.warn(`[router] Ollama failed, trying Groq: ${errMsg}`);
+      // Try Groq before Haiku ($0, text-only)
+      const groqResult = await tryGroqFallback(chatId, userMessage, "ollama-fail");
+      if (groqResult) {
+        addTurn(chatId, { role: "assistant", content: groqResult });
+        backgroundExtract(chatId, userMessage, groqResult);
+        return groqResult;
+      }
+      log.warn(`[router] Groq also unavailable, falling back to Haiku`);
       const haikuModel = getModelId("haiku");
       const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
       if (haikuResult.type === "message") {
@@ -244,6 +280,29 @@ async function handleMessageInner(
       addTurn(chatId, { role: "assistant", content: text });
       return text;
     }
+  }
+
+  // --- Groq path (text-only, greetings/heartbeats when Ollama disabled) ---
+  if (tier === "groq") {
+    const groqResult = await tryGroqFallback(chatId, userMessage, "groq-tier");
+    if (groqResult) {
+      addTurn(chatId, { role: "assistant", content: groqResult });
+      backgroundExtract(chatId, userMessage, groqResult);
+      return groqResult;
+    }
+    // Groq failed — fall through to Haiku via Claude CLI
+    log.warn(`[router] Groq tier failed, falling back to Haiku`);
+    const haikuModel = getModelId("haiku");
+    const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
+    if (haikuResult.type === "message") {
+      const text = haikuResult.text?.trim() || "Désolé, je n'ai pas pu répondre.";
+      addTurn(chatId, { role: "assistant", content: text });
+      backgroundExtract(chatId, userMessage, text);
+      return text;
+    }
+    const text = "Salut! Comment je peux t'aider?";
+    addTurn(chatId, { role: "assistant", content: text });
+    return text;
   }
 
   // --- Proactive bypass: if Claude is known rate-limited, skip to fallbacks ---
@@ -347,15 +406,15 @@ async function handleMessageInner(
       log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
     }
 
-    // Agent chatId fix: agents use fake chatIds (100-103) for session isolation.
+    // Agent chatId fix: agents use fake chatIds (100-106) for session isolation.
     // When they call telegram.send/voice, replace with the real admin chatId.
-    if (chatId >= 100 && chatId <= 104 && tool.startsWith("telegram.") && config.adminChatId > 0) {
+    if (chatId >= 100 && chatId <= 106 && tool.startsWith("telegram.") && config.adminChatId > 0) {
       safeArgs.chatId = String(config.adminChatId);
       log.debug(`[router] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
-    // Hard block: agents (chatId 100-103) cannot use browser.* tools — they open visible windows
-    if (chatId >= 100 && chatId <= 104 && tool.startsWith("browser.")) {
+    // Hard block: agents (chatId 100-106) cannot use browser.* tools — they open visible windows
+    if (chatId >= 100 && chatId <= 106 && tool.startsWith("browser.")) {
       const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
       log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
@@ -433,6 +492,27 @@ async function handleMessageInner(
         return result.text;
       }
       continue;
+    }
+
+    // Block placeholder hallucinations in outbound messages (agents only)
+    if (chatId >= 100 && chatId <= 106) {
+      const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
+      if (outboundTools.includes(tool)) {
+        const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
+        const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
+        if (placeholderRe.test(textArg)) {
+          log.warn(`[router] Blocked ${tool} — placeholder detected: "${textArg.slice(0, 120)}"`);
+          const followUp = `[Tool "${tool}" error]:\nError: Message contains placeholder brackets like [RÉSUMÉ]. Get REAL data from tools first, then compose the message.`;
+          addTurn(chatId, { role: "assistant", content: `[blocked ${tool} — placeholder]` });
+          addTurn(chatId, { role: "user", content: followUp });
+          result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
+          if (result.type === "message") {
+            addTurn(chatId, { role: "assistant", content: result.text });
+            return result.text;
+          }
+          continue;
+        }
+      }
     }
 
     // Execute skill — feed errors back to Claude so it can adapt
@@ -557,13 +637,13 @@ async function handleMessageStreamingInner(
 
   // --- Claude CLI streaming path (fallback or agents) ---
   // Select model tier based on message content
-  const tier = selectModel(userMessage, "user");
+  const tier = selectModel(userMessage, "user", chatId);
   const model = getModelId(tier);
 
   // --- Ollama path ---
   if (tier === "ollama") {
     // Agents get full tool chain (no streaming needed for agents)
-    const isAgentStream = chatId >= 100 && chatId <= 104;
+    const isAgentStream = chatId >= 100 && chatId <= 106;
 
     if (isAgentStream) {
       try {
@@ -604,8 +684,18 @@ async function handleMessageStreamingInner(
       backgroundExtract(chatId, userMessage, ollamaResult.text);
       return ollamaResult.text;
     } catch (err) {
-      log.warn(`[router-stream] Ollama failed, falling back to Haiku: ${err instanceof Error ? err.message : String(err)}`);
+      log.warn(`[router-stream] Ollama failed, trying Groq: ${err instanceof Error ? err.message : String(err)}`);
+      // Try Groq before Haiku ($0, text-only)
+      const groqResult = await tryGroqFallback(chatId, userMessage, "stream-ollama-fail");
+      if (groqResult) {
+        await draft.update(groqResult);
+        await draft.finalize();
+        addTurn(chatId, { role: "assistant", content: groqResult });
+        backgroundExtract(chatId, userMessage, groqResult);
+        return groqResult;
+      }
       await draft.cancel();
+      log.warn(`[router-stream] Groq also unavailable, falling back to Haiku`);
       const haikuModel = getModelId("haiku");
       const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
       if (haikuResult.type === "message") {
@@ -618,6 +708,32 @@ async function handleMessageStreamingInner(
       addTurn(chatId, { role: "assistant", content: text });
       return text;
     }
+  }
+
+  // --- Groq path (text-only, greetings/heartbeats when Ollama disabled) ---
+  if (tier === "groq") {
+    const groqResult = await tryGroqFallback(chatId, userMessage, "stream-groq-tier");
+    if (groqResult) {
+      await draft.update(groqResult);
+      await draft.finalize();
+      addTurn(chatId, { role: "assistant", content: groqResult });
+      backgroundExtract(chatId, userMessage, groqResult);
+      return groqResult;
+    }
+    // Groq failed — fall through to Haiku
+    await draft.cancel();
+    log.warn(`[router-stream] Groq tier failed, falling back to Haiku`);
+    const haikuModel = getModelId("haiku");
+    const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
+    if (haikuResult.type === "message") {
+      const text = haikuResult.text?.trim() || "Désolé, je n'ai pas pu répondre.";
+      addTurn(chatId, { role: "assistant", content: text });
+      backgroundExtract(chatId, userMessage, text);
+      return text;
+    }
+    const text = "Salut! Comment je peux t'aider?";
+    addTurn(chatId, { role: "assistant", content: text });
+    return text;
   }
 
   // --- Proactive bypass: if Claude is known rate-limited, use Gemini/Ollama ---
@@ -760,14 +876,14 @@ async function handleMessageStreamingInner(
       safeArgs.chatId = String(chatId);
     }
 
-    // Agent chatId fix: rewrite fake agent chatIds to real admin chatId for telegram.*
-    if (chatId >= 100 && chatId <= 104 && tool.startsWith("telegram.") && config.adminChatId > 0) {
+    // Agent chatId fix: rewrite fake agent chatIds (100-106) to real admin chatId for telegram.*
+    if (chatId >= 100 && chatId <= 106 && tool.startsWith("telegram.") && config.adminChatId > 0) {
       safeArgs.chatId = String(config.adminChatId);
       log.debug(`[router-stream] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
-    // Hard block: agents (chatId 100-103) cannot use browser.* tools
-    if (chatId >= 100 && chatId <= 104 && tool.startsWith("browser.")) {
+    // Hard block: agents (chatId 100-106) cannot use browser.* tools
+    if (chatId >= 100 && chatId <= 106 && tool.startsWith("browser.")) {
       const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
       log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
@@ -834,6 +950,28 @@ async function handleMessageStreamingInner(
       }
       result = batchResultToRouterResult(batchResult);
       continue;
+    }
+
+    // Block placeholder hallucinations in outbound messages (agents — streaming path)
+    if (chatId >= 100 && chatId <= 106) {
+      const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
+      if (outboundTools.includes(tool)) {
+        const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
+        const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
+        if (placeholderRe.test(textArg)) {
+          log.warn(`[router-stream] Blocked ${tool} — placeholder detected: "${textArg.slice(0, 120)}"`);
+          const followUp = `[Tool "${tool}" error]:\nError: Message contains placeholder brackets. Get REAL data from tools first.`;
+          addTurn(chatId, { role: "assistant", content: `[blocked ${tool} — placeholder]` });
+          addTurn(chatId, { role: "user", content: followUp });
+          const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
+          if (batchResult.type === "message") {
+            addTurn(chatId, { role: "assistant", content: batchResult.text });
+            return batchResult.text;
+          }
+          result = batchResultToRouterResult(batchResult);
+          continue;
+        }
+      }
     }
 
     log.info(`[router-stream] Executing tool (step ${step + 1}): ${tool}`);

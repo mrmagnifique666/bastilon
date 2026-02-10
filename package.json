@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.73.0",
+    "@picovoice/porcupine-node": "^4.0.1",
+    "@picovoice/pvrecorder-node": "^1.2.8",
     "basic-ftp": "^5.1.0",
     "better-sqlite3": "^11.7.0",
     "croner": "^10.0.1",

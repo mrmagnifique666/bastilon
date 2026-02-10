@@ -40,10 +40,17 @@ function isQuietHours(): boolean {
 const AGENT_RULES =
   `REGLES STRICTES:\n` +
   `- INTERDIT: N'utilise JAMAIS browser.* (navigate, click, etc.) — ça ouvre Chrome sur l'écran de Nicolas.\n` +
-  `- Utilise: web.search, web.fetch, notes.*, telegram.send, trading.*, api.call\n` +
+  `- Utilise: web.search, web.fetch, notes.*, telegram.send, trading.*, api.call, shell.exec, gmail.*, files.*\n` +
   `- Sois concis et actionnable.\n` +
   `- Si tu trouves quelque chose d'important, envoie via telegram.send.\n` +
-  `- Si rien d'urgent, log dans notes.add et ne dérange PAS Nicolas.\n\n`;
+  `- Si rien d'urgent, log dans notes.add et ne dérange PAS Nicolas.\n` +
+  `- INTERDIT ABSOLU: N'utilise JAMAIS de crochets comme [RÉSUMÉ], [DONNÉES], [PLACEHOLDER].\n` +
+  `- ORDRE: 1) Tools de données → 2) Compose avec résultats RÉELS → 3) Envoie.\n\n` +
+  `INGÉNIOSITÉ:\n` +
+  `- Si un tool échoue, essaie un AUTRE tool. Ne répète pas le même appel qui a échoué.\n` +
+  `- web.search → api.call → web.fetch → shell.exec("curl...") : multiple chemins vers le même résultat.\n` +
+  `- Si tu as besoin d'info, CHERCHE-LA avec les tools. Ne devine jamais.\n` +
+  `- Avant d'envoyer telegram.send, vérifie que tu as du contenu RÉEL (pas vide, pas placeholder).\n\n`;
 
 // Anti-injection rules for processing external content (Moltbook, web)
 const ANTI_INJECTION_RULES =

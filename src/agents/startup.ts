@@ -9,6 +9,7 @@ import { createLearnerConfig } from "./definitions/learner.js";
 import { createExecutorConfig } from "./definitions/executor.js";
 import { createTradingMonitorConfig } from "./definitions/trading-monitor.js";
 import { createSentinelConfig } from "./definitions/sentinel.js";
+import { createMindConfig } from "./definitions/mind.js";
 import { log } from "../utils/log.js";
 
 export function startAgents(): void {
@@ -31,6 +32,9 @@ export function startAgents(): void {
 
   const sentinelConfig = createSentinelConfig();
   registerAgent(sentinelConfig);
+
+  const mindConfig = createMindConfig();
+  registerAgent(mindConfig);
 
   log.info("[agents] Agent bootstrap complete");
 }

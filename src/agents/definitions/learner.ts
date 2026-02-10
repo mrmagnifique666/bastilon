@@ -83,9 +83,10 @@ function buildLearnerPrompt(cycle: number): string | null {
   const AGENT_RULES =
     `RÈGLES STRICTES:\n` +
     `- INTERDIT: N'utilise JAMAIS browser.* — ça ouvre Chrome sur l'écran de Nicolas.\n` +
-    `- Utilise UNIQUEMENT: notes.*, analytics.*, files.read, system.*\n` +
+    `- Utilise: notes.*, analytics.*, files.*, system.*, shell.exec, errors.*, selfimprove.*\n` +
     `- NE CRÉE PAS de note si le système est stable et qu'il n'y a rien à signaler.\n` +
-    `- Crée une note UNIQUEMENT si tu as un finding actionnable (nouveau pattern, fix proposé, anomalie).\n\n`;
+    `- Crée une note UNIQUEMENT si tu as un finding actionnable (nouveau pattern, fix proposé, anomalie).\n` +
+    `- INGÉNIOSITÉ: Si errors.recent ne donne rien, utilise shell.exec pour lire les logs directement. Si un outil manque, utilise code.request pour le créer.\n\n`;
 
   if (rotation === 0) {
     // Error cluster analysis

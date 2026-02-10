@@ -35,8 +35,10 @@ function buildScoutPrompt(cycle: number): string | null {
   const AGENT_RULES =
     `RÈGLES STRICTES:\n` +
     `- INTERDIT: N'utilise JAMAIS browser.* (navigate, click, etc.) — ça ouvre Chrome sur l'écran de Nicolas.\n` +
-    `- Utilise UNIQUEMENT: web.search, contacts.*, notes.*, analytics.log, telegram.send\n` +
-    `- Sois concis. Pas de bavardage.\n\n`;
+    `- Utilise: web.search, web.fetch, api.call, contacts.*, notes.*, analytics.log, telegram.send, gmail.*, shell.exec\n` +
+    `- Sois concis. Pas de bavardage.\n` +
+    `- INGÉNIOSITÉ: Si web.search échoue, essaie api.call ou web.fetch directement. Si une source ne donne rien, cherche ailleurs.\n` +
+    `- Avant de rapporter "rien trouvé", essaie au moins 3 requêtes différentes.\n\n`;
 
   const prompts: Record<number, string> = {
     0: // LinkedIn Prospecting

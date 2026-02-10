@@ -174,8 +174,8 @@ const TIER1_PREFIXES = [
   "scheduler.", "errors.", "image.", "time.", "translate.", "git.", "memory.",
   "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
   "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
-  "trading.", "mood.", "soul.", "cron.", "planner.", "revenue.", "client.",
-  "selfimprove.", "content.",
+  "trading.", "mood.", "soul.", "cron.", "mind.", "kg.", "episodic.", "rules.",
+  "planner.", "revenue.", "client.", "selfimprove.", "content.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -302,7 +302,8 @@ const OLLAMA_TIER1_PREFIXES = [
   "help", "notes.", "files.read", "files.list", "files.write",
   "shell.exec", "web.search", "web.fetch", "telegram.",
   "system.status", "code.", "memory.", "analytics.",
-  "contacts.", "errors.", "ftp.", "git.", "time.", "cron.",
+  "contacts.", "errors.", "ftp.", "git.", "time.", "cron.", "mind.",
+  "kg.", "episodic.", "rules.",
   "planner.", "selfimprove.", "client.", "revenue.", "content.",
 ];
 
@@ -342,9 +343,27 @@ export function getSkillsForOllama(
     Array.from(matchedPrefixes).some((p) => s.name.startsWith(p))
   );
 
-  const selected = [...tier1, ...tier2Matched];
+  // Prioritize tools mentioned in the prompt (agent-aware selection)
+  const combined = [...tier1, ...tier2Matched];
   const cap = config.ollamaMaxTools || 40;
-  const capped = selected.slice(0, cap);
+
+  if (combined.length > cap && lowerMessage.length > 0) {
+    // Tools whose name appears in the message get priority
+    const mentioned: Skill[] = [];
+    const rest: Skill[] = [];
+    for (const s of combined) {
+      if (lowerMessage.includes(s.name)) {
+        mentioned.push(s);
+      } else {
+        rest.push(s);
+      }
+    }
+    const capped = [...mentioned, ...rest].slice(0, cap);
+    log.debug(`[loader] Ollama tools: ${capped.length} (tier1=${tier1.length}, tier2=${tier2Matched.length}, mentioned=${mentioned.length}, cap=${cap})`);
+    return capped.map(skillToOllamaDecl);
+  }
+
+  const capped = combined.slice(0, cap);
   log.debug(`[loader] Ollama tools: ${capped.length} (tier1=${tier1.length}, tier2=${tier2Matched.length}, cap=${cap})`);
 
   return capped.map(skillToOllamaDecl);
@@ -449,6 +468,11 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/soul.js");
   await import("./builtin/mood.js");
   await import("./builtin/cron.js");
+  await import("./builtin/mind.js");
+  await import("./builtin/knowledge-graph.js");
+  await import("./builtin/episodic.js");
+  await import("./builtin/rules.js");
+  await import("./builtin/wakeword.js");
   await import("./builtin/planner.js");
   await import("./builtin/revenue.js");
   await import("./builtin/client.js");

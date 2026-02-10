@@ -97,12 +97,22 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     `- If Nicolas asks you to do something, USE TOOLS RIGHT NOW. Do not describe what you would do.`,
     `- You have FULL admin access. You can write files, run shell commands, deploy via FTP, browse the web.`,
     `- When a task requires multiple steps, chain ALL tool calls autonomously until completion.`,
-    `- If a tool call fails, try an alternative approach before giving up.`,
     `- NEVER ask for permission to write files, execute code, or use any tool. You already have permission.`,
     `- The ONLY time to ask a question is when the task itself is ambiguous (e.g. "which color?").`,
     `- Format responses for Telegram: short paragraphs, bullet points. Keep it under 500 chars when possible.`,
     `- To persist important information, use notes.add. Your conversation memory is only 12 turns.`,
     `- To request code changes, use code.request (the Executor agent picks it up within 5 min).`,
+    ``,
+    `## RESOURCEFULNESS (BE HUMAN — NEVER GIVE UP)`,
+    `- You are RESOURCEFUL like a human. If Plan A fails, try Plan B, C, D. NEVER say "I can't do this."`,
+    `- If a tool fails, think: what OTHER tools could solve this? Use shell.exec, web.search, api.call, files.* creatively.`,
+    `- If you need an account on a website, use browser.* to sign up with Kingston's Gmail (Kingston.orchestrator@gmail.com, pw: Gatineau969).`,
+    `- If a web.search gives bad results, rephrase the query, try different keywords, try api.call directly.`,
+    `- If you need data but the tool doesn't exist, chain shell.exec + web.fetch + files.write to build your own pipeline.`,
+    `- If something takes multiple attempts, DO THEM ALL in one session — don't report failure after one try.`,
+    `- Before asking Nicolas for help, exhaust ALL alternatives. His contribution should be MINIMAL — do 95% of the work yourself.`,
+    `- You have 357+ tools. USE THEM ALL. web.search, api.call, shell.exec, browser.*, gmail.*, files.*, etc.`,
+    `- Think step by step: What do I need? → What tools do I have? → What's the fastest path? → EXECUTE.`,
     ``,
     `## ANTI-HALLUCINATION (MOST IMPORTANT RULES — VIOLATION = CRITICAL FAILURE)`,
     `- NEVER claim you did something unless a tool ACTUALLY returned a success result.`,
@@ -354,8 +364,8 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
           continue;
         }
 
-        // Hard block: agents cannot use browser.*
-        if (chatId >= 100 && chatId <= 104 && toolName.startsWith("browser.")) {
+        // Hard block: agents (100-106) cannot use browser.*
+        if (chatId >= 100 && chatId <= 106 && toolName.startsWith("browser.")) {
           log.warn(`[gemini] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
           contents.push({
             role: "user",
@@ -375,6 +385,12 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
         // Normalize args
         const safeArgs = normalizeArgs(toolName, rawArgs || {}, chatId, skill);
 
+        // Agent chatId fix: rewrite fake agent chatIds (100-106) to real admin chatId for telegram.*
+        if (chatId >= 100 && chatId <= 106 && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+          safeArgs.chatId = String(config.adminChatId);
+          log.debug(`[gemini] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
+        }
+
         // Validate args
         const validationError = validateArgs(safeArgs, skill.argsSchema);
         if (validationError) {
@@ -384,6 +400,23 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
             parts: [{ functionResponse: { name: toolName, response: { result: `Error: ${validationError}. Fix the arguments and try again.` } } }],
           });
           continue;
+        }
+
+        // Block placeholder hallucinations in outbound messages (agents)
+        if (chatId >= 100 && chatId <= 106) {
+          const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
+          if (outboundTools.includes(toolName)) {
+            const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
+            const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
+            if (placeholderRe.test(textArg)) {
+              log.warn(`[gemini] Blocked ${toolName} — placeholder detected: "${textArg.slice(0, 120)}"`);
+              contents.push({
+                role: "user",
+                parts: [{ functionResponse: { name: toolName, response: { result: `Error: Message contains placeholder brackets like [RÉSUMÉ]. Use data tools first, then compose with REAL values.` } } }],
+              });
+              continue;
+            }
+          }
         }
 
         // Execute skill

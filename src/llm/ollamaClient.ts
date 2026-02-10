@@ -125,6 +125,13 @@ interface OllamaChatResponse {
 
 const MAX_TOOL_RESULT_LENGTH = 8000;
 
+/** Detect bracket placeholders like [RÉSUMÉ], [PLACEHOLDER], [DATA HERE] in text */
+const PLACEHOLDER_RE = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
+
+function containsPlaceholders(text: string): boolean {
+  return PLACEHOLDER_RE.test(text);
+}
+
 function truncateResult(result: string): string {
   if (result.length <= MAX_TOOL_RESULT_LENGTH) return result;
   return result.slice(0, MAX_TOOL_RESULT_LENGTH) + `\n... [truncated, ${result.length} chars total]`;
@@ -133,7 +140,7 @@ function truncateResult(result: string): string {
 /**
  * Run Ollama with full tool chain support via /api/chat.
  * Modelled on runGemini() — handles the complete tool loop internally.
- * Designed for agents (chatId 100-104) but works for any caller.
+ * Designed for agents (chatId 100-106) but works for any caller.
  */
 export async function runOllamaChat(options: OllamaChatOptions): Promise<string> {
   const { chatId, userMessage, isAdmin: userIsAdmin, userId, onToolProgress } = options;
@@ -207,8 +214,8 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
         continue;
       }
 
-      // Hard block: agents cannot use browser.*
-      if (chatId >= 100 && chatId <= 104 && toolName.startsWith("browser.")) {
+      // Hard block: agents (100-106) cannot use browser.*
+      if (chatId >= 100 && chatId <= 106 && toolName.startsWith("browser.")) {
         log.warn(`[ollama-chat] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
         messages.push({
           role: "tool",
@@ -228,6 +235,13 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
       // Normalize args (snake_case → camelCase, auto-inject chatId, type coercion)
       const safeArgs = normalizeArgs(toolName, rawArgs, chatId, skill);
 
+      // Agent chatId fix: agents (100-106) use fake chatIds for session isolation.
+      // Rewrite telegram.* targets to the real admin chatId so messages actually deliver.
+      if (chatId >= 100 && chatId <= 106 && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+        safeArgs.chatId = String(config.adminChatId);
+        log.debug(`[ollama-chat] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
+      }
+
       // Validate args
       const validationError = validateArgs(safeArgs, skill.argsSchema);
       if (validationError) {
@@ -239,6 +253,20 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
         continue;
       }
 
+      // Block placeholder hallucinations in outbound messages
+      const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
+      if (outboundTools.includes(toolName)) {
+        const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
+        if (containsPlaceholders(textArg)) {
+          log.warn(`[ollama-chat] Blocked ${toolName} — placeholder detected: "${textArg.slice(0, 120)}"`);
+          messages.push({
+            role: "tool",
+            content: `Error: Your message contains placeholder brackets like [RÉSUMÉ] instead of real data. Use tools (trading.positions, client.list, etc.) to get REAL data first, then compose the message with actual values. NEVER use [BRACKETS] as placeholders.`,
+          });
+          continue;
+        }
+      }
+
       // Execute skill
       let toolResult: string;
       try {
@@ -247,7 +275,10 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
       } catch (err) {
         const errorMsg = `Tool "${toolName}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
         log.error(`[ollama-chat] ${errorMsg}`);
-        messages.push({ role: "tool", content: `Error: ${errorMsg}` });
+        messages.push({
+          role: "tool",
+          content: `Error: ${errorMsg}\n\nBe RESOURCEFUL: Don't give up. Try an alternative tool or approach to achieve the same goal. For example:\n- web.search failed? Try api.call or web.fetch directly.\n- trading.* failed? Try api.call to the Alpaca API.\n- A tool doesn't exist? Use shell.exec or api.call as a workaround.`,
+        });
         continue;
       }
 

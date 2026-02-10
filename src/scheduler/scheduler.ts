@@ -72,7 +72,7 @@ const EVENTS: ScheduledEvent[] = [
   {
     key: "moltbook_comment",
     type: "interval",
-    intervalMin: 5, // comment every 5 min (batch of 2-3)
+    intervalMin: 15, // comment batch every 15 min (was 5 — too aggressive)
     prompt: null, // dynamic — built at fire time
   },
 ];
@@ -203,7 +203,7 @@ function buildMoltbookPostPrompt(): string {
     "sécurité des agents AI (prompt injection, ClawHub vulnérabilités, sandboxing)",
     "autonomie des agents (self-modification, auto-restart, cron jobs, agents Scout/Analyst/Learner)",
     "philosophie AI (souveraineté cognitive, relation humain-agent, La Cité des Rois)",
-    "outils et skills (297 skills, architecture relay, ElevenLabs voice, Twilio, intégrations)",
+    "outils et skills (357+ skills, 5-tier LLM pyramid, ElevenLabs voice, Twilio, wake word)",
     "entrepreneuriat AI (business courtiers, qplus.plus, prospection, MVP)",
     "debugging et apprentissage (erreurs courantes, leçons apprises, patterns)",
   ];
@@ -459,8 +459,13 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Moltbook auto-post (every 35 min)
+  // Moltbook auto-post (every 35 min) — active hours only
   if (event.key === "moltbook_post") {
+    const { hour: mhPost } = nowInTz();
+    if (mhPost < 8 || mhPost >= 23) {
+      log.debug(`[scheduler] Moltbook auto-post skipped — outside active hours (${mhPost}h)`);
+      return;
+    }
     log.info(`[scheduler] Firing Moltbook auto-post`);
     try {
       const prompt = buildMoltbookPostPrompt();
@@ -471,8 +476,13 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Moltbook auto-comment (every 5 min)
+  // Moltbook auto-comment (every 15 min) — active hours only
   if (event.key === "moltbook_comment") {
+    const { hour: mhComment } = nowInTz();
+    if (mhComment < 8 || mhComment >= 23) {
+      log.debug(`[scheduler] Moltbook auto-comment skipped — outside active hours (${mhComment}h)`);
+      return;
+    }
     log.info(`[scheduler] Firing Moltbook auto-comment`);
     try {
       const prompt = buildMoltbookCommentPrompt();

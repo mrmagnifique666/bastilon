@@ -829,10 +829,7 @@ async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<
   if (!entryPricesFilled && cycle > 2) {
     const filled = await syncEntryPricesFromAlpaca();
     if (filled.length > 0) {
-      sendAlert(
-        "**Entry prices synced from Alpaca:**\n" +
-        filled.map((f) => `- ${f}`).join("\n")
-      );
+      log.info(`[trading-monitor] Entry prices synced: ${filled.join(", ")}`);
     }
   }
 
@@ -930,15 +927,13 @@ async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<
     }
   }
 
-  // Send consolidated alerts (deduplicate)
+  // Log signals to notes only — don't spam Nicolas's Telegram
+  // He only wants notifications when an actual trade is executed (handled in executeDecision)
   if (allSignals.length > 0) {
     const alertKey = allSignals.map((s) => s.message).join("|");
     if (alertKey !== lastAlertKey) {
       lastAlertKey = alertKey;
-      const msg =
-        "**Trading Monitor**\n\n" +
-        allSignals.map((s) => `${s.emoji} ${s.message}`).join("\n");
-      sendAlert(msg);
+      log.debug(`[trading-monitor] ${allSignals.length} signals (logged, not sent): ${allSignals.map(s => s.message).join("; ").slice(0, 200)}`);
     }
   }
 }

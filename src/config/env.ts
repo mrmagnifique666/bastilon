@@ -163,6 +163,10 @@ function buildConfig() {
     agentTradingMonitorHeartbeatMs: Number(optional("AGENT_TRADING_MONITOR_HEARTBEAT_MS", "60000")),
     agentSentinelEnabled: optional("AGENT_SENTINEL_ENABLED", "true") === "true",
     agentSentinelHeartbeatMs: Number(optional("AGENT_SENTINEL_HEARTBEAT_MS", "1800000")),
+
+    // Kingston Mind (autonomous business brain)
+    agentMindEnabled: optional("AGENT_MIND_ENABLED", "true") === "true",
+    agentMindHeartbeatMs: Number(optional("AGENT_MIND_HEARTBEAT_MS", "1200000")), // 20min
   };
 }
 

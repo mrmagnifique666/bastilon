@@ -39,7 +39,7 @@ async function takeAndSendScreenshot(chatId: number, selector?: string): Promise
   const sendPhoto = getBotPhotoFn();
   if (!sendPhoto) return "Error: bot photo API not available.";
 
-  // Validate chatId — must be a positive number (not a fake agent chatId like 100-103)
+  // Validate chatId — must be a positive number (not a fake agent chatId like 100-106)
   if (!chatId || isNaN(chatId) || chatId <= 0) {
     log.warn(`[browser] Invalid chatId ${chatId} — skipping screenshot send`);
     return `Screenshot skipped: invalid chatId (${chatId}). Page: ${page.url()}`;

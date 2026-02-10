@@ -5,7 +5,7 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config/env.js";
-import { getDb } from "../storage/store.js";
+import { getDb, getSummary, getTurns } from "../storage/store.js";
 import { log } from "../utils/log.js";
 
 // --- Types ---
@@ -366,9 +366,52 @@ export async function extractAndStoreMemories(chatId: number, conversation: stri
   }
 }
 
+// --- Enriched Query for Short/Ambiguous Messages ---
+
+/**
+ * Build an enriched query for semantic search when the user message is too short
+ * or ambiguous (e.g. "fais-le", "ok", "oui") to have meaningful semantic value.
+ * Enriches with recent turns + active topics from conversation summary.
+ */
+export function buildEnrichedQuery(userMessage: string, chatId: number): string {
+  // Long messages have enough semantic content on their own
+  if (userMessage.length >= 50) return userMessage;
+
+  const parts: string[] = [];
+
+  // 1. Active topics from conversation summary
+  try {
+    const summary = getSummary(chatId);
+    if (summary?.topics && summary.topics.length > 0) {
+      parts.push(summary.topics.join(" "));
+    }
+  } catch { /* no summary available */ }
+
+  // 2. Recent turns for context (last 3 user messages)
+  try {
+    const turns = getTurns(chatId);
+    const recentUser = turns
+      .filter((t) => t.role === "user")
+      .slice(-3)
+      .map((t) => t.content.slice(0, 100));
+    if (recentUser.length > 0) {
+      parts.push(recentUser.join(" "));
+    }
+  } catch { /* no turns available */ }
+
+  // 3. The original message
+  parts.push(userMessage);
+
+  const enriched = parts.join(" ").slice(0, 300);
+  if (enriched.length > userMessage.length + 10) {
+    log.debug(`[semantic] Enriched query: "${userMessage}" → "${enriched.slice(0, 80)}..."`);
+  }
+  return enriched;
+}
+
 // --- Build context for prompt injection ---
 
-export async function buildSemanticContext(userMessage: string, limit: number = 10): Promise<string> {
+export async function buildSemanticContext(userMessage: string, limit: number = 10, chatId?: number): Promise<string> {
   if (!config.geminiApiKey) return "";
 
   try {
@@ -376,7 +419,9 @@ export async function buildSemanticContext(userMessage: string, limit: number = 
     const count = (db.prepare("SELECT COUNT(*) as c FROM memory_items").get() as { c: number }).c;
     if (count === 0) return "";
 
-    const results = await searchMemories(userMessage, limit);
+    // Use enriched query for short messages when chatId is available
+    const query = chatId ? buildEnrichedQuery(userMessage, chatId) : userMessage;
+    const results = await searchMemories(query, limit);
     if (results.length === 0) return "";
 
     const lines: string[] = ["[SEMANTIC MEMORY — relevant memories]"];
