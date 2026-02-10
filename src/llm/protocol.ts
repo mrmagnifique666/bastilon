@@ -115,7 +115,8 @@ function parseResultString(result: string, sessionId?: string): ParsedResult {
   const marker = '{"type":"tool_call"';
   const idx = trimmed.lastIndexOf(marker);
   if (idx > 0) {
-    const jsonCandidate = trimmed.slice(idx);
+    // Strip trailing markdown code fence if present (```json...```)
+    let jsonCandidate = trimmed.slice(idx).replace(/\s*```\s*$/, "").trim();
     const parsed = tryParseToolOrMessage(jsonCandidate, sessionId);
     if (parsed) return parsed;
   }

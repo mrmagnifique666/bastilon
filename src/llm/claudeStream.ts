@@ -474,7 +474,9 @@ function detectToolCall(text: string): { tool: string; args: Record<string, unkn
   const idx = trimmed.lastIndexOf(marker);
   if (idx < 0) return null;
 
-  const jsonCandidate = trimmed.slice(idx);
+  let jsonCandidate = trimmed.slice(idx);
+  // Strip trailing markdown code fence if present (```json...```)
+  jsonCandidate = jsonCandidate.replace(/\s*```\s*$/, "").trim();
   return tryParseToolCall(jsonCandidate);
 }
 
