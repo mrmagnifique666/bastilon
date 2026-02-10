@@ -5,6 +5,7 @@
 import { registerSkill } from "../loader.js";
 import { listAgents, getAgent } from "../../agents/registry.js";
 import { isRateLimited, getRateLimitReset } from "../../agents/base.js";
+import { getDb } from "../../storage/store.js";
 
 registerSkill({
   name: "agents.list",
@@ -112,5 +113,107 @@ registerSkill({
 
     agent.stop();
     return `Agent "${args.id}" stopped.`;
+  },
+});
+
+// --- Inter-agent task delegation ---
+
+registerSkill({
+  name: "agents.delegate",
+  description:
+    "Delegate a task to another agent. The target agent will see it in its inbox on next cycle.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      from: { type: "string", description: "Sender agent ID (e.g. 'analyst')" },
+      to: { type: "string", description: "Target agent ID (e.g. 'scout')" },
+      instruction: {
+        type: "string",
+        description: "Task instruction for the target agent",
+      },
+    },
+    required: ["from", "to", "instruction"],
+  },
+  async execute(args): Promise<string> {
+    const from = String(args.from);
+    const to = String(args.to);
+    const instruction = String(args.instruction);
+
+    // Validate target agent exists
+    const target = getAgent(to);
+    if (!target) return `Agent "${to}" not found.`;
+
+    const d = getDb();
+    const info = d
+      .prepare(
+        "INSERT INTO agent_tasks (from_agent, to_agent, instruction) VALUES (?, ?, ?)",
+      )
+      .run(from, to, instruction);
+
+    return `Task #${info.lastInsertRowid} delegated to ${to}: "${instruction.slice(0, 80)}${instruction.length > 80 ? "..." : ""}"`;
+  },
+});
+
+registerSkill({
+  name: "agents.inbox",
+  description:
+    "Check pending tasks delegated to a specific agent. Returns tasks waiting to be processed.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      agent_id: {
+        type: "string",
+        description: "Agent ID to check inbox for (e.g. 'scout')",
+      },
+      complete_id: {
+        type: "number",
+        description: "Optional: mark a task as completed by its ID",
+      },
+      result: {
+        type: "string",
+        description: "Optional: result text when completing a task",
+      },
+    },
+    required: ["agent_id"],
+  },
+  async execute(args): Promise<string> {
+    const agentId = String(args.agent_id);
+    const completeId = args.complete_id as number | undefined;
+    const result = args.result as string | undefined;
+    const d = getDb();
+
+    // Complete a task if requested
+    if (completeId) {
+      const info = d
+        .prepare(
+          "UPDATE agent_tasks SET status = 'completed', result = ?, completed_at = unixepoch() WHERE id = ? AND to_agent = ?",
+        )
+        .run(result || "done", completeId, agentId);
+      if (info.changes === 0) return `Task #${completeId} not found or not assigned to ${agentId}.`;
+      return `Task #${completeId} marked as completed.`;
+    }
+
+    // List pending tasks
+    const tasks = d
+      .prepare(
+        "SELECT id, from_agent, instruction, created_at FROM agent_tasks WHERE to_agent = ? AND status = 'pending' ORDER BY created_at ASC",
+      )
+      .all(agentId) as Array<{
+      id: number;
+      from_agent: string;
+      instruction: string;
+      created_at: number;
+    }>;
+
+    if (tasks.length === 0) return `No pending tasks for ${agentId}.`;
+
+    return tasks
+      .map(
+        (t) =>
+          `#${t.id} from **${t.from_agent}** (${new Date(t.created_at * 1000).toLocaleString("fr-CA", { timeZone: "America/Toronto" })}):\n  ${t.instruction}`,
+      )
+      .join("\n\n");
   },
 });

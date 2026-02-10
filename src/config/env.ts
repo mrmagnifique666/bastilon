@@ -116,6 +116,11 @@ function buildConfig() {
     cronChatIdBase: Number(optional("CRON_CHATID_BASE", "200")),
     cronMaxRetries: Number(optional("CRON_MAX_RETRIES", "3")),
 
+    // Groq (free cloud LLM tier)
+    groqApiKey: optional("GROQ_API_KEY", ""),
+    groqModel: optional("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    groqTimeoutMs: Number(optional("GROQ_TIMEOUT_MS", "30000")),
+
     // Weather location for mood skill
     weatherLocation: optional("WEATHER_LOCATION", "Ottawa"),
 

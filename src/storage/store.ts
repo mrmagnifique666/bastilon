@@ -117,6 +117,18 @@ export function getDb(): Database.Database {
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
       CREATE INDEX IF NOT EXISTS idx_cron_next ON cron_jobs(enabled, next_run_at);
+
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_agent TEXT NOT NULL,
+        to_agent TEXT NOT NULL,
+        instruction TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        result TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        completed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_to ON agent_tasks(to_agent, status);
     `);
     // Migrate: add new columns to error_log if missing
     try {
