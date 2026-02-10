@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kingston Voice</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #111118;
+    border-bottom: 1px solid #222;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header h1 span { color: #6c8cff; }
+  .header-controls { display: flex; gap: 10px; align-items: center; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #444; display: inline-block; }
+  .status-dot.active { background: #4caf50; }
+  .status-dot.listening { background: #ff9800; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+
+  /* Main layout */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Chat transcript */
+  .transcript {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 15px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg.user {
+    align-self: flex-end;
+    background: #1a3a6a;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.assistant {
+    align-self: flex-start;
+    background: #1e1e2a;
+    border-bottom-left-radius: 4px;
+  }
+  .msg.system {
+    align-self: center;
+    background: transparent;
+    color: #666;
+    font-size: 13px;
+    font-style: italic;
+  }
+  .msg .label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  /* Webcam */
+  .webcam-container {
+    position: absolute;
+    top: 60px;
+    right: 16px;
+    width: 180px;
+    height: 135px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 2px solid #333;
+    background: #000;
+    z-index: 10;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+  .webcam-container:hover { border-color: #6c8cff; }
+  .webcam-container.off { display: none; }
+  .webcam-container video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+  }
+  .webcam-label {
+    position: absolute;
+    bottom: 4px;
+    left: 6px;
+    font-size: 10px;
+    background: rgba(0,0,0,0.6);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #aaa;
+  }
+
+  /* Controls */
+  .controls {
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    background: #111118;
+    border-top: 1px solid #222;
+  }
+  .mic-btn {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    border: 3px solid #333;
+    background: #1a1a24;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .mic-btn:hover { border-color: #6c8cff; background: #1e1e30; }
+  .mic-btn.listening {
+    border-color: #ff9800;
+    background: #2a1a00;
+    animation: mic-pulse 1.5s infinite;
+  }
+  .mic-btn.speaking {
+    border-color: #4caf50;
+    background: #0a2a0a;
+  }
+  .mic-btn.processing {
+    border-color: #6c8cff;
+    background: #0a0a2a;
+  }
+  @keyframes mic-pulse { 50% { box-shadow: 0 0 20px rgba(255,152,0,0.4); } }
+  .mic-icon { font-size: 28px; }
+  .controls-row { display: flex; gap: 12px; align-items: center; }
+  .ctrl-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid #333;
+    background: #1a1a24;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .ctrl-btn:hover { border-color: #6c8cff; color: #fff; }
+  .ctrl-btn.active { border-color: #4caf50; color: #4caf50; }
+  .hint { color: #555; font-size: 12px; }
+
+  /* Text input fallback */
+  .text-input-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    max-width: 600px;
+  }
+  .text-input-row input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: #1a1a24;
+    color: #e0e0e0;
+    font-size: 14px;
+    outline: none;
+  }
+  .text-input-row input:focus { border-color: #6c8cff; }
+  .text-input-row button {
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: none;
+    background: #6c8cff;
+    color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>Kingston</span> Voice</h1>
+  <div class="header-controls">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText" style="font-size:13px;color:#888">Prêt</span>
+  </div>
+</div>
+
+<div class="main" style="position:relative">
+  <div class="webcam-container" id="webcamBox">
+    <video id="webcamVideo" autoplay playsinline muted></video>
+    <div class="webcam-label">Webcam</div>
+  </div>
+
+  <div class="transcript" id="transcript">
+    <div class="msg system">Appuie sur le micro ou maintiens Espace pour parler. Kingston te répondra à voix haute.</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="mic-btn" id="micBtn" title="Appuie pour parler (ou maintiens Espace)">
+    <span class="mic-icon" id="micIcon">🎤</span>
+  </button>
+  <div class="controls-row">
+    <button class="ctrl-btn" id="webcamToggle">📷 Webcam</button>
+    <button class="ctrl-btn" id="ttsToggle" data-active="true">🔊 TTS</button>
+    <button class="ctrl-btn" id="autoToggle">🔄 Auto-listen</button>
+  </div>
+  <div class="text-input-row">
+    <input type="text" id="textInput" placeholder="Ou tape ton message ici..." />
+    <button id="textSend">Envoyer</button>
+  </div>
+  <div class="hint">Espace = push-to-talk &nbsp;|&nbsp; Entrée = envoyer texte</div>
+</div>
+
+<script>
+// --- Config ---
+const API_BASE = window.location.origin;
+const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
+const VOICE_CHAT_ID = 5; // dedicated chatId for voice
+
+// --- State ---
+let isListening = false;
+let isProcessing = false;
+let isSpeaking = false;
+let ttsEnabled = true;
+let autoListen = false;
+let webcamOn = false;
+let recognition = null;
+let currentAudio = null;
+
+// --- DOM ---
+const transcript = document.getElementById('transcript');
+const micBtn = document.getElementById('micBtn');
+const micIcon = document.getElementById('micIcon');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const textInput = document.getElementById('textInput');
+const webcamVideo = document.getElementById('webcamVideo');
+const webcamBox = document.getElementById('webcamBox');
+
+// --- Auth prompt ---
+if (!AUTH_TOKEN) {
+  const token = prompt('Token Bastilon (DASHBOARD_TOKEN):');
+  if (token) {
+    localStorage.setItem('bastilon_token', token);
+    window.location.reload();
+  }
+}
+
+// --- Status helpers ---
+function setStatus(state, text) {
+  statusDot.className = 'status-dot ' + state;
+  statusText.textContent = text;
+  micBtn.className = 'mic-btn ' + state;
+  if (state === 'listening') micIcon.textContent = '🔴';
+  else if (state === 'processing') micIcon.textContent = '⏳';
+  else if (state === 'speaking') micIcon.textContent = '🔊';
+  else micIcon.textContent = '🎤';
+}
+
+function addMessage(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.textContent = role === 'user' ? 'Toi' : 'Kingston';
+  div.appendChild(label);
+  const content = document.createElement('div');
+  content.textContent = text;
+  div.appendChild(content);
+  transcript.appendChild(div);
+  transcript.scrollTop = transcript.scrollHeight;
+  return div;
+}
+
+// --- Speech Recognition (STT) ---
+function initRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    addMessage('system', 'Web Speech API non supportée. Utilise Chrome.');
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.lang = 'fr-FR';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (event) => {
+    const text = event.results[0][0].transcript.trim();
+    if (text) {
+      stopListening();
+      sendMessage(text);
+    }
+  };
+  recognition.onerror = (event) => {
+    if (event.error !== 'aborted' && event.error !== 'no-speech') {
+      console.warn('STT error:', event.error);
+    }
+    stopListening();
+  };
+  recognition.onend = () => {
+    if (isListening) stopListening();
+  };
+}
+
+function startListening() {
+  if (isProcessing || isSpeaking) return;
+  // Stop any playing audio
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  isListening = true;
+  setStatus('listening', 'Écoute...');
+  try { recognition.start(); } catch(e) { /* already started */ }
+}
+
+function stopListening() {
+  isListening = false;
+  try { recognition.stop(); } catch(e) {}
+  if (!isProcessing && !isSpeaking) setStatus('active', 'Prêt');
+}
+
+function toggleListening() {
+  if (isListening) stopListening();
+  else startListening();
+}
+
+// --- Send message to Kingston ---
+async function sendMessage(text) {
+  if (!text.trim() || isProcessing) return;
+  addMessage('user', text);
+  isProcessing = true;
+  setStatus('processing', 'Kingston réfléchit...');
+
+  try {
+    const resp = await fetch(API_BASE + '/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + AUTH_TOKEN,
+      },
+      body: JSON.stringify({
+        model: 'bastilon',
+        messages: [{ role: 'user', content: text }],
+        stream: false,
+      }),
+    });
+
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const reply = data.choices?.[0]?.message?.content || '(pas de réponse)';
+
+    addMessage('assistant', reply);
+    isProcessing = false;
+
+    if (ttsEnabled && reply.length < 2000) {
+      await speak(reply);
+    } else {
+      setStatus('active', 'Prêt');
+      if (autoListen) setTimeout(() => startListening(), 500);
+    }
+  } catch (err) {
+    isProcessing = false;
+    addMessage('system', 'Erreur: ' + err.message);
+    setStatus('active', 'Prêt');
+  }
+}
+
+// --- TTS (ElevenLabs via server proxy) ---
+async function speak(text) {
+  isSpeaking = true;
+  setStatus('speaking', 'Kingston parle...');
+
+  try {
+    const resp = await fetch(API_BASE + '/api/tts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + AUTH_TOKEN,
+      },
+      body: JSON.stringify({ text: text.slice(0, 1000) }),
+    });
+
+    if (!resp.ok) {
+      // Fallback to browser TTS
+      browserTTS(text);
+      return;
+    }
+
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    currentAudio = new Audio(url);
+    currentAudio.onended = () => {
+      isSpeaking = false;
+      setStatus('active', 'Prêt');
+      URL.revokeObjectURL(url);
+      if (autoListen) setTimeout(() => startListening(), 500);
+    };
+    currentAudio.onerror = () => {
+      isSpeaking = false;
+      setStatus('active', 'Prêt');
+      browserTTS(text);
+    };
+    currentAudio.play();
+  } catch (err) {
+    console.warn('TTS proxy failed, using browser TTS:', err);
+    browserTTS(text);
+  }
+}
+
+function browserTTS(text) {
+  const utterance = new SpeechSynthesisUtterance(text.slice(0, 500));
+  utterance.lang = 'fr-FR';
+  utterance.rate = 1.05;
+  utterance.onend = () => {
+    isSpeaking = false;
+    setStatus('active', 'Prêt');
+    if (autoListen) setTimeout(() => startListening(), 500);
+  };
+  speechSynthesis.speak(utterance);
+}
+
+// --- Webcam ---
+async function toggleWebcam() {
+  if (webcamOn) {
+    const tracks = webcamVideo.srcObject?.getTracks();
+    tracks?.forEach(t => t.stop());
+    webcamVideo.srcObject = null;
+    webcamOn = false;
+    webcamBox.classList.add('off');
+    document.getElementById('webcamToggle').classList.remove('active');
+  } else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      webcamVideo.srcObject = stream;
+      webcamOn = true;
+      webcamBox.classList.remove('off');
+      document.getElementById('webcamToggle').classList.add('active');
+    } catch (err) {
+      addMessage('system', 'Webcam non disponible: ' + err.message);
+    }
+  }
+}
+
+// --- Event listeners ---
+micBtn.addEventListener('click', toggleListening);
+
+document.getElementById('webcamToggle').addEventListener('click', toggleWebcam);
+
+document.getElementById('ttsToggle').addEventListener('click', () => {
+  ttsEnabled = !ttsEnabled;
+  document.getElementById('ttsToggle').classList.toggle('active', ttsEnabled);
+});
+document.getElementById('ttsToggle').classList.add('active');
+
+document.getElementById('autoToggle').addEventListener('click', () => {
+  autoListen = !autoListen;
+  document.getElementById('autoToggle').classList.toggle('active', autoListen);
+});
+
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    const text = textInput.value.trim();
+    if (text) { textInput.value = ''; sendMessage(text); }
+  }
+});
+document.getElementById('textSend').addEventListener('click', () => {
+  const text = textInput.value.trim();
+  if (text) { textInput.value = ''; sendMessage(text); }
+});
+
+// --- Push-to-talk (Space) ---
+let spaceHeld = false;
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !spaceHeld && document.activeElement !== textInput) {
+    e.preventDefault();
+    spaceHeld = true;
+    startListening();
+  }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' && spaceHeld) {
+    e.preventDefault();
+    spaceHeld = false;
+    // Give a small delay for the last words to be captured
+    setTimeout(() => stopListening(), 300);
+  }
+});
+
+// --- Init ---
+initRecognition();
+webcamBox.classList.add('off');
+setStatus('active', 'Prêt');
+</script>
+</body>
+</html>

@@ -1,0 +1,1675 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bastilon OS — Dashboard</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --bg2: #161b22;
+      --bg3: #21262d;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text2: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --orange: #f0883e;
+      --sidebar-w: 240px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow-y: auto;
+      transition: width 0.2s;
+    }
+    .sidebar.collapsed { width: 48px; }
+    .sidebar.collapsed .nav-label,
+    .sidebar.collapsed .sidebar-header span,
+    .sidebar.collapsed .nav-group-title,
+    .sidebar.collapsed .health-badge span { display: none; }
+    .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
+    .sidebar.collapsed .nav-icon { margin: 0; }
+
+    .sidebar-header {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-header .brand {
+      font-weight: 700; font-size: 15px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .sidebar-header .brand em { color: var(--accent); font-style: normal; }
+    .sidebar-toggle {
+      background: none; border: none; color: var(--text2);
+      cursor: pointer; font-size: 16px; padding: 4px;
+    }
+    .sidebar-toggle:hover { color: var(--text); }
+
+    .health-badge {
+      margin: 8px 12px;
+      padding: 6px 10px;
+      background: var(--bg3);
+      border-radius: 8px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot-yellow { background: var(--yellow); }
+    .dot-red { background: var(--red); }
+
+    .nav-group-title {
+      padding: 12px 16px 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text2);
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 16px;
+      font-size: 13px;
+      color: var(--text2);
+      cursor: pointer;
+      transition: all 0.1s;
+      text-decoration: none;
+      border-left: 3px solid transparent;
+    }
+    .nav-item:hover { background: var(--bg3); color: var(--text); }
+    .nav-item.active {
+      color: var(--accent);
+      background: rgba(88,166,255,.08);
+      border-left-color: var(--accent);
+    }
+    .nav-icon { width: 20px; text-align: center; margin-right: 10px; font-size: 14px; }
+    .nav-label { white-space: nowrap; }
+    .nav-badge {
+      margin-left: auto;
+      background: var(--bg3);
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* ── Main Content ───────────────────────────── */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .view { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+    .view.active { display: flex; }
+
+    .view-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .view-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+
+    /* ── Cards ───────────────────────────────────── */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .card .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 8px; }
+    .card .card-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+    .card .card-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+    /* ── Table ───────────────────────────────────── */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .data-table th {
+      text-align: left; padding: 8px 12px;
+      background: var(--bg2); color: var(--text2);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0;
+    }
+    .data-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+    }
+    .data-table tr:hover td { background: var(--bg2); }
+
+    .badge-sm {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .badge-green { background: rgba(63,185,80,.15); color: var(--green); }
+    .badge-red { background: rgba(248,81,73,.15); color: var(--red); }
+    .badge-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .badge-blue { background: rgba(88,166,255,.15); color: var(--accent); }
+    .badge-purple { background: rgba(188,140,255,.15); color: var(--purple); }
+
+    /* ── Search ──────────────────────────────────── */
+    .search-box {
+      width: 100%; padding: 8px 12px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text);
+      font-size: 13px; outline: none;
+      margin-bottom: 12px;
+    }
+    .search-box:focus { border-color: var(--accent); }
+
+    /* ── Log viewer ─────────────────────────────── */
+    .log-viewer {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      padding: 12px;
+      overflow-y: auto;
+      flex: 1;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-line { padding: 1px 0; }
+    .log-debug { color: var(--text2); }
+    .log-info { color: var(--text); }
+    .log-warn { color: var(--yellow); }
+    .log-error { color: var(--red); }
+
+    /* ── Config editor ──────────────────────────── */
+    .config-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+    }
+    .config-key {
+      font-family: monospace; font-size: 12px; color: var(--accent);
+      min-width: 240px;
+    }
+    .config-val {
+      flex: 1; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px 8px; color: var(--text);
+      font-size: 12px; font-family: monospace; outline: none;
+    }
+    .config-val:focus { border-color: var(--accent); }
+    .config-val.secret { color: var(--text2); }
+
+    /* ── Chat (preserved from original) ─────────── */
+    .chat-tabs {
+      display: flex;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .chat-tab {
+      flex: 1; padding: 10px;
+      text-align: center; font-size: 13px; font-weight: 600;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      color: var(--text2); transition: all 0.15s;
+    }
+    .chat-tab:hover { color: var(--text); background: var(--bg3); }
+    .chat-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .chat-tab.emile.active { color: var(--purple); border-bottom-color: var(--purple); }
+
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .msg {
+      max-width: 80%; padding: 10px 14px;
+      border-radius: 12px; font-size: 14px; line-height: 1.5;
+      word-wrap: break-word; white-space: pre-wrap;
+    }
+    .msg-user {
+      align-self: flex-end;
+      background: var(--accent); color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg-assistant {
+      align-self: flex-start;
+      background: var(--bg3); color: var(--text);
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .msg-assistant.emile { border-color: rgba(188,140,255,.3); }
+    .msg-system {
+      align-self: center;
+      color: var(--text2); font-size: 12px; font-style: italic;
+    }
+
+    .chat-input-area {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .chat-controls {
+      grid-column: 1 / -1;
+      display: flex; gap: 8px; align-items: center;
+    }
+    .chat-controls select, .chat-controls input {
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 10px; font-size: 12px; outline: none;
+    }
+    .chat-input-area textarea {
+      flex: 1; background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 14px;
+      color: var(--text); font-size: 14px;
+      font-family: inherit; resize: none;
+      outline: none; min-height: 42px; max-height: 120px;
+    }
+    .chat-input-area textarea:focus { border-color: var(--accent); }
+    .chat-input-area button {
+      background: var(--accent); color: #fff; border: none;
+      border-radius: 8px; padding: 0 20px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .chat-input-area button.secondary {
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border); padding: 0 12px; min-height: 36px;
+    }
+    .chat-input-area button:hover { opacity: 0.85; }
+    .chat-input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .chat-input-area button.emile-btn { background: var(--purple); }
+    .chat-input-area button.conseil-btn {
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+    }
+
+    .msg-label { font-size: 11px; font-weight: 700; margin-bottom: 4px; letter-spacing: 0.3px; }
+    .msg-label.kingston { color: var(--accent); }
+    .msg-label.emile { color: var(--purple); }
+    .msg-assistant.kingston-msg { border-color: rgba(88,166,255,.3); }
+    .msg-assistant.emile-msg { border-color: rgba(188,140,255,.3); }
+
+    .continue-bar {
+      padding: 8px 16px; border-top: 1px solid var(--border);
+      background: var(--bg2); display: flex; gap: 8px; justify-content: center;
+    }
+    .continue-bar button {
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 16px; font-size: 12px; cursor: pointer;
+    }
+    .continue-bar button:hover { border-color: var(--accent); background: var(--bg); }
+    .continue-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .typing-indicator {
+      display: flex; gap: 4px; padding: 8px 14px; align-self: flex-start;
+    }
+    .typing-indicator span {
+      width: 6px; height: 6px; background: var(--text2);
+      border-radius: 50%; animation: bounce 1.4s infinite ease-in-out;
+    }
+    .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+
+    /* ── Rate limit banner ──────────────────────── */
+    .rate-limit-banner {
+      background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3);
+      color: var(--red); padding: 6px 20px; font-size: 13px;
+      text-align: center; display: none;
+    }
+    .rate-limit-banner.visible { display: block; }
+
+    /* ── Namespace group ─────────────────────────── */
+    .ns-group { margin-bottom: 16px; }
+    .ns-title {
+      font-size: 13px; font-weight: 700; color: var(--accent);
+      padding: 8px 0 4px; border-bottom: 1px solid var(--border);
+      margin-bottom: 6px;
+    }
+    .skill-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 5px 8px; font-size: 12px;
+      border-radius: 6px;
+    }
+    .skill-row:hover { background: var(--bg2); }
+    .skill-name { font-family: monospace; color: var(--text); min-width: 200px; }
+    .skill-desc { color: var(--text2); flex: 1; }
+    .skill-args { color: var(--text2); font-family: monospace; font-size: 11px; }
+
+    /* ── Memory items ────────────────────────────── */
+    .mem-item {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+      font-size: 13px;
+    }
+    .mem-item:hover { background: var(--bg2); }
+    .mem-cat {
+      display: inline-block; padding: 1px 6px; border-radius: 8px;
+      font-size: 10px; font-weight: 600; margin-right: 6px;
+    }
+    .mem-cat-profile { background: rgba(88,166,255,.15); color: var(--accent); }
+    .mem-cat-preference { background: rgba(188,140,255,.15); color: var(--purple); }
+    .mem-cat-event { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .mem-cat-knowledge { background: rgba(63,185,80,.15); color: var(--green); }
+    .mem-cat-skill { background: rgba(240,136,62,.15); color: var(--orange); }
+    .mem-cat-project { background: rgba(248,81,73,.15); color: var(--red); }
+
+    /* ── Scrollbar ───────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+    /* ── Responsive ──────────────────────────────── */
+    @media (max-width: 900px) {
+      .sidebar { width: 48px; }
+      .sidebar .nav-label, .sidebar .sidebar-header span,
+      .sidebar .nav-group-title, .sidebar .health-badge span { display: none; }
+      .sidebar .nav-item { justify-content: center; padding: 10px 0; }
+      .sidebar .nav-icon { margin: 0; }
+    }
+
+    .btn {
+      background: var(--accent); color: #fff; border: none;
+      border-radius: 8px; padding: 6px 16px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn-secondary {
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .filter-bar {
+      display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;
+    }
+    .filter-btn {
+      background: var(--bg3); color: var(--text2);
+      border: 1px solid var(--border); border-radius: 16px;
+      padding: 4px 12px; font-size: 11px; cursor: pointer;
+    }
+    .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .filter-btn:hover { border-color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="brand"><em>B</em><span>astilon OS</span></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">&#9776;</button>
+    </div>
+    <div class="health-badge" id="health-badge">
+      <span class="dot dot-green" id="dot-health"></span>
+      <span id="health-text">Online</span>
+    </div>
+
+    <div class="nav-group-title">Chat</div>
+    <a class="nav-item active" data-view="chat" onclick="navigate('chat')">
+      <span class="nav-icon">&#128172;</span>
+      <span class="nav-label">Chat</span>
+    </a>
+
+    <div class="nav-group-title">Control</div>
+    <a class="nav-item" data-view="overview" onclick="navigate('overview')">
+      <span class="nav-icon">&#9673;</span>
+      <span class="nav-label">Overview</span>
+    </a>
+    <a class="nav-item" data-view="sessions" onclick="navigate('sessions')">
+      <span class="nav-icon">&#128279;</span>
+      <span class="nav-label">Sessions</span>
+    </a>
+    <a class="nav-item" data-view="scheduler" onclick="navigate('scheduler')">
+      <span class="nav-icon">&#9200;</span>
+      <span class="nav-label">Scheduler</span>
+    </a>
+
+    <div class="nav-group-title">Agents</div>
+    <a class="nav-item" data-view="agents" onclick="navigate('agents')">
+      <span class="nav-icon">&#129302;</span>
+      <span class="nav-label">Agents</span>
+      <span class="nav-badge" id="nav-agent-count">0</span>
+    </a>
+    <a class="nav-item" data-view="skills" onclick="navigate('skills')">
+      <span class="nav-icon">&#128295;</span>
+      <span class="nav-label">Skills</span>
+      <span class="nav-badge" id="nav-skill-count">--</span>
+    </a>
+    <a class="nav-item" data-view="memory" onclick="navigate('memory')">
+      <span class="nav-icon">&#129504;</span>
+      <span class="nav-label">Memory</span>
+    </a>
+
+    <div class="nav-group-title">Settings</div>
+    <a class="nav-item" data-view="config" onclick="navigate('config')">
+      <span class="nav-icon">&#9881;</span>
+      <span class="nav-label">Config</span>
+    </a>
+    <a class="nav-item" data-view="logs" onclick="navigate('logs')">
+      <span class="nav-icon">&#128220;</span>
+      <span class="nav-label">Logs</span>
+    </a>
+    <a class="nav-item" data-view="debug" onclick="navigate('debug')">
+      <span class="nav-icon">&#128027;</span>
+      <span class="nav-label">Debug</span>
+    </a>
+
+    <div class="nav-group-title">System</div>
+    <a class="nav-item" data-view="system" onclick="navigate('system')">
+      <span class="nav-icon">&#128187;</span>
+      <span class="nav-label">OS Info</span>
+    </a>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="rate-limit-banner" id="rate-banner">
+      Rate limit actif — agents en pause jusqu'a <span id="rate-reset-time">--</span>
+    </div>
+
+    <!-- ═══ VIEW: Chat ═══ -->
+    <div class="view active" id="view-chat">
+      <div class="chat-tabs">
+        <div class="chat-tab active" data-tab="kingston" onclick="switchTab('kingston')">Kingston</div>
+        <div class="chat-tab emile" data-tab="emile" onclick="switchTab('emile')">Emile</div>
+        <div class="chat-tab" data-tab="aster" onclick="switchTab('aster')">Aster</div>
+        <div class="chat-tab" data-tab="conseil" onclick="switchTab('conseil')"
+          style="background:linear-gradient(135deg,rgba(88,166,255,.05),rgba(188,140,255,.05));">
+          Conseil
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="continue-bar" id="continue-bar" style="display:none;">
+        <button class="continue-kingston" onclick="continueDialogue('kingston')" id="cont-kingston">Kingston repond</button>
+        <button class="continue-emile" onclick="continueDialogue('emile')" id="cont-emile">Emile repond</button>
+        <button class="continue-both" onclick="continueDialogue('both')" id="cont-both">Relancer le dialogue</button>
+        <button onclick="stopConseil()" id="cont-stop" style="display:none;border-color:var(--red);color:var(--red);">Stop</button>
+        <span style="font-size:11px;color:var(--text2);align-self:center;" id="rounds-label"></span>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-controls">
+          <select id="direct-target" onchange="updateDirectTargetUi()">
+            <option value="active">Onglet actif</option>
+            <option value="kingston">Kingston</option>
+            <option value="emile">Emile</option>
+            <option value="both">Kingston + Emile</option>
+          </select>
+          <input id="auth-token" type="password" placeholder="Token (optionnel)">
+          <button class="secondary" onclick="saveAuthToken()">Token</button>
+          <button class="secondary" onclick="resetSessions()">Reset</button>
+        </div>
+        <textarea id="chat-input" rows="1" placeholder="Parle a Kingston..."
+          onkeydown="handleKeyDown(event)"></textarea>
+        <button id="send-btn" onclick="sendMessage()">Envoyer</button>
+      </div>
+    </div>
+
+    <!-- ═══ VIEW: Overview ═══ -->
+    <div class="view" id="view-overview">
+      <div class="view-header">Overview <span style="font-size:12px;color:var(--text2);margin-left:12px;" id="overview-uptime"></span></div>
+      <div class="view-body" id="overview-body"></div>
+    </div>
+
+    <!-- ═══ VIEW: Sessions ═══ -->
+    <div class="view" id="view-sessions">
+      <div class="view-header">Sessions CLI</div>
+      <div class="view-body" id="sessions-body"></div>
+    </div>
+
+    <!-- ═══ VIEW: Scheduler ═══ -->
+    <div class="view" id="view-scheduler">
+      <div class="view-header">Scheduler</div>
+      <div class="view-body" id="scheduler-body"></div>
+    </div>
+
+    <!-- ═══ VIEW: Agents ═══ -->
+    <div class="view" id="view-agents">
+      <div class="view-header">Agent Monitor</div>
+      <div class="view-body" id="agents-body"></div>
+    </div>
+
+    <!-- ═══ VIEW: Skills ═══ -->
+    <div class="view" id="view-skills">
+      <div class="view-header">
+        Skills Browser
+        <span style="font-size:12px;color:var(--text2);" id="skills-total"></span>
+      </div>
+      <div class="view-body">
+        <input class="search-box" id="skills-search" placeholder="Rechercher un skill..." oninput="filterSkills()">
+        <div id="skills-container"></div>
+      </div>
+    </div>
+
+    <!-- ═══ VIEW: Memory ═══ -->
+    <div class="view" id="view-memory">
+      <div class="view-header">Semantic Memory</div>
+      <div class="view-body">
+        <div class="cards-grid" id="memory-stats"></div>
+        <div class="filter-bar" id="memory-filters"></div>
+        <div id="memory-items"></div>
+      </div>
+    </div>
+
+    <!-- ═══ VIEW: Config ═══ -->
+    <div class="view" id="view-config">
+      <div class="view-header">
+        Configuration
+        <button class="btn btn-sm" onclick="saveConfig()">Save & Reload</button>
+      </div>
+      <div class="view-body">
+        <input class="search-box" id="config-search" placeholder="Rechercher..." oninput="filterConfig()">
+        <div id="config-container"></div>
+      </div>
+    </div>
+
+    <!-- ═══ VIEW: Logs ═══ -->
+    <div class="view" id="view-logs">
+      <div class="view-header">
+        Live Logs
+        <div style="display:flex;gap:8px;align-items:center;">
+          <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+          </label>
+          <select id="log-level-filter" onchange="filterLogs()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:12px;">
+            <option value="all">Tous</option>
+            <option value="info">Info+</option>
+            <option value="warn">Warn+</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+      </div>
+      <div class="log-viewer" id="log-viewer"></div>
+    </div>
+
+    <!-- ═══ VIEW: Debug ═══ -->
+    <div class="view" id="view-debug">
+      <div class="view-header">Debug</div>
+      <div class="view-body" id="debug-body"></div>
+    </div>
+
+    <!-- ═══ VIEW: System ═══ -->
+    <div class="view" id="view-system">
+      <div class="view-header">System Information</div>
+      <div class="view-body" id="system-body"></div>
+    </div>
+  </div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// State
+// ══════════════════════════════════════════════════════════════
+let currentView = 'chat';
+let activeTab = 'kingston';
+let ws = null;
+let typingSeq = 0;
+const CHAT_TIMEOUT_MS = 180000;
+const AUTH_TOKEN_STORAGE_KEY = 'dashboard_auth_token';
+let authToken = '';
+let allSkills = [];
+let allConfig = {};
+let allLogLines = [];
+let logAutoScroll = true;
+let memoryFilter = 'all';
+
+const chatHistory = { kingston: [], emile: [], aster: [], conseil: [] };
+
+// ══════════════════════════════════════════════════════════════
+// Navigation
+// ══════════════════════════════════════════════════════════════
+function navigate(view) {
+  currentView = view;
+  location.hash = view;
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const viewEl = document.getElementById('view-' + view);
+  const navEl = document.querySelector(`.nav-item[data-view="${view}"]`);
+  if (viewEl) viewEl.classList.add('active');
+  if (navEl) navEl.classList.add('active');
+  // Load data for view
+  loadView(view);
+}
+
+function loadView(view) {
+  switch(view) {
+    case 'overview': loadOverview(); break;
+    case 'sessions': loadSessions(); break;
+    case 'scheduler': loadScheduler(); break;
+    case 'agents': loadAgents(); break;
+    case 'skills': loadSkills(); break;
+    case 'memory': loadMemory(); break;
+    case 'config': loadConfig(); break;
+    case 'logs': loadLogs(); break;
+    case 'debug': loadDebug(); break;
+    case 'system': loadSystem(); break;
+  }
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+// ══════════════════════════════════════════════════════════════
+// WebSocket
+// ══════════════════════════════════════════════════════════════
+function connectWS() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('dot-health').className = 'dot dot-green';
+    document.getElementById('health-text').textContent = 'Online';
+  };
+  ws.onclose = () => {
+    document.getElementById('dot-health').className = 'dot dot-red';
+    document.getElementById('health-text').textContent = 'Offline';
+    setTimeout(connectWS, 3000);
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.event === 'init') {
+      const agents = msg.data.agents || [];
+      document.getElementById('nav-agent-count').textContent = agents.filter(a => a.status === 'idle' || a.status === 'running').length;
+    } else if (msg.event === 'log') {
+      appendLogLine(msg.data);
+    } else if (msg.event === 'agent_run' && currentView === 'agents') {
+      loadAgents();
+    }
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
+// API
+// ══════════════════════════════════════════════════════════════
+function getAuthHeaders(base = {}) {
+  if (!authToken) return base;
+  return { ...base, 'X-Auth-Token': authToken };
+}
+
+async function api(path) {
+  const res = await fetch(`/api/${path}`, {
+    headers: getAuthHeaders(),
+  });
+  const ct = res.headers.get('content-type') || '';
+  let data = ct.includes('json') ? await res.json() : { ok: false, error: await res.text() };
+  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function postApi(path, body) {
+  const res = await fetch(`/api/${path}`, {
+    method: 'POST',
+    headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  const ct = res.headers.get('content-type') || '';
+  let data = ct.includes('json') ? await res.json() : { ok: false, error: await res.text() };
+  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function postChat(agent, message) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ agent, message }),
+      signal: controller.signal,
+    });
+    const ct = res.headers.get('content-type') || '';
+    let data = ct.includes('json') ? await res.json() : { ok: false, error: await res.text() };
+    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    return data.response || 'No response.';
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw new Error('Timeout 180s');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Overview
+// ══════════════════════════════════════════════════════════════
+async function loadOverview() {
+  try {
+    const [stats, agents, memStats] = await Promise.all([
+      api('stats'), api('agents'), api('memory/stats').catch(() => ({ total: 0 }))
+    ]);
+    const el = document.getElementById('overview-body');
+    document.getElementById('overview-uptime').textContent = 'Uptime: ' + formatDuration(stats.uptime);
+
+    // Rate limit
+    const banner = document.getElementById('rate-banner');
+    if (agents.rateLimited) {
+      banner.classList.add('visible');
+      document.getElementById('rate-reset-time').textContent = new Date(agents.rateLimitReset).toLocaleTimeString('fr-CA');
+    } else {
+      banner.classList.remove('visible');
+    }
+
+    const totalRuns = (stats.agentStats || []).reduce((s, a) => s + a.total, 0);
+    const totalErrors = (stats.agentStats || []).reduce((s, a) => s + a.errors, 0);
+    const activeAgents = (agents.agents || []).filter(a => a.status === 'idle' || a.status === 'running').length;
+
+    el.innerHTML = `
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">Agents actifs</div>
+          <div class="card-value">${activeAgents}</div>
+          <div class="card-sub">${(agents.agents || []).length} total</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Runs (24h)</div>
+          <div class="card-value">${totalRuns}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Erreurs (24h)</div>
+          <div class="card-value" style="color:${totalErrors > 0 ? 'var(--red)' : 'var(--green)'}">${totalErrors}</div>
+          <div class="card-sub">${stats.errorCount} non resolues</div>
+        </div>
+        <div class="card">
+          <div class="card-title">RAM (heap)</div>
+          <div class="card-value">${stats.memory?.heap || '--'}<span style="font-size:14px;color:var(--text2);">MB</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Notes</div>
+          <div class="card-value">${stats.noteCount || 0}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Memories</div>
+          <div class="card-value">${memStats.total || 0}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">WS Clients</div>
+          <div class="card-value">${stats.wsClients || 0}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Skills</div>
+          <div class="card-value" id="overview-skills">--</div>
+        </div>
+      </div>
+      <h3 style="margin-bottom:12px;font-size:14px;">Agents</h3>
+      <table class="data-table">
+        <tr><th>Agent</th><th>Status</th><th>Cycle</th><th>Runs</th><th>Errors</th><th>Dernier</th></tr>
+        ${(agents.agents || []).map(a => `
+          <tr>
+            <td style="font-weight:600;">${escapeHtml(a.name)}</td>
+            <td><span class="badge-sm badge-${statusBadge(a.status)}">${escapeHtml(a.status)}</span></td>
+            <td>${a.cycle}</td>
+            <td>${a.totalRuns}</td>
+            <td style="color:${a.consecutiveErrors > 0 ? 'var(--red)' : 'var(--text2)'}">${a.consecutiveErrors}</td>
+            <td style="color:var(--text2);font-size:12px;">${a.lastRunAt ? new Date(a.lastRunAt * 1000).toLocaleTimeString('fr-CA') : 'jamais'}</td>
+          </tr>
+        `).join('')}
+      </table>
+    `;
+    // Load skills count
+    api('skills').then(s => {
+      document.getElementById('overview-skills').textContent = s.length;
+      document.getElementById('nav-skill-count').textContent = s.length;
+    }).catch(() => {});
+  } catch (err) {
+    document.getElementById('overview-body').innerHTML = `<p style="color:var(--red);">Erreur: ${err.message}</p>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Sessions
+// ══════════════════════════════════════════════════════════════
+async function loadSessions() {
+  try {
+    const data = await api('sessions');
+    document.getElementById('sessions-body').innerHTML = `
+      <table class="data-table">
+        <tr><th>Chat ID</th><th>Label</th><th>Turns</th></tr>
+        ${data.map(s => `
+          <tr>
+            <td style="font-family:monospace;">${s.chatId}</td>
+            <td>${escapeHtml(s.label)}</td>
+            <td>${s.turns}</td>
+          </tr>
+        `).join('')}
+      </table>
+    `;
+  } catch (err) {
+    document.getElementById('sessions-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Scheduler
+// ══════════════════════════════════════════════════════════════
+async function loadScheduler() {
+  try {
+    const data = await api('scheduler');
+    const el = document.getElementById('scheduler-body');
+    el.innerHTML = `
+      <h3 style="margin-bottom:12px;font-size:14px;">Reminders</h3>
+      <table class="data-table">
+        <tr><th>ID</th><th>Label</th><th>Fire At</th><th>Chat</th></tr>
+        ${(data.reminders || []).map(r => `
+          <tr>
+            <td>${r.id}</td>
+            <td>${escapeHtml(r.label || '')}</td>
+            <td>${new Date(r.fire_at * 1000).toLocaleString('fr-CA')}</td>
+            <td>${r.chat_id}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="4" style="color:var(--text2)">Aucun reminder</td></tr>'}
+      </table>
+      <h3 style="margin:20px 0 12px;font-size:14px;">Recent Runs</h3>
+      <table class="data-table">
+        <tr><th>Event</th><th>Fired At</th><th>Result</th></tr>
+        ${(data.recent || []).map(r => `
+          <tr>
+            <td style="font-family:monospace;">${escapeHtml(r.event_key || '')}</td>
+            <td>${new Date(r.fired_at * 1000).toLocaleString('fr-CA')}</td>
+            <td style="font-size:12px;color:var(--text2);">${escapeHtml((r.result || '').slice(0, 80))}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="3" style="color:var(--text2)">Aucun run</td></tr>'}
+      </table>
+    `;
+  } catch (err) {
+    document.getElementById('scheduler-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Agents
+// ══════════════════════════════════════════════════════════════
+async function loadAgents() {
+  try {
+    const data = await api('agents');
+    const agents = data.agents || [];
+    document.getElementById('nav-agent-count').textContent = agents.filter(a => a.status === 'idle' || a.status === 'running').length;
+
+    let html = '<div class="cards-grid">';
+    for (const a of agents) {
+      const nextRun = a.lastRunAt ? formatCountdown(a.lastRunAt * 1000 + a.heartbeatMs - Date.now()) : '--';
+      const lastRun = a.lastRunAt ? new Date(a.lastRunAt * 1000).toLocaleTimeString('fr-CA') : 'jamais';
+      html += `
+        <div class="card" style="cursor:pointer;" onclick="loadAgentRuns('${a.id}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-weight:700;font-size:15px;"><span class="dot dot-${statusColor(a.status)}"></span> ${escapeHtml(a.name)}</span>
+            <span class="badge-sm badge-${statusBadge(a.status)}">${escapeHtml(a.status)}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.8;">
+            Cycle: ${a.cycle} &bull; Runs: ${a.totalRuns} &bull; Errors: ${a.consecutiveErrors}<br>
+            Dernier: ${lastRun} &bull; Prochain: ${nextRun}
+          </div>
+        </div>
+      `;
+    }
+    html += '</div>';
+    html += '<div id="agent-runs-detail"></div>';
+    document.getElementById('agents-body').innerHTML = html;
+  } catch (err) {
+    document.getElementById('agents-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+async function loadAgentRuns(agentId) {
+  try {
+    const runs = await api(`agents/${agentId}/runs`);
+    const el = document.getElementById('agent-runs-detail');
+    el.innerHTML = `
+      <h3 style="margin:16px 0 12px;font-size:14px;">${agentId} — Recent Runs</h3>
+      <table class="data-table">
+        <tr><th>Cycle</th><th>Outcome</th><th>Duration</th><th>Started</th><th>Error</th></tr>
+        ${runs.slice(0, 30).map(r => `
+          <tr>
+            <td>${r.cycle}</td>
+            <td><span class="badge-sm badge-${r.outcome === 'success' ? 'green' : r.outcome === 'error' ? 'red' : 'yellow'}">${r.outcome}</span></td>
+            <td>${r.duration_ms ? (r.duration_ms / 1000).toFixed(1) + 's' : '--'}</td>
+            <td style="font-size:12px;">${new Date(r.started_at * 1000).toLocaleString('fr-CA')}</td>
+            <td style="font-size:11px;color:var(--red);">${escapeHtml((r.error_msg || '').slice(0, 60))}</td>
+          </tr>
+        `).join('')}
+      </table>
+    `;
+  } catch {}
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Skills
+// ══════════════════════════════════════════════════════════════
+async function loadSkills() {
+  if (allSkills.length === 0) {
+    try {
+      allSkills = await api('skills');
+    } catch { allSkills = []; }
+  }
+  document.getElementById('skills-total').textContent = `${allSkills.length} skills`;
+  document.getElementById('nav-skill-count').textContent = allSkills.length;
+  renderSkills(allSkills);
+}
+
+function filterSkills() {
+  const q = (document.getElementById('skills-search').value || '').toLowerCase();
+  const filtered = q ? allSkills.filter(s =>
+    s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
+  ) : allSkills;
+  renderSkills(filtered);
+}
+
+function renderSkills(skills) {
+  // Group by namespace
+  const groups = {};
+  for (const s of skills) {
+    const ns = s.name.split('.')[0];
+    if (!groups[ns]) groups[ns] = [];
+    groups[ns].push(s);
+  }
+  const sorted = Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+
+  let html = '';
+  for (const [ns, items] of sorted) {
+    html += `<div class="ns-group">`;
+    html += `<div class="ns-title">${ns} <span style="color:var(--text2);font-weight:400;font-size:12px;">(${items.length})</span></div>`;
+    for (const s of items) {
+      const argStr = s.args.length > 0
+        ? s.args.map(a => `${a.required ? '' : '?'}${a.name}:${a.type}`).join(', ')
+        : '';
+      html += `
+        <div class="skill-row">
+          <span class="skill-name">${escapeHtml(s.name)}${s.adminOnly ? ' <span class="badge-sm badge-red">admin</span>' : ''}</span>
+          <span class="skill-desc">${escapeHtml(s.description)}</span>
+          <span class="skill-args">${escapeHtml(argStr)}</span>
+        </div>
+      `;
+    }
+    html += '</div>';
+  }
+  document.getElementById('skills-container').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Memory
+// ══════════════════════════════════════════════════════════════
+async function loadMemory() {
+  try {
+    const [stats, items] = await Promise.all([
+      api('memory/stats'),
+      api('memory/items'),
+    ]);
+    // Stats cards
+    const cats = stats.byCategory || {};
+    let statsHtml = `
+      <div class="card"><div class="card-title">Total</div><div class="card-value">${stats.total}</div></div>
+      <div class="card"><div class="card-title">Avg Salience</div><div class="card-value">${(stats.avgSalience || 0).toFixed(2)}</div></div>
+    `;
+    for (const [cat, count] of Object.entries(cats)) {
+      statsHtml += `<div class="card"><div class="card-title">${cat}</div><div class="card-value">${count}</div></div>`;
+    }
+    document.getElementById('memory-stats').innerHTML = statsHtml;
+
+    // Filter buttons
+    const allCats = ['all', ...Object.keys(cats)];
+    document.getElementById('memory-filters').innerHTML = allCats.map(c =>
+      `<button class="filter-btn ${memoryFilter === c ? 'active' : ''}" onclick="setMemoryFilter('${c}')">${c}</button>`
+    ).join('');
+
+    // Items
+    renderMemoryItems(items);
+  } catch (err) {
+    document.getElementById('memory-stats').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+function setMemoryFilter(cat) {
+  memoryFilter = cat;
+  loadMemory();
+}
+
+function renderMemoryItems(items) {
+  const filtered = memoryFilter === 'all' ? items : items.filter(i => i.category === memoryFilter);
+  document.getElementById('memory-items').innerHTML = filtered.map(m => `
+    <div class="mem-item">
+      <span class="mem-cat mem-cat-${m.category}">${m.category}</span>
+      <strong style="font-size:12px;">${(m.salience || 0).toFixed(2)}</strong>
+      <span style="color:var(--text2);font-size:11px;margin-left:8px;">x${m.access_count || 0}</span>
+      <div style="margin-top:4px;color:var(--text);font-size:13px;">${escapeHtml((m.content || '').slice(0, 200))}</div>
+    </div>
+  `).join('') || '<p style="color:var(--text2);">Aucune memoire.</p>';
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Config
+// ══════════════════════════════════════════════════════════════
+async function loadConfig() {
+  try {
+    allConfig = await api('config');
+    renderConfig(allConfig);
+  } catch (err) {
+    document.getElementById('config-container').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+function filterConfig() {
+  const q = (document.getElementById('config-search').value || '').toLowerCase();
+  const filtered = {};
+  for (const [k, v] of Object.entries(allConfig)) {
+    if (k.toLowerCase().includes(q) || String(v).toLowerCase().includes(q)) {
+      filtered[k] = v;
+    }
+  }
+  renderConfig(filtered);
+}
+
+function renderConfig(cfg) {
+  const secretKeys = new Set([
+    'telegramToken', 'geminiApiKey', 'anthropicApiKey', 'twilioAuthToken',
+    'deepgramApiKey', 'elevenlabsApiKey', 'adminPassphrase', 'braveSearchApiKey', 'dashboardToken'
+  ]);
+  let html = '';
+  for (const [key, val] of Object.entries(cfg)) {
+    const isSecret = secretKeys.has(key);
+    const displayVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    html += `
+      <div class="config-row">
+        <span class="config-key">${key}</span>
+        <input class="config-val${isSecret ? ' secret' : ''}"
+          data-key="${key}" value="${escapeHtml(displayVal)}"
+          ${isSecret ? 'disabled title="Secret — cannot be edited via dashboard"' : ''}>
+      </div>
+    `;
+  }
+  document.getElementById('config-container').innerHTML = html;
+}
+
+async function saveConfig() {
+  const inputs = document.querySelectorAll('.config-val:not([disabled])');
+  const updates = {};
+  for (const input of inputs) {
+    const key = input.dataset.key;
+    const origVal = allConfig[key];
+    const newVal = input.value;
+    if (String(origVal) !== newVal) {
+      // Map camelCase config key to UPPER_SNAKE env key
+      const envKey = key.replace(/([A-Z])/g, '_$1').toUpperCase();
+      updates[envKey] = newVal;
+    }
+  }
+  if (Object.keys(updates).length === 0) {
+    alert('Aucun changement detecte.');
+    return;
+  }
+  try {
+    await postApi('config', updates);
+    alert('Config sauvegardee et rechargee!');
+    loadConfig();
+  } catch (err) {
+    alert('Erreur: ' + err.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Logs
+// ══════════════════════════════════════════════════════════════
+async function loadLogs() {
+  try {
+    const logs = await api('logs');
+    allLogLines = logs;
+    renderLogs();
+  } catch (err) {
+    document.getElementById('log-viewer').textContent = 'Error: ' + err.message;
+  }
+}
+
+function appendLogLine(data) {
+  allLogLines.push(data);
+  if (allLogLines.length > 500) allLogLines.shift();
+  if (currentView === 'logs') {
+    const viewer = document.getElementById('log-viewer');
+    const levelFilter = document.getElementById('log-level-filter').value;
+    if (shouldShowLog(data.level, levelFilter)) {
+      const div = document.createElement('div');
+      div.className = 'log-line log-' + data.level;
+      div.textContent = data.message;
+      viewer.appendChild(div);
+      if (document.getElementById('log-autoscroll').checked) {
+        viewer.scrollTop = viewer.scrollHeight;
+      }
+    }
+  }
+}
+
+function filterLogs() { renderLogs(); }
+
+function shouldShowLog(level, filter) {
+  if (filter === 'all') return true;
+  const levels = { debug: 0, info: 1, warn: 2, error: 3 };
+  return (levels[level] || 0) >= (levels[filter] || 0);
+}
+
+function renderLogs() {
+  const viewer = document.getElementById('log-viewer');
+  const filter = document.getElementById('log-level-filter').value;
+  const filtered = allLogLines.filter(l => shouldShowLog(l.level, filter));
+  viewer.innerHTML = filtered.map(l =>
+    `<div class="log-line log-${l.level}">${escapeHtml(l.message)}</div>`
+  ).join('');
+  if (document.getElementById('log-autoscroll').checked) {
+    viewer.scrollTop = viewer.scrollHeight;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Debug
+// ══════════════════════════════════════════════════════════════
+async function loadDebug() {
+  try {
+    const [stats, errors, learning] = await Promise.all([
+      api('stats'), api('errors'), api('learning').catch(() => null)
+    ]);
+    let html = `
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">WS Clients</div>
+          <div class="card-value">${stats.wsClients}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Heap Used</div>
+          <div class="card-value">${stats.memory?.heap}MB</div>
+        </div>
+        <div class="card">
+          <div class="card-title">RSS</div>
+          <div class="card-value">${stats.memory?.rss}MB</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Rate Limited</div>
+          <div class="card-value" style="color:${stats.rateLimited ? 'var(--red)' : 'var(--green)'}">${stats.rateLimited ? 'OUI' : 'Non'}</div>
+        </div>
+      </div>
+    `;
+    // Learning insights
+    if (learning && learning.summary) {
+      const s = learning.summary;
+      html += `
+        <h3 style="margin:16px 0 12px;font-size:14px;">Learning Patterns</h3>
+        <div class="cards-grid">
+          <div class="card"><div class="card-title">Patterns</div><div class="card-value">${s.totalPatterns}</div></div>
+          <div class="card"><div class="card-title">Graduated</div><div class="card-value" style="color:var(--purple)">${s.graduatedRules}</div></div>
+          <div class="card"><div class="card-title">Effective</div><div class="card-value" style="color:var(--green)">${s.effectiveRules}</div></div>
+          <div class="card"><div class="card-title">Near Graduation</div><div class="card-value" style="color:var(--yellow)">${s.nearGraduation}</div></div>
+        </div>
+      `;
+    }
+    // Recent errors
+    html += `<h3 style="margin:16px 0 12px;font-size:14px;">Recent Errors (${errors.length})</h3>`;
+    html += `<table class="data-table">
+      <tr><th>Time</th><th>Message</th><th>Context</th></tr>
+      ${errors.slice(0, 20).map(e => `
+        <tr>
+          <td style="white-space:nowrap;font-size:12px;">${new Date(e.timestamp * 1000).toLocaleString('fr-CA')}</td>
+          <td style="font-size:12px;">${escapeHtml((e.error_message || '').slice(0, 120))}</td>
+          <td style="font-size:11px;color:var(--orange);">${escapeHtml(e.context || '')}</td>
+        </tr>
+      `).join('')}
+    </table>`;
+    document.getElementById('debug-body').innerHTML = html;
+  } catch (err) {
+    document.getElementById('debug-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: System
+// ══════════════════════════════════════════════════════════════
+async function loadSystem() {
+  try {
+    const data = await api('system');
+    document.getElementById('system-body').innerHTML = `
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">Platform</div>
+          <div class="card-value" style="font-size:18px;">${escapeHtml(data.platform)}</div>
+          <div class="card-sub">${escapeHtml(data.arch)} — ${escapeHtml(data.release)}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Hostname</div>
+          <div class="card-value" style="font-size:18px;">${escapeHtml(data.hostname)}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">CPU</div>
+          <div class="card-value" style="font-size:16px;">${data.cpu.cores} cores</div>
+          <div class="card-sub">${escapeHtml(data.cpu.model)}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">RAM</div>
+          <div class="card-value">${data.memory.percent}%</div>
+          <div class="card-sub">${(data.memory.used / 1024).toFixed(1)}GB / ${(data.memory.total / 1024).toFixed(1)}GB</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Node.js</div>
+          <div class="card-value" style="font-size:18px;">${escapeHtml(data.nodeVersion)}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Process PID</div>
+          <div class="card-value">${data.process.pid}</div>
+          <div class="card-sub">Uptime: ${formatDuration(data.process.uptime * 1000)}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Process RSS</div>
+          <div class="card-value">${data.process.memory.rss}<span style="font-size:14px;color:var(--text2);">MB</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">OS Uptime</div>
+          <div class="card-value" style="font-size:18px;">${formatDuration(data.uptime * 1000)}</div>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    document.getElementById('system-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// Chat (preserved from original)
+// ══════════════════════════════════════════════════════════════
+function getDirectTarget() {
+  const select = document.getElementById('direct-target');
+  if (!select) return activeTab === 'emile' ? 'emile' : 'kingston';
+  const value = select.value;
+  if (value === 'kingston' || value === 'emile' || value === 'both') return value;
+  return activeTab === 'emile' ? 'emile' : 'kingston';
+}
+
+function getErrorMessage(err) {
+  if (err && typeof err === 'object' && 'message' in err) return String(err.message || 'Erreur inconnue');
+  return String(err || 'Erreur inconnue');
+}
+
+function saveAuthToken() {
+  const input = document.getElementById('auth-token');
+  authToken = (input.value || '').trim();
+  if (authToken) localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, authToken);
+  else localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  addMessage(activeTab, 'system', authToken ? 'Token sauvegarde.' : 'Token retire.');
+}
+
+async function resetSessions() {
+  try {
+    await postApi('chat/reset', {});
+    addMessage(activeTab, 'system', 'Sessions Kingston + Emile reset.');
+  } catch (err) {
+    addMessage(activeTab, 'system', 'Erreur reset: ' + getErrorMessage(err));
+  }
+}
+
+function updateDirectTargetUi() {
+  const btn = document.getElementById('send-btn');
+  const target = getDirectTarget();
+  if (activeTab === 'conseil') return;
+  if (target === 'emile') { btn.className = 'emile-btn'; btn.style.background = 'var(--purple)'; }
+  else if (target === 'both') { btn.className = 'conseil-btn'; btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))'; }
+  else { btn.className = ''; btn.style.background = 'var(--accent)'; }
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.chat-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const input = document.getElementById('chat-input');
+  const continueBar = document.getElementById('continue-bar');
+  const targetSelect = document.getElementById('direct-target');
+
+  if (tab === 'emile') {
+    input.placeholder = 'Parle a Emile...';
+    targetSelect.disabled = false;
+    updateDirectTargetUi();
+    continueBar.style.display = 'none';
+  } else if (tab === 'aster') {
+    input.placeholder = 'Aster parle a Kingston + Emile...';
+    targetSelect.disabled = true;
+    const btn = document.getElementById('send-btn');
+    btn.className = 'conseil-btn';
+    btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))';
+    continueBar.style.display = 'none';
+  } else if (tab === 'conseil') {
+    input.placeholder = 'Pose une question aux deux...';
+    targetSelect.disabled = true;
+    const btn = document.getElementById('send-btn');
+    btn.className = 'conseil-btn';
+    btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))';
+    continueBar.style.display = chatHistory.conseil.length > 1 ? 'flex' : 'none';
+  } else {
+    input.placeholder = 'Parle a Kingston...';
+    targetSelect.disabled = false;
+    updateDirectTargetUi();
+    continueBar.style.display = 'none';
+  }
+  renderChat();
+}
+
+function renderChat() {
+  const container = document.getElementById('chat-messages');
+  const history = chatHistory[activeTab];
+  container.innerHTML = history.map(m => {
+    if (m.role === 'system') return `<div class="msg msg-system">${m.content}</div>`;
+    if (m.role === 'user') return `<div class="msg msg-user">${escapeHtml(m.content)}</div>`;
+    if ((activeTab === 'conseil' || activeTab === 'aster') && m.agent) {
+      const agentCls = m.agent === 'kingston' ? 'kingston-msg' : 'emile-msg';
+      const labelCls = m.agent === 'kingston' ? 'kingston' : 'emile';
+      const label = m.agent === 'kingston' ? 'KINGSTON' : 'EMILE';
+      return `<div class="msg msg-assistant ${agentCls}">
+        <div class="msg-label ${labelCls}">${label}</div>
+        ${escapeHtml(m.content)}
+      </div>`;
+    }
+    const cls = `msg-assistant${activeTab === 'emile' ? ' emile' : ''}`;
+    return `<div class="msg ${cls}">${escapeHtml(m.content)}</div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+function addMessage(tab, role, content) {
+  chatHistory[tab].push({ role, content });
+  if (activeTab === tab && currentView === 'chat') renderChat();
+}
+
+function showTyping() {
+  const container = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  const id = `typing-${++typingSeq}`;
+  el.dataset.typingId = id;
+  el.className = 'typing-indicator';
+  el.innerHTML = '<span></span><span></span><span></span>';
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+  return id;
+}
+
+function hideTyping(id) {
+  const el = id
+    ? document.querySelector(`[data-typing-id="${id}"]`)
+    : document.querySelector('.typing-indicator');
+  if (el) el.remove();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  input.style.height = 'auto';
+
+  if (activeTab === 'conseil') {
+    addMessage('conseil', 'user', message);
+    conseilRunning = false;
+    await sleep(300);
+    conseilSend(message);
+    return;
+  }
+  if (activeTab === 'aster') {
+    addMessage('aster', 'user', message);
+    fetchAsterParallel(message);
+    return;
+  }
+  const target = getDirectTarget();
+  if (target === 'both') {
+    addMessage('kingston', 'user', message);
+    addMessage('emile', 'user', message);
+    fetchAgent('kingston', message);
+    fetchAgent('emile', message);
+    return;
+  }
+  addMessage(target, 'user', message);
+  if (activeTab !== target) addMessage(activeTab, 'system', `Envoye a ${target}.`);
+  fetchAgent(target, message);
+}
+
+async function fetchAgent(agent, message) {
+  const typingId = showTyping();
+  try {
+    const response = await postChat(agent, message);
+    hideTyping(typingId);
+    addMessage(agent, 'assistant', response);
+  } catch (err) {
+    hideTyping(typingId);
+    addMessage(agent, 'system', `Erreur: ${getErrorMessage(err)}`);
+  }
+}
+
+function fetchAsterParallel(message) {
+  fetchAgentForTab('aster', 'kingston', message);
+  fetchAgentForTab('aster', 'emile', message);
+}
+
+async function fetchAgentForTab(tab, agent, message) {
+  const typingId = showTyping();
+  try {
+    const response = await postChat(agent, message);
+    hideTyping(typingId);
+    chatHistory[tab].push({ role: 'assistant', content: response, agent });
+    if (activeTab === tab && currentView === 'chat') renderChat();
+  } catch (err) {
+    hideTyping(typingId);
+    addMessage(tab, 'system', `Erreur ${agent}: ${getErrorMessage(err)}`);
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Conseil Mode ────────────────────────────────────────────
+const MAX_AUTO_ROUNDS = Infinity;
+let conseilRunning = false;
+let conseilRound = 0;
+
+async function conseilSend(message) {
+  conseilRunning = true;
+  conseilRound = 0;
+  showStopButton(true);
+  updateRoundsLabel();
+
+  const context = buildContext();
+  const kingstonPrompt = context
+    ? `[MODE CONSEIL]\n${context}\n\nNICOLAS: ${message}\n\nINSTRUCTIONS: Lis le code, analyse, agis. FAIT: [actions] / SUITE: [prochaine etape pour Emile]`
+    : `[MODE CONSEIL]\nNICOLAS: ${message}\n\nINSTRUCTIONS: Lis le code, analyse, agis. FAIT: [actions] / SUITE: [prochaine etape pour Emile]`;
+  const kingstonResponse = await agentRespond('kingston', kingstonPrompt);
+  if (!conseilRunning) return;
+
+  const updatedContext = buildContext();
+  await agentRespond('emile',
+    `[MODE CONSEIL — REVUE]\n${updatedContext}\n\nINSTRUCTIONS: Revise Kingston, continue l'implementation. FAIT: [actions] / SUITE: [prochaine etape pour Kingston]`
+  );
+  if (!conseilRunning) return;
+
+  conseilRound = 1;
+  updateRoundsLabel();
+  await autoDialogue();
+}
+
+async function autoDialogue() {
+  while (conseilRunning && conseilRound < MAX_AUTO_ROUNDS) {
+    const context = buildContext();
+    await agentRespond('kingston',
+      `[CONSEIL TOUR ${conseilRound + 1} — KINGSTON]\n${context}\n\nImplemente la suggestion d'Emile. FAIT: [actions] / SUITE: [prochaine etape]`
+    );
+    if (!conseilRunning) break;
+
+    const updatedContext = buildContext();
+    await agentRespond('emile',
+      `[CONSEIL TOUR ${conseilRound + 1} — EMILE]\n${updatedContext}\n\nRevise Kingston. FAIT: [actions] / SUITE: [prochaine etape]`
+    );
+    if (!conseilRunning) break;
+    conseilRound++;
+    updateRoundsLabel();
+  }
+  conseilRunning = false;
+  showStopButton(false);
+  document.getElementById('continue-bar').style.display = 'flex';
+  addMessage('conseil', 'system', `Dialogue arrete apres ${conseilRound} tours.`);
+}
+
+async function agentRespond(agent, prompt) {
+  const typingId = showTyping();
+  try {
+    const response = await postChat(agent, prompt);
+    hideTyping(typingId);
+    chatHistory.conseil.push({ role: 'assistant', content: response, agent });
+    renderChat();
+    return response;
+  } catch (err) {
+    hideTyping(typingId);
+    addMessage('conseil', 'system', `Erreur ${agent}: ${getErrorMessage(err)}`);
+    conseilRunning = false;
+    return '';
+  }
+}
+
+function buildContext() {
+  return chatHistory.conseil
+    .filter(m => m.role !== 'system').slice(-6)
+    .map(m => `${m.agent ? m.agent.toUpperCase() : 'NICOLAS'}: ${m.content}`)
+    .join('\n\n');
+}
+
+async function continueDialogue(who) {
+  if (who === 'both') {
+    conseilRunning = true;
+    conseilRound = 0;
+    showStopButton(true);
+    autoDialogue();
+    return;
+  }
+  const context = buildContext();
+  agentRespond(who, `[CONVERSATION — ${who.toUpperCase()} CONTINUE]\n${context}\n\nContinue. FAIT: [actions] / SUITE: [prochaine etape]`);
+}
+
+function stopConseil() {
+  conseilRunning = false;
+  hideTyping();
+  showStopButton(false);
+  addMessage('conseil', 'system', 'Dialogue interrompu.');
+}
+
+function showStopButton(show) {
+  document.getElementById('cont-stop').style.display = show ? 'inline-block' : 'none';
+  document.getElementById('cont-kingston').style.display = show ? 'none' : 'inline-block';
+  document.getElementById('cont-emile').style.display = show ? 'none' : 'inline-block';
+  document.getElementById('cont-both').style.display = show ? 'none' : 'inline-block';
+  document.getElementById('continue-bar').style.display = 'flex';
+}
+
+function updateRoundsLabel() {
+  document.getElementById('rounds-label').textContent = conseilRunning ? `Tour ${conseilRound + 1}` : '';
+}
+
+function handleKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  const input = e.target;
+  setTimeout(() => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 120) + 'px'; }, 0);
+}
+
+// ══════════════════════════════════════════════════════════════
+// Helpers
+// ══════════════════════════════════════════════════════════════
+function statusColor(status) {
+  switch (status) {
+    case 'running': case 'idle': return 'green';
+    case 'error': case 'stopped': return 'red';
+    case 'backoff': return 'yellow';
+    default: return 'yellow';
+  }
+}
+function statusBadge(status) {
+  switch (status) {
+    case 'running': case 'idle': return 'green';
+    case 'error': case 'stopped': return 'red';
+    case 'backoff': return 'yellow';
+    default: return 'blue';
+  }
+}
+function formatDuration(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h${m}m`;
+  return `${m}m`;
+}
+function formatCountdown(ms) {
+  if (ms <= 0) return 'now';
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  if (m > 0) return `${m}m${s}s`;
+  return `${s}s`;
+}
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Init
+// ══════════════════════════════════════════════════════════════
+async function init() {
+  connectWS();
+  authToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '';
+  const tokenInput = document.getElementById('auth-token');
+  if (tokenInput && authToken) tokenInput.value = authToken;
+  updateDirectTargetUi();
+
+  addMessage('kingston', 'system', 'Chat Kingston. Utilise le menu lateral pour naviguer.');
+  addMessage('emile', 'system', 'Chat Emile.');
+  addMessage('aster', 'system', 'Mode Aster: Kingston + Emile en parallele.');
+  addMessage('conseil', 'system', 'Mode Conseil: Kingston et Emile collaborent tour par tour.');
+
+  // Route from hash
+  const hash = location.hash.replace('#', '') || 'chat';
+  if (hash !== 'chat') navigate(hash);
+}
+
+// Listen for hash changes
+window.addEventListener('hashchange', () => {
+  const hash = location.hash.replace('#', '') || 'chat';
+  if (hash !== currentView) navigate(hash);
+});
+
+init();
+</script>
+</body>
+</html>

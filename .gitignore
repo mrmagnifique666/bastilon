@@ -1,0 +1,66 @@
+node_modules/
+dist/
+.env
+sandbox/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+nul
+code-requests.json
+rapports/
+uploads/
+tests/**/*.js
+tests/**/*.d.ts
+tests/**/*.js.map
+PROMPT_FOR_CLI.md
+relay/gmail/
+
+# Kingston wallet - NEVER commit private keys
+.wallet/
+
+# Relay runtime files (generated, contain personal data)
+relay/*.cjs
+relay/*.mjs
+relay/*.png
+relay/*.json
+relay/bot.lock
+relay/SOUL.md
+relay/tmp/
+relay/api-docs/
+relay/mood-journal.json
+
+# Personal / generated docs
+AUTONOMOUS.md
+*.csv
+
+# Browser profiles (400MB+ Chromium data)
+puppeteer-chrome-profile/
+chrome-*/
+
+# Old repo clone (embedded git repo)
+bastion/
+
+# Personal research/business docs
+MOLTBOOK_*.md
+MARKET_*.md
+KINGSTON_*.md
+PROSPECTS_*.md
+OUTREACH_*.md
+INDEX_SCOUT_*.md
+SESSION_*.md
+SCOUT_*.txt
+SCOUT_*.json
+START_HERE_*.md
+VALIDATION_REPORT.md
+README_MOLTBOOK.md
+README_PROSPECTS.md
+PROMPT_FOR_CLI.md
+
+# Generated/personal files
+V1/
+scripts/
+.claude/
+bunfig.toml
+query-analytics.js
