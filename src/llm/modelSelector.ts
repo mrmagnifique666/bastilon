@@ -58,15 +58,16 @@ export function selectModel(
     return "haiku";
   }
 
-  // Scheduler events
+  // Scheduler events — conserve Claude quota, use free tiers
   if (context === "scheduler" || message.startsWith("[SCHEDULER]") || message.startsWith("[HEARTBEAT")) {
-    // Heartbeat checks, stability → ollama if enabled
-    if (config.ollamaEnabled && /heartbeat|stability/i.test(message)) {
-      log.debug(`[model] Scheduler heartbeat → ollama`);
+    if (/digest/i.test(message)) return "haiku";
+    // All scheduler tasks → ollama (free, local) or gemini fallback
+    if (config.ollamaEnabled) {
+      log.debug(`[model] Scheduler task → ollama`);
       return "ollama";
     }
-    if (/digest/i.test(message)) return "haiku";
-    return "sonnet";
+    log.debug(`[model] Scheduler task → haiku (ollama disabled)`);
+    return "haiku";
   }
 
   // Very short greetings → ollama (if enabled) → groq (if available) → sonnet

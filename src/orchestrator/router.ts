@@ -218,12 +218,13 @@ async function handleMessageInner(
 
   // --- Ollama path ---
   if (tier === "ollama") {
-    // Agents (chatId 100-106) get full tool chain via /api/chat
+    // Agents (chatId 100-106) and scheduler tasks that need tools get full tool chain
     const isAgent = chatId >= 100 && chatId <= 106;
+    const needsTools = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:");
 
-    if (isAgent) {
+    if (isAgent || needsTools) {
       try {
-        log.info(`[router] 🦙 Ollama-chat for agent ${chatId}: ${userMessage.slice(0, 100)}...`);
+        log.info(`[router] 🦙 Ollama-chat for ${isAgent ? `agent ${chatId}` : "scheduler"}: ${userMessage.slice(0, 100)}...`);
         const result = await runOllamaChat({
           chatId,
           userMessage,
@@ -236,7 +237,17 @@ async function handleMessageInner(
         return result;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        log.warn(`[router] Ollama-chat failed for agent ${chatId}, falling back to Haiku: ${errMsg}`);
+        log.warn(`[router] Ollama-chat failed for ${isAgent ? `agent ${chatId}` : "scheduler"}, falling back to Gemini: ${errMsg}`);
+        // Fallback to Gemini (free) instead of Haiku (burns Claude quota)
+        try {
+          const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId });
+          if (geminiResult) {
+            addTurn(chatId, { role: "assistant", content: geminiResult });
+            backgroundExtract(chatId, userMessage, geminiResult);
+            return geminiResult;
+          }
+        } catch { /* Gemini failed too */ }
+        // Last resort: Haiku
         const haikuModel = getModelId("haiku");
         const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
         if (haikuResult.type === "message") {
@@ -245,13 +256,13 @@ async function handleMessageInner(
           backgroundExtract(chatId, userMessage, text);
           return text;
         }
-        const text = "Agent task acknowledged.";
+        const text = "Task acknowledged.";
         addTurn(chatId, { role: "assistant", content: text });
         return text;
       }
     }
 
-    // Non-agent: text-only (heartbeats, greetings)
+    // Non-agent/non-scheduler: text-only (heartbeats, greetings)
     try {
       const ollamaResult = await runOllama(chatId, userMessage);
       addTurn(chatId, { role: "assistant", content: ollamaResult.text });
@@ -642,12 +653,13 @@ async function handleMessageStreamingInner(
 
   // --- Ollama path ---
   if (tier === "ollama") {
-    // Agents get full tool chain (no streaming needed for agents)
+    // Agents and scheduler tasks get full tool chain
     const isAgentStream = chatId >= 100 && chatId <= 106;
+    const needsToolsStream = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:");
 
-    if (isAgentStream) {
+    if (isAgentStream || needsToolsStream) {
       try {
-        log.info(`[router-stream] 🦙 Ollama-chat for agent ${chatId}: ${userMessage.slice(0, 100)}...`);
+        log.info(`[router-stream] 🦙 Ollama-chat for ${isAgentStream ? `agent ${chatId}` : "scheduler"}: ${userMessage.slice(0, 100)}...`);
         await draft.cancel();
         const result = await runOllamaChat({
           chatId,
@@ -660,8 +672,16 @@ async function handleMessageStreamingInner(
         backgroundExtract(chatId, userMessage, result);
         return result;
       } catch (err) {
-        log.warn(`[router-stream] Ollama-chat failed for agent ${chatId}: ${err instanceof Error ? err.message : String(err)}`);
+        log.warn(`[router-stream] Ollama-chat failed for ${isAgentStream ? `agent ${chatId}` : "scheduler"}: ${err instanceof Error ? err.message : String(err)}`);
         await draft.cancel();
+        // Fallback to Gemini (free) instead of Haiku
+        try {
+          const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId });
+          if (geminiResult) {
+            addTurn(chatId, { role: "assistant", content: geminiResult });
+            return geminiResult;
+          }
+        } catch { /* Gemini failed too */ }
         const haikuModel = getModelId("haiku");
         const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
         if (haikuResult.type === "message") {
@@ -669,13 +689,13 @@ async function handleMessageStreamingInner(
           addTurn(chatId, { role: "assistant", content: text });
           return text;
         }
-        const text = "Agent task acknowledged.";
+        const text = "Task acknowledged.";
         addTurn(chatId, { role: "assistant", content: text });
         return text;
       }
     }
 
-    // Non-agent: text-only (no streaming needed for trivial responses)
+    // Non-agent/non-scheduler: text-only (no streaming needed for trivial responses)
     try {
       const ollamaResult = await runOllama(chatId, userMessage);
       await draft.update(ollamaResult.text);
