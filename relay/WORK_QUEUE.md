@@ -12,25 +12,25 @@
 
 ## Priority 2 — Architecture (Effort moyen, impact majeur)
 
-- [TODO] Auth cooldown tracking — skip providers rate-limités dans fallback chain
-- [TODO] Solutions memory — cache les résolutions réussies (type=solution dans memory_items)
-- [TODO] Lifecycle hooks — beforeLlmCall, afterToolExec, onAgentCycle (pluggable)
-- [TODO] Adaptive context compaction — progressive summarization token-aware
+- [DONE] Auth cooldown tracking — skip providers rate-limités dans fallback chain
+- [DONE] Solutions memory — cache les résolutions réussies (solutions.save/recall/list)
+- [DONE] Lifecycle hooks — tool:before, tool:after, llm:before, llm:after events
+- [DONE] Adaptive context compaction — Ollama/Groq summarization, token-aware auto-trigger
 - [TODO] SKILL.md standard — skills en Markdown, créables par Kingston
 - [TODO] Message Bus / Gateway WebSocket — découple Telegram du core
 - [TODO] Typed workflows (Lobster-style) — pipelines YAML avec approval gates
 
 ## Priority 3 — API Gratuites à intégrer
 
-- [TODO] Brave Search API — 2000 requêtes/mois gratuites, structured results
-- [TODO] Hugging Face Inference API — modèles gratuits (summarization, NER, sentiment)
+- [DONE] Brave Search API — déjà intégré dans web.search (needs BRAVE_SEARCH_API_KEY)
+- [DONE] HuggingFace Inference API — nlp.summarize, nlp.sentiment, nlp.translate
 - [TODO] Cohere API — embeddings gratuits (1000 req/min), reranking
 - [TODO] Mistral API — Le Chat gratuit, bon en français
 - [TODO] Together.ai — free tier, open models
 - [TODO] Replicate — free tier pour image/audio models
 - [TODO] Serper.dev — 2500 Google searches/mois gratuit
-- [TODO] NewsAPI — 100 req/jour gratuit, news headlines
-- [TODO] ExchangeRate API — taux de change gratuit
+- [DONE] NewsAPI — news.headlines + news.search (needs NEWS_API_KEY)
+- [DONE] ExchangeRate API — forex.rates + forex.convert (no key needed!)
 - [TODO] Abstract API — email validation, IP geolocation gratuit
 
 ## Priority 4 — Features (Inspiré de PicoClaw/AgentZero/OpenClaw)
@@ -51,6 +51,7 @@
 
 ## Completed (archive)
 
+- [DONE] Auth cooldown + Solutions memory + Lifecycle hooks + Context compaction + Free APIs — 2026-02-11
 - [DONE] Voice cloning system (Bark + XTTS server) — 2026-02-11
 - [DONE] Replace ElevenLabs with Edge TTS — 2026-02-11
 - [DONE] Wire SESSION_LOG.md into all prompts — 2026-02-10

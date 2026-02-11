@@ -18,6 +18,8 @@ import { log } from "../utils/log.js";
 import { extractAndStoreMemories } from "../memory/semantic.js";
 import { selectModel, getModelId, modelLabel, type ModelTier } from "../llm/modelSelector.js";
 import { isClaudeRateLimited, detectAndSetRateLimit, clearRateLimit, rateLimitRemainingMinutes, shouldProbeRateLimit, markProbeAttempt } from "../llm/rateLimitState.js";
+import { isProviderCoolingDown, markProviderCooldown, clearProviderCooldown, providerCooldownSeconds } from "../llm/providerCooldown.js";
+import { emitHook } from "../hooks/hooks.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
 const GROQ_SYSTEM_PROMPT = [
@@ -98,7 +100,7 @@ async function fallbackWithoutClaude(
   remainingMinutes: number
 ): Promise<string> {
   // --- Try Gemini Flash (supports full tool chain, $0) ---
-  if (config.geminiApiKey) {
+  if (config.geminiApiKey && !isProviderCoolingDown("gemini")) {
     try {
       log.info(`[router] 🔄 Gemini fallback (Claude down ${remainingMinutes}min): ${userMessage.slice(0, 100)}...`);
       await safeProgress(chatId, `⚡ Mode Gemini (Claude indisponible ~${remainingMinutes}min)`);
@@ -111,16 +113,20 @@ async function fallbackWithoutClaude(
       });
       addTurn(chatId, { role: "assistant", content: geminiResult });
       backgroundExtract(chatId, userMessage, geminiResult);
+      clearProviderCooldown("gemini");
       log.info(`[router] Gemini fallback success (${geminiResult.length} chars)`);
       return geminiResult;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (err instanceof GeminiRateLimitError) markProviderCooldown("gemini", "429 rate limit");
       log.warn(`[router] Gemini fallback also failed: ${errMsg}`);
     }
+  } else if (isProviderCoolingDown("gemini")) {
+    log.debug(`[router] Skipping Gemini (cooldown ${providerCooldownSeconds("gemini")}s remaining)`);
   }
 
   // --- Try Ollama with tools (local, full tool chain, always available) ---
-  if (config.ollamaEnabled) {
+  if (config.ollamaEnabled && !isProviderCoolingDown("ollama")) {
     try {
       const ollamaUp = await isOllamaAvailable();
       if (ollamaUp) {
@@ -135,21 +141,34 @@ async function fallbackWithoutClaude(
         });
         addTurn(chatId, { role: "assistant", content: ollamaResult });
         backgroundExtract(chatId, userMessage, ollamaResult);
+        clearProviderCooldown("ollama");
         log.info(`[router] Ollama-chat fallback success (${ollamaResult.length} chars)`);
         return ollamaResult;
+      } else {
+        markProviderCooldown("ollama", "not reachable");
       }
     } catch (err) {
+      markProviderCooldown("ollama", err instanceof Error ? err.message : "unknown error");
       log.warn(`[router] Ollama-chat fallback failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+  } else if (isProviderCoolingDown("ollama")) {
+    log.debug(`[router] Skipping Ollama (cooldown ${providerCooldownSeconds("ollama")}s remaining)`);
   }
 
   // --- Try Groq (text-only, llama-3.3-70b, $0) ---
-  const groqFallback = await tryGroqFallback(chatId, userMessage, "Claude+Gemini+Ollama down");
-  if (groqFallback) {
-    await safeProgress(chatId, `⚡ Mode Groq (services principaux indisponibles ~${remainingMinutes}min)`);
-    addTurn(chatId, { role: "assistant", content: groqFallback });
-    backgroundExtract(chatId, userMessage, groqFallback);
-    return groqFallback;
+  if (!isProviderCoolingDown("groq")) {
+    const groqFallback = await tryGroqFallback(chatId, userMessage, "Claude+Gemini+Ollama down");
+    if (groqFallback) {
+      await safeProgress(chatId, `⚡ Mode Groq (services principaux indisponibles ~${remainingMinutes}min)`);
+      addTurn(chatId, { role: "assistant", content: groqFallback });
+      backgroundExtract(chatId, userMessage, groqFallback);
+      clearProviderCooldown("groq");
+      return groqFallback;
+    } else {
+      markProviderCooldown("groq", "fallback returned null");
+    }
+  } else {
+    log.debug(`[router] Skipping Groq (cooldown ${providerCooldownSeconds("groq")}s remaining)`);
   }
 
   // --- All models down — return a useful error instead of silence ---
@@ -529,9 +548,13 @@ async function handleMessageInner(
     // Execute skill — feed errors back to Claude so it can adapt
     log.info(`Executing tool (step ${step + 1}/${config.maxToolChain}): ${tool}`);
     let toolResult: string;
+    const toolStart = Date.now();
+    emitHook("tool:before", { chatId, tool, args: safeArgs }).catch(() => {});
     try {
       toolResult = await skill.execute(safeArgs);
+      emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: true }).catch(() => {});
     } catch (err) {
+      emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: false, error: String(err) }).catch(() => {});
       const errorMsg = `Tool "${tool}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(errorMsg);
       logError(err instanceof Error ? err : errorMsg, `router:exec:${tool}`, tool);
@@ -996,6 +1019,8 @@ async function handleMessageStreamingInner(
 
     log.info(`[router-stream] Executing tool (step ${step + 1}): ${tool}`);
     let toolResult: string;
+    const toolStart = Date.now();
+    emitHook("tool:before", { chatId, tool, args: safeArgs }).catch(() => {});
     try {
       // Timeout individual tool execution (2 minutes max per tool)
       const execPromise = skill.execute(safeArgs);
@@ -1003,7 +1028,9 @@ async function handleMessageStreamingInner(
         setTimeout(() => reject(new Error(`Tool "${tool}" execution timed out (120s)`)), 120_000)
       );
       toolResult = await Promise.race([execPromise, execTimeout]);
+      emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: true }).catch(() => {});
     } catch (err) {
+      emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: false, error: String(err) }).catch(() => {});
       const errorMsg = `Tool "${tool}" failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(`[router-stream] ${errorMsg}`);
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;

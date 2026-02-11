@@ -8,6 +8,10 @@
  * - session:reset — user triggered /clear (before clearTurns)
  * - agent:cycle:start — agent tick began (after clearSession)
  * - agent:cycle:end — agent tick completed (after logRun/saveState)
+ * - llm:before — before any LLM call (provider, model, chatId)
+ * - llm:after — after any LLM call (provider, model, durationMs, tokens)
+ * - tool:before — before tool execution (tool name, args, chatId)
+ * - tool:after — after tool execution (tool name, result, durationMs)
  */
 import { log } from "../utils/log.js";
 
@@ -16,7 +20,11 @@ export type HookEvent =
   | "session:new"
   | "session:reset"
   | "agent:cycle:start"
-  | "agent:cycle:end";
+  | "agent:cycle:end"
+  | "llm:before"
+  | "llm:after"
+  | "tool:before"
+  | "tool:after";
 
 export interface HookContext {
   chatId?: number;

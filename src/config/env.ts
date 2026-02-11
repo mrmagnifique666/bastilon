@@ -175,6 +175,10 @@ function buildConfig() {
     xttsPort: Number(optional("XTTS_PORT", "3300")),
     xttsEnabled: optional("XTTS_ENABLED", "true") === "true",
 
+    // Free API keys
+    newsApiKey: optional("NEWS_API_KEY", ""),
+    huggingfaceApiKey: optional("HUGGINGFACE_API_KEY", ""),
+
     // Memory management
     memoryMaxItems: Number(optional("MEMORY_MAX_ITEMS", "10000")),
     memoryPruneTarget: Number(optional("MEMORY_PRUNE_TARGET", "8000")),
