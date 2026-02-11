@@ -471,15 +471,17 @@ function addMsg(role, text) {
   const content = document.createElement('div');
   if (role === 'model' || role === 'tool') {
     content.innerHTML = renderRich(text);
-    content.querySelectorAll('img').forEach(img => {
+    const imgs = content.querySelectorAll('img');
+    imgs.forEach(img => {
       img.addEventListener('click', e => {
         e.stopPropagation();
         $('overlayImg').src = img.src;
         $('imgOverlay').classList.add('active');
-        // Also show in center visual area
         showVisual(img.src);
       });
     });
+    // Auto-show first image in center visual area
+    if (imgs.length > 0) setTimeout(() => showVisual(imgs[0].src), 100);
   } else { content.textContent = text; }
   div.appendChild(content);
   transcript.appendChild(div);
@@ -660,9 +662,18 @@ async function speakGreeting() {
   const text=texts[Math.floor(Math.random()*texts.length)];
   addMsg('model',text); setStatus('speaking','Kingston...');
   try {
+    // Init audio context early (some browsers need it before first play)
+    if(!playCtx){playCtx=new AudioContext({sampleRate:24000});}
+    if(playCtx.state==='suspended')await playCtx.resume();
     const r=await fetch(API+'/api/tts',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({text,voice:'fr-male'})});
-    if(r.ok){const b=await r.blob();const u=URL.createObjectURL(b);const a=new Audio(u);await new Promise(res=>{a.onended=()=>{URL.revokeObjectURL(u);res();};a.onerror=()=>{URL.revokeObjectURL(u);res();};a.play().catch(res);});}
-  }catch{}
+    if(r.ok){
+      const ab=await r.arrayBuffer();
+      // Decode MP3 → play through AudioContext (bypasses autoplay restrictions)
+      const decoded=await playCtx.decodeAudioData(ab);
+      const src=playCtx.createBufferSource();src.buffer=decoded;src.connect(playCtx.destination);
+      await new Promise(res=>{src.onended=res;src.start();});
+    }else{console.warn('[greeting] TTS returned',r.status);}
+  }catch(e){console.warn('[greeting] TTS error:',e);}
 }
 function toggleWakeWord() {
   wakeWordEnabled=!wakeWordEnabled; $('vcWake').classList.toggle('on',wakeWordEnabled); $('wakeBtn').classList.toggle('on',wakeWordEnabled);
@@ -707,18 +718,27 @@ async function processLocal(text){
     if(!r.ok)throw new Error('API '+r.status);
     const d=await r.json(); const resp=d.response||'Desole, pas de reponse.';
     addMsg('model',resp);
-    // Check if response contains image URLs — show in visual area
-    const imgMatch=resp.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp)/i);
-    if(imgMatch)showVisual(imgMatch[0]);
+    // Check if response contains image URLs (including localhost /uploads/) — show in visual area
+    const mdImg=resp.match(/!\[[^\]]*\]\(([^)]+)\)/);
+    const rawImg=resp.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp)/i);
+    if(mdImg)showVisual(mdImg[1]);else if(rawImg)showVisual(rawImg[0]);
     setStatus('speaking','Kingston parle...'); wakeText.textContent='Synthese...';
     const tCtrl=new AbortController();const tTo=setTimeout(()=>tCtrl.abort(),30000);
     const tr=await fetch(API+'/api/tts',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({text:resp.slice(0,2000),voice:'fr-male'}),signal:tCtrl.signal});
     clearTimeout(tTo);
-    if(tr.ok){const b=await tr.blob();const u=URL.createObjectURL(b);localAudio=new Audio(u);await new Promise(res=>{localAudio.onended=()=>{URL.revokeObjectURL(u);localAudio=null;res();};localAudio.onerror=()=>{URL.revokeObjectURL(u);localAudio=null;res();};localAudio.play().catch(res);});}
+    if(tr.ok){
+      if(!playCtx){playCtx=new AudioContext({sampleRate:24000});}
+      if(playCtx.state==='suspended')await playCtx.resume();
+      const ab=await tr.arrayBuffer();
+      const decoded=await playCtx.decodeAudioData(ab);
+      const src=playCtx.createBufferSource();src.buffer=decoded;src.connect(playCtx.destination);
+      localAudio={stop:()=>{try{src.stop();}catch{}}};
+      await new Promise(res=>{src.onended=()=>{localAudio=null;res();};src.start();});
+    }else{console.warn('[local-tts] TTS returned',tr.status);}
   }catch(err){if(err.name==='AbortError')addMsg('system','Timeout.');else addMsg('system','Erreur: '+(err.message||''));}
   localProcessing=false; if(sessionActive)startLocalListening();
 }
-function stopLocalSession(){sessionActive=false;localProcessing=false;localFinalText='';clearTimeout(localSilenceTimer);stopLocalListening();if(localAudio){try{localAudio.pause();}catch{}localAudio=null;}if(wakeWordEnabled)setTimeout(()=>{if(!sessionActive){startWakeWord();setStatus('wakeword','Dis "Computer"...');}},500);else setStatus('disconnected','Pret');}
+function stopLocalSession(){sessionActive=false;localProcessing=false;localFinalText='';clearTimeout(localSilenceTimer);stopLocalListening();if(localAudio){try{localAudio.stop();}catch{}localAudio=null;}if(wakeWordEnabled)setTimeout(()=>{if(!sessionActive){startWakeWord();setStatus('wakeword','Dis "Computer"...');}},500);else setStatus('disconnected','Pret');}
 
 // ═══════════════════════════════════════════════════════
 // CLOUD MODE — Gemini Live WebSocket
@@ -751,14 +771,20 @@ function handleWS(m){
 // ─── Mic capture (PCM 16kHz) ───
 async function startMic(){
   try{
-    audioCtx=new AudioContext({sampleRate:16000});if(audioCtx.state==='suspended')await audioCtx.resume();
+    // Request mic permission first (user gesture propagation)
     micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:true,noiseSuppression:true}});
+    audioCtx=new AudioContext({sampleRate:16000});
+    if(audioCtx.state==='suspended')await audioCtx.resume();
     const code=`class P extends AudioWorkletProcessor{constructor(){super();this.b=[];}process(i){const c=i[0]?.[0];if(!c)return true;for(let j=0;j<c.length;j++)this.b.push(c[j]);if(this.b.length>=1600){this.port.postMessage(new Float32Array(this.b.splice(0,1600)));}return true;}}registerProcessor('p',P);`;
     const blob=new Blob([code],{type:'application/javascript'});const url=URL.createObjectURL(blob);await audioCtx.audioWorklet.addModule(url);URL.revokeObjectURL(url);
     const src=audioCtx.createMediaStreamSource(micStream);workletNode=new AudioWorkletNode(audioCtx,'p');
     workletNode.port.onmessage=(e)=>{if(!ws||ws.readyState!==1)return;const f=e.data;const i=new Int16Array(f.length);for(let j=0;j<f.length;j++)i[j]=Math.max(-32768,Math.min(32767,Math.round(f[j]*32767)));const b=new Uint8Array(i.buffer);let s='';for(let j=0;j<b.length;j++)s+=String.fromCharCode(b[j]);ws.send(JSON.stringify({type:'audio',data:btoa(s)}));};
-    src.connect(workletNode);workletNode.connect(audioCtx.destination);
-  }catch(err){console.warn('Worklet fail:',err);}
+    src.connect(workletNode);
+    // Connect to a silent gain node (some browsers need graph connection for process() to fire)
+    const silentGain=audioCtx.createGain();silentGain.gain.value=0;
+    workletNode.connect(silentGain);silentGain.connect(audioCtx.destination);
+    console.log('[mic] Started — AudioWorklet capturing PCM 16kHz');
+  }catch(err){console.warn('[mic] Worklet fail:',err);addMsg('system','Erreur micro: '+err.message);}
 }
 function stopMic(){if(workletNode){workletNode.disconnect();workletNode=null;}if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;}if(audioCtx){audioCtx.close().catch(()=>{});audioCtx=null;}}
 
