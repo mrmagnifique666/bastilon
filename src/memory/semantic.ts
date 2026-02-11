@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { config } from "../config/env.js";
 import { getDb, getSummary, getTurns } from "../storage/store.js";
 import { log } from "../utils/log.js";
+import { calculateTrust, type DataKind } from "./trust-decay.js";
 
 // --- Types ---
 
@@ -91,14 +92,24 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-// --- Salience ---
+// --- Salience (trust-decay aware) ---
+
+/** Map memory category → trust-decay DataKind */
+const CATEGORY_DECAY: Record<string, DataKind> = {
+  profile: "fact",        // 180-day half-life
+  preference: "fact",     // 180-day half-life
+  knowledge: "observation", // 30-day half-life
+  skill: "observation",     // 30-day half-life
+  project: "external",      // 7-day half-life
+  event: "external",        // 7-day half-life
+};
 
 function calculateSalience(item: MemoryRow): number {
-  const daysSinceAccess = (Date.now() / 1000 - item.last_accessed_at) / 86400;
-  const recencyDecay = Math.pow(0.5, daysSinceAccess / 30); // half-life: 30 days
+  const kind = CATEGORY_DECAY[item.category] || "observation";
+  const trustDecay = calculateTrust(item.created_at, kind);
   const reinforcement = Math.min(item.access_count / 10, 1.0);
   const baseSalience = item.salience;
-  return baseSalience * 0.4 + recencyDecay * 0.3 + reinforcement * 0.3;
+  return baseSalience * 0.35 + trustDecay * 0.35 + reinforcement * 0.3;
 }
 
 // --- Content Hash ---
@@ -106,6 +117,37 @@ function calculateSalience(item: MemoryRow): number {
 function hashContent(content: string): string {
   const normalized = content.toLowerCase().trim().replace(/\s+/g, " ");
   return crypto.createHash("sha256").update(normalized).digest("hex");
+}
+
+// --- Semantic Dedup ---
+
+/**
+ * Find the nearest existing memory within the same category.
+ * Returns {id, similarity} if cosine > threshold, else null.
+ */
+function findNearestMemory(
+  embedding: number[],
+  category: MemoryCategory,
+  threshold: number
+): { id: number; similarity: number } | null {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT id, embedding FROM memory_items WHERE category = ? AND embedding IS NOT NULL")
+    .all(category) as Array<{ id: number; embedding: string }>;
+
+  let bestId = -1;
+  let bestSim = -1;
+
+  for (const row of rows) {
+    const other = JSON.parse(row.embedding) as number[];
+    const sim = cosineSimilarity(embedding, other);
+    if (sim > bestSim) {
+      bestSim = sim;
+      bestId = row.id;
+    }
+  }
+
+  return bestSim >= threshold ? { id: bestId, similarity: bestSim } : null;
 }
 
 // --- CRUD ---
@@ -137,12 +179,28 @@ export async function addMemory(
   }
 
   // Embed the content
+  let embedding: number[] | null = null;
   let embeddingJson: string | null = null;
   try {
-    const embedding = await embedText(content);
+    embedding = await embedText(content);
     embeddingJson = JSON.stringify(embedding);
   } catch (err) {
     log.warn(`[semantic] Embedding failed for new memory: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Semantic dedup: if near-duplicate exists in same category, reinforce instead of inserting
+  if (embedding) {
+    const nearest = findNearestMemory(embedding, category, config.memoryDedupThreshold);
+    if (nearest) {
+      db.prepare(
+        `UPDATE memory_items SET access_count = access_count + 1,
+         salience = MIN(salience + 0.05, 1.0),
+         last_accessed_at = unixepoch(), updated_at = unixepoch()
+         WHERE id = ?`
+      ).run(nearest.id);
+      log.debug(`[semantic] Near-dup of #${nearest.id} (sim=${nearest.similarity.toFixed(3)}), reinforced`);
+      return nearest.id;
+    }
   }
 
   const info = db
@@ -153,6 +211,10 @@ export async function addMemory(
     .run(category, content, hash, embeddingJson, source, chatId ?? null);
 
   log.debug(`[semantic] Added memory #${info.lastInsertRowid} [${category}]: ${content.slice(0, 80)}`);
+
+  // Auto-prune if over ceiling
+  pruneIfOverCeiling();
+
   return info.lastInsertRowid as number;
 }
 
@@ -269,6 +331,201 @@ function rowToItem(row: MemoryRow): MemoryItem {
     category: row.category as MemoryCategory,
     embedding: row.embedding ? JSON.parse(row.embedding) : null,
   };
+}
+
+// --- Auto-Pruning ---
+
+function pruneIfOverCeiling(): void {
+  const db = getDb();
+  const count = (db.prepare("SELECT COUNT(*) as c FROM memory_items").get() as { c: number }).c;
+  if (count <= config.memoryMaxItems) return;
+
+  log.info(`[semantic] Memory ceiling hit (${count}/${config.memoryMaxItems}), pruning to ${config.memoryPruneTarget}...`);
+
+  // Score all memories, delete the lowest-scored ones
+  const rows = db.prepare("SELECT * FROM memory_items").all() as MemoryRow[];
+  const scored = rows.map(r => ({ id: r.id, score: calculateSalience(r) }));
+  scored.sort((a, b) => a.score - b.score); // ascending — worst first
+
+  const toDelete = scored.slice(0, count - config.memoryPruneTarget).map(s => s.id);
+  if (toDelete.length === 0) return;
+
+  db.prepare(`DELETE FROM memory_items WHERE id IN (${toDelete.join(",")})`).run();
+  log.info(`[semantic] Pruned ${toDelete.length} low-salience memories (${count} → ${count - toDelete.length})`);
+}
+
+// --- Cleanup & Consolidation ---
+
+/**
+ * One-time cleanup: delete trivial memories, merge near-duplicates.
+ * Returns {deleted, merged}.
+ */
+export function runMemoryCleanup(): { deleted: number; merged: number } {
+  const db = getDb();
+  let deleted = 0;
+  let merged = 0;
+
+  // Step 1: Delete trivial memories
+  const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 86400;
+  const trivialResult = db.prepare(
+    `DELETE FROM memory_items
+     WHERE length(content) < 10
+        OR (salience < 0.15 AND access_count = 0 AND created_at < ?)`
+  ).run(thirtyDaysAgo);
+  deleted += trivialResult.changes;
+  log.info(`[semantic] Cleanup: deleted ${trivialResult.changes} trivial memories`);
+
+  // Step 2: Merge near-duplicates within each category
+  const categories = db.prepare("SELECT DISTINCT category FROM memory_items").all() as { category: string }[];
+
+  for (const { category } of categories) {
+    const rows = db.prepare(
+      "SELECT id, embedding, salience, access_count FROM memory_items WHERE category = ? AND embedding IS NOT NULL ORDER BY salience DESC"
+    ).all(category) as Array<{ id: number; embedding: string; salience: number; access_count: number }>;
+
+    const deletedIds = new Set<number>();
+
+    for (let i = 0; i < rows.length; i++) {
+      if (deletedIds.has(rows[i].id)) continue;
+      const embA = JSON.parse(rows[i].embedding) as number[];
+
+      for (let j = i + 1; j < rows.length; j++) {
+        if (deletedIds.has(rows[j].id)) continue;
+        const embB = JSON.parse(rows[j].embedding) as number[];
+        const sim = cosineSimilarity(embA, embB);
+
+        if (sim >= config.memoryDedupThreshold) {
+          // Keep the one with higher salience (rows are sorted by salience DESC → keep i)
+          const keepId = rows[i].id;
+          const removeId = rows[j].id;
+          db.prepare(
+            `UPDATE memory_items SET access_count = access_count + ?, updated_at = unixepoch() WHERE id = ?`
+          ).run(rows[j].access_count, keepId);
+          db.prepare("DELETE FROM memory_items WHERE id = ?").run(removeId);
+          deletedIds.add(removeId);
+          merged++;
+        }
+      }
+    }
+  }
+
+  log.info(`[semantic] Cleanup: merged ${merged} near-duplicates`);
+  return { deleted, merged };
+}
+
+/**
+ * Consolidate memories via clustering + Gemini Flash summarization.
+ * Groups semantically similar memories (cosine > 0.80), then merges clusters of 3+.
+ */
+export async function consolidateMemories(options?: {
+  category?: MemoryCategory;
+  dryRun?: boolean;
+}): Promise<{ clusters: number; consolidated: number; removed: number }> {
+  const db = getDb();
+  const dryRun = options?.dryRun ?? false;
+  const categoryFilter = options?.category;
+  let totalClusters = 0;
+  let totalConsolidated = 0;
+  let totalRemoved = 0;
+
+  const categories = categoryFilter
+    ? [{ category: categoryFilter }]
+    : db.prepare("SELECT DISTINCT category FROM memory_items").all() as { category: string }[];
+
+  for (const { category } of categories) {
+    const rows = db.prepare(
+      "SELECT id, content, embedding, salience, access_count FROM memory_items WHERE category = ? AND embedding IS NOT NULL"
+    ).all(category) as Array<{ id: number; content: string; embedding: string; salience: number; access_count: number }>;
+
+    if (rows.length < 3) continue;
+
+    // Greedy clustering: cosine > 0.80
+    const assigned = new Set<number>();
+    const clusters: Array<typeof rows> = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      if (assigned.has(rows[i].id)) continue;
+      const cluster = [rows[i]];
+      assigned.add(rows[i].id);
+      const embA = JSON.parse(rows[i].embedding) as number[];
+
+      for (let j = i + 1; j < rows.length; j++) {
+        if (assigned.has(rows[j].id)) continue;
+        const embB = JSON.parse(rows[j].embedding) as number[];
+        if (cosineSimilarity(embA, embB) > 0.80) {
+          cluster.push(rows[j]);
+          assigned.add(rows[j].id);
+        }
+      }
+
+      if (cluster.length >= 3) {
+        clusters.push(cluster);
+      }
+    }
+
+    if (clusters.length === 0) continue;
+    totalClusters += clusters.length;
+
+    if (dryRun) {
+      for (const c of clusters) {
+        totalConsolidated++;
+        totalRemoved += c.length;
+        log.info(`[semantic] [dry-run] Cluster (${category}, ${c.length} items): ${c.map(m => `#${m.id}`).join(", ")}`);
+      }
+      continue;
+    }
+
+    // Consolidate each cluster via Gemini Flash
+    for (const cluster of clusters) {
+      try {
+        const contents = cluster.map(m => `- ${m.content}`).join("\n");
+        const prompt = `These ${cluster.length} memories about "${category}" are semantically similar. Merge them into ONE concise memory (1-2 sentences, French if the originals are French, English otherwise). Keep only the most important facts.\n\n${contents}\n\nMerged memory (plain text, no quotes):`;
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+          }),
+        });
+
+        if (!res.ok) {
+          log.warn(`[semantic] Consolidation API failed for cluster: ${res.status}`);
+          continue;
+        }
+
+        const data = await res.json();
+        const merged = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (!merged || merged.length < 5) continue;
+
+        // Sum access counts from all cluster members
+        const totalAccess = cluster.reduce((sum, m) => sum + m.access_count, 0);
+        const maxSalience = Math.max(...cluster.map(m => m.salience));
+
+        // Insert consolidated memory
+        await addMemory(merged, category as MemoryCategory, "consolidated");
+        // Update salience/access on the newly inserted one
+        db.prepare(
+          `UPDATE memory_items SET access_count = ?, salience = ?
+           WHERE content_hash = ? AND source = 'consolidated'`
+        ).run(totalAccess, maxSalience, hashContent(merged));
+
+        // Delete old cluster members
+        const ids = cluster.map(m => m.id);
+        db.prepare(`DELETE FROM memory_items WHERE id IN (${ids.join(",")})`).run();
+
+        totalConsolidated++;
+        totalRemoved += cluster.length;
+        log.info(`[semantic] Consolidated ${cluster.length} memories → "${merged.slice(0, 60)}..."`);
+      } catch (err) {
+        log.warn(`[semantic] Consolidation error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  return { clusters: totalClusters, consolidated: totalConsolidated, removed: totalRemoved };
 }
 
 // --- Extraction (Gemini Flash) ---

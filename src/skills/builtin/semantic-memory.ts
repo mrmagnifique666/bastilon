@@ -8,6 +8,8 @@ import {
   addMemory,
   forgetMemory,
   getMemoryStats,
+  runMemoryCleanup,
+  consolidateMemories,
   type MemoryCategory,
 } from "../../memory/semantic.js";
 
@@ -119,5 +121,42 @@ registerSkill({
     }
 
     return lines.join("\n");
+  },
+});
+
+registerSkill({
+  name: "memory.cleanup",
+  description: "Clean up memories — delete trivial entries and merge near-duplicates",
+  argsSchema: {
+    type: "object",
+    properties: {},
+  },
+  async execute() {
+    const result = runMemoryCleanup();
+    return `Cleanup complete: deleted ${result.deleted} trivial, merged ${result.merged} near-duplicates.`;
+  },
+});
+
+registerSkill({
+  name: "memory.consolidate",
+  description: "Consolidate similar memories into concise summaries via Gemini Flash",
+  argsSchema: {
+    type: "object",
+    properties: {
+      category: { type: "string", description: "Filter by category (optional)" },
+      dry_run: { type: "boolean", description: "Preview clusters without merging (default false)" },
+    },
+  },
+  async execute(args) {
+    const category = args.category as string | undefined;
+    const dryRun = args.dry_run as boolean | undefined;
+
+    const validCat = category && VALID_CATEGORIES.has(category) ? category as MemoryCategory : undefined;
+    const result = await consolidateMemories({ category: validCat, dryRun: dryRun ?? false });
+
+    if (dryRun) {
+      return `[Dry run] Found ${result.clusters} clusters (${result.removed} memories would be consolidated).`;
+    }
+    return `Consolidation complete: ${result.clusters} clusters found, ${result.consolidated} consolidated, ${result.removed} removed.`;
   },
 });

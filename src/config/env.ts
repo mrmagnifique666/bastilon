@@ -167,6 +167,11 @@ function buildConfig() {
     // Kingston Mind (autonomous business brain)
     agentMindEnabled: optional("AGENT_MIND_ENABLED", "true") === "true",
     agentMindHeartbeatMs: Number(optional("AGENT_MIND_HEARTBEAT_MS", "1200000")), // 20min
+
+    // Memory management
+    memoryMaxItems: Number(optional("MEMORY_MAX_ITEMS", "1500")),
+    memoryPruneTarget: Number(optional("MEMORY_PRUNE_TARGET", "1000")),
+    memoryDedupThreshold: Number(optional("MEMORY_DEDUP_THRESHOLD", "0.92")),
   };
 }
 
