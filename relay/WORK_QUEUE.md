@@ -40,14 +40,34 @@
 - [DONE] Multi-channel abstraction — interface Channel (src/gateway/channel.ts)
 - [DONE] Agent profile folders — config/prompts/tools par agent (relay/agents/{id}/)
 - [DONE] Subordinate agents — agents.spawn/spawn_parallel + hierarchy delegation
-- [TODO] Sandbox execution — Docker containers pour tool execution
-- [TODO] Device nodes — companion mobile/desktop
 
-## Priority 5 — Reddit & Social
+## Priority 5 — Multi-Channel (inspiré d'OpenClaw)
+
+- [TODO] WhatsApp connector — via @whiskeysockets/baileys (QR auth, messages bi-directionnel)
+- [TODO] Discord connector — via discord.js (bot token, commandes slash, channels)
+
+## Priority 6 — Workflow Engine v2 (inspiré de N8N)
+
+- [TODO] Sub-pipelines — un workflow peut appeler un autre workflow par référence
+- [TODO] Wait/Callback — pause pipeline en attendant webhook ou événement
+- [TODO] Merge/Join — combiner résultats de branches parallèles
+- [TODO] Error workflows — pipeline dédié qui se déclenche sur échec d'un autre
+- [TODO] Webhook triggers — endpoints HTTP qui déclenchent des pipelines
+- [TODO] Pipeline execution persistence — execution ID, état par étape, reprise après crash
+- [TODO] MCP SSE transport — ajouter SSE transport au MCP server (Claude Desktop compatible)
+
+## Priority 7 — Social & External
 
 - [BLOCKED] Reddit API — awaiting kingston_cdr dev account approval
 - [DONE] Moltbook presence automation — content auto-publisher in scheduler
 - [TODO] LinkedIn API — OAuth flow pour posting
+
+## Priority 8 — Infrastructure
+
+- [TODO] Dashboard enrichi — gestion skills, monitoring agents, visualisation KG
+- [TODO] AgentSkills standard — compatibilité format Anthropic (import/export skills OpenClaw)
+- [TODO] Sandbox execution — Docker containers pour tool execution
+- [TODO] RAG dans les pipelines — étape rag_query dans le workflow engine
 
 ## Completed (archive)
 

@@ -410,9 +410,15 @@ const WS_URL = API.replace(/^http/, 'ws') + '/ws/voice';
 const TOKEN = localStorage.getItem('bastilon_token') || '';
 const WAKE_REGEX = /comput[eè]r|comput[eè]ur|komput[eè]r|ordinat[eè]ur|computer/i;
 
+// Only prompt for token if server requires one (check /api/stats first)
 if (!TOKEN) {
-  const t = prompt('Token Bastilon:');
-  if (t) { localStorage.setItem('bastilon_token', t); location.reload(); }
+  fetch(API + '/api/stats').then(r => {
+    if (r.status === 401 || r.status === 403) {
+      const t = prompt('Token Bastilon:');
+      if (t) { localStorage.setItem('bastilon_token', t); location.reload(); }
+    }
+    // If 200, no token needed — proceed without auth
+  }).catch(() => {});
 }
 
 // ─── Mode ───
@@ -525,7 +531,7 @@ async function loadDashboard() {
     apiFetch('/api/memory/stats'), apiFetch('/api/skills'),
   ]);
   if (stats) {
-    $('statUptime').textContent = Math.floor(stats.uptime / 3600);
+    $('statUptime').textContent = Math.floor(stats.uptime / 3600000);
     $('statNotes').textContent = stats.noteCount;
   }
   if (memory) $('statMemory').textContent = memory.total || memory.count || '?';
@@ -744,13 +750,20 @@ function stopLocalSession(){sessionActive=false;localProcessing=false;localFinal
 // ═══════════════════════════════════════════════════════
 // CLOUD MODE — Gemini Live WebSocket
 // ═══════════════════════════════════════════════════════
+let wsRetries=0;const MAX_WS_RETRIES=3;
 function connectWS(){
   if(ws)return; setStatus('connecting','Connexion...');
-  ws=new WebSocket(WS_URL);
-  ws.onopen=()=>{ws.send(JSON.stringify({type:'auth',token:TOKEN,voice:'Enceladus',language:'fr,en'}));setStatus('connecting','Auth...');};
+  try{ws=new WebSocket(WS_URL);}catch(e){addMsg('system','Erreur WebSocket: '+e.message);ws=null;return;}
+  ws.onopen=()=>{wsRetries=0;ws.send(JSON.stringify({type:'auth',token:TOKEN,voice:'Enceladus',language:'fr,en'}));setStatus('connecting','Auth...');};
   ws.onmessage=(ev)=>{let m;try{m=JSON.parse(ev.data);}catch{return;}handleWS(m);};
-  ws.onerror=()=>addMsg('system','Erreur WebSocket.');
-  ws.onclose=()=>{ws=null;if(sessionActive){addMsg('system','Connexion perdue.');stopSession();}};
+  ws.onerror=(e)=>{console.warn('[ws] error',e);};
+  ws.onclose=()=>{
+    ws=null;
+    if(sessionActive&&wsRetries<MAX_WS_RETRIES){
+      wsRetries++;addMsg('system',`Reconnexion... (${wsRetries}/${MAX_WS_RETRIES})`);
+      setTimeout(()=>{if(sessionActive)connectWS();},1500*wsRetries);
+    }else if(sessionActive){addMsg('system','Connexion perdue apres '+MAX_WS_RETRIES+' essais.');stopSession();}
+  };
 }
 function handleWS(m){
   switch(m.type){
