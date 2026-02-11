@@ -17,9 +17,7 @@ export function startVoiceServer(): void {
   if (!config.deepgramApiKey) {
     log.warn("[voice] DEEPGRAM_API_KEY not set — calls will fail until configured");
   }
-  if (!config.elevenlabsApiKey) {
-    log.warn("[voice] ELEVENLABS_API_KEY not set — calls will fail until configured");
-  }
+  // TTS via Edge TTS (free, unlimited) — no API key needed
 
   const server = http.createServer((req, res) => {
     if (req.method === "POST" && req.url === "/voice/incoming") {

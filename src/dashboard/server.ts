@@ -709,63 +709,25 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       }
       return;
     }
-    // ── TTS: unified endpoint (edge-tts default, ElevenLabs fallback) ──
+    // ── TTS: Edge TTS (free, unlimited) ──
     if (pathname === "/api/tts" && method === "POST") {
       if (!checkAuth(req, res)) return;
       const body = await parseBody(req);
       const text = String(body.text || "").trim();
       if (!text) return sendJson(res, 400, { ok: false, error: "text is required" });
-      const provider = String(body.provider || "edge").toLowerCase();
 
-      // Edge TTS (default — free, unlimited)
-      if (provider !== "elevenlabs") {
-        try {
-          const { edgeTtsToMp3, resolveVoice } = await import("../voice/edgeTts.js");
-          const voice = resolveVoice(body.voice as string | undefined);
-          const mp3 = await edgeTtsToMp3(text.slice(0, 2000), voice);
-          res.writeHead(200, {
-            "Content-Type": "audio/mpeg",
-            "Content-Length": mp3.length,
-            "Access-Control-Allow-Origin": getCorsOrigin(),
-          });
-          res.end(mp3);
-          return;
-        } catch (err) {
-          log.warn(`[tts] Edge TTS failed, trying ElevenLabs: ${err instanceof Error ? err.message : String(err)}`);
-          // Fall through to ElevenLabs
-        }
-      }
-
-      // ElevenLabs fallback
-      if (!config.elevenlabsApiKey) return sendJson(res, 503, { ok: false, error: "No TTS available" });
       try {
-        const voiceId = config.elevenlabsVoiceId || "onwK4e9ZLuTAKqWW03F9";
-        const ttsResp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-          method: "POST",
-          headers: {
-            "xi-api-key": config.elevenlabsApiKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text,
-            model_id: "eleven_multilingual_v2",
-            voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-          }),
-        });
-        if (!ttsResp.ok) {
-          const errText = await ttsResp.text();
-          log.warn(`[tts] ElevenLabs error ${ttsResp.status}: ${errText.slice(0, 200)}`);
-          return sendJson(res, 502, { ok: false, error: `ElevenLabs: ${ttsResp.status}` });
-        }
-        const audioBuffer = Buffer.from(await ttsResp.arrayBuffer());
+        const { edgeTtsToMp3, resolveVoice } = await import("../voice/edgeTts.js");
+        const voice = resolveVoice(body.voice as string | undefined);
+        const mp3 = await edgeTtsToMp3(text.slice(0, 2000), voice);
         res.writeHead(200, {
           "Content-Type": "audio/mpeg",
-          "Content-Length": audioBuffer.length,
+          "Content-Length": mp3.length,
           "Access-Control-Allow-Origin": getCorsOrigin(),
         });
-        res.end(audioBuffer);
+        res.end(mp3);
       } catch (err) {
-        log.error(`[tts] Error: ${err instanceof Error ? err.message : String(err)}`);
+        log.error(`[tts] Edge TTS error: ${err instanceof Error ? err.message : String(err)}`);
         return sendJson(res, 500, { ok: false, error: "TTS failed" });
       }
       return;

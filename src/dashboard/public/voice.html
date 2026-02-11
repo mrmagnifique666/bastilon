@@ -619,7 +619,8 @@ function startWakeWord() {
   wakeRecognition = new SR();
   wakeRecognition.continuous = true;
   wakeRecognition.interimResults = true;
-  wakeRecognition.lang = 'fr-FR';
+  // fr-CA handles bilingual (French + English) better than fr-FR
+  wakeRecognition.lang = 'fr-CA';
   wakeRecognition.onstart = () => {
     wakeWordActive = true; wakeBar.classList.add('active');
     wakeText.textContent = 'Ecoute...'; wakeText.className = '';
@@ -690,7 +691,7 @@ function startLocalSession(){if(sessionActive)return;sessionActive=true;localPro
 function startLocalListening(){
   if(!hasWebSpeech()||localProcessing||localListening)return;
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  localRecognition=new SR(); localRecognition.continuous=true; localRecognition.interimResults=true; localRecognition.lang='fr-FR';
+  localRecognition=new SR(); localRecognition.continuous=true; localRecognition.interimResults=true; localRecognition.lang='fr-CA';
   localRecognition.onstart=()=>{localListening=true;localFinalText='';wakeBar.classList.add('active');wakeText.textContent='Ecoute...';wakeText.className='';setStatus('local-listening','Kingston ecoute...');};
   localRecognition.onresult=(e)=>{
     let interim='',nf='';
@@ -746,7 +747,7 @@ function stopLocalSession(){sessionActive=false;localProcessing=false;localFinal
 function connectWS(){
   if(ws)return; setStatus('connecting','Connexion...');
   ws=new WebSocket(WS_URL);
-  ws.onopen=()=>{ws.send(JSON.stringify({type:'auth',token:TOKEN,voice:'Enceladus',language:'fr'}));setStatus('connecting','Auth...');};
+  ws.onopen=()=>{ws.send(JSON.stringify({type:'auth',token:TOKEN,voice:'Enceladus',language:'fr,en'}));setStatus('connecting','Auth...');};
   ws.onmessage=(ev)=>{let m;try{m=JSON.parse(ev.data);}catch{return;}handleWS(m);};
   ws.onerror=()=>addMsg('system','Erreur WebSocket.');
   ws.onclose=()=>{ws=null;if(sessionActive){addMsg('system','Connexion perdue.');stopSession();}};

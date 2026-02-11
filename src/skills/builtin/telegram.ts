@@ -81,12 +81,11 @@ registerSkill({
 });
 
 const MAX_VOICE_CHARS = 5000;
-const ELEVENLABS_TIMEOUT_MS = 30_000;
 
 registerSkill({
   name: "telegram.voice",
   description:
-    "Send a voice message to a Telegram chat using text-to-speech (ElevenLabs). " +
+    "Send a voice message to a Telegram chat using text-to-speech (Edge TTS, free). " +
     "Use this when the user asks for a vocal/audio response. Max 5000 characters.",
   argsSchema: {
     type: "object",
@@ -106,7 +105,6 @@ registerSkill({
     const chatIdStr = (args.chatId ?? args.chat_id) as string | undefined;
     const text = (args.text ?? args.message) as string;
 
-    // Fall back to adminChatId if not provided (for scheduled/autonomous tasks)
     const chatId = chatIdStr ? Number(chatIdStr) : config.adminChatId;
     if (!chatId || isNaN(chatId)) {
       return "Error: invalid chat_id — must be a number. Set TELEGRAM_ADMIN_CHAT_ID in .env for autonomous tasks.";
@@ -120,53 +118,19 @@ registerSkill({
       return `Error: text too long (${text.length} chars). Maximum is ${MAX_VOICE_CHARS}.`;
     }
 
-    if (!config.elevenlabsApiKey) {
-      return "Error: ELEVENLABS_API_KEY is not configured.";
-    }
-
     if (!botVoice) {
       return "Error: bot API not available (bot not started yet).";
     }
 
-    const voiceId = config.elevenlabsVoiceId;
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
-
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), ELEVENLABS_TIMEOUT_MS);
-
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "xi-api-key": config.elevenlabsApiKey,
-          "Content-Type": "application/json",
-          Accept: "audio/mpeg",
-        },
-        body: JSON.stringify({
-          text,
-          model_id: "eleven_multilingual_v2",
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timer);
-
-      if (!resp.ok) {
-        const body = await resp.text().catch(() => "");
-        return `Error: ElevenLabs API returned ${resp.status}: ${body.slice(0, 200)}`;
-      }
-
-      const buffer = Buffer.from(await resp.arrayBuffer());
+      const { edgeTtsToMp3 } = await import("../../voice/edgeTts.js");
+      const buffer = await edgeTtsToMp3(text.slice(0, 2000));
       const filename = `voice_${chatId}_${Date.now()}.mp3`;
 
       await botVoice(chatId, buffer, filename);
       log.info(`telegram.voice: sent voice message to chat ${chatId} (${buffer.length} bytes)`);
       return `Voice message sent to chat ${chatId}.`;
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        return "Error: ElevenLabs API request timed out (30s).";
-      }
       return `Error generating voice: ${err instanceof Error ? err.message : String(err)}`;
     }
   },

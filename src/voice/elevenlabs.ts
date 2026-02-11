@@ -1,64 +1,87 @@
 /**
- * ElevenLabs TTS — returns raw mulaw 8kHz audio bytes.
+ * TTS provider — Edge TTS (free, unlimited).
+ * Replaces ElevenLabs (credit-limited). Same API surface for callers.
+ *
+ * - textToSpeechMp3() → MP3 via Edge TTS (dashboard, Telegram voice messages)
+ * - textToSpeechUlaw() → mulaw 8kHz via Edge TTS + PCM conversion (Twilio pipeline)
  */
-import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { edgeTtsToMp3 } from "./edgeTts.js";
 
-export async function textToSpeechUlaw(text: string): Promise<Buffer> {
-  const voiceId = config.elevenlabsVoiceId;
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=ulaw_8000`;
+const DEFAULT_VOICE = "fr-FR-HenriNeural";
 
-  log.info(`[elevenlabs] TTS request: "${text.slice(0, 80)}..."`);
+/**
+ * Linear PCM sample → mu-law encoded byte.
+ * Standard ITU-T G.711 mu-law companding.
+ */
+function linearToMulaw(sample: number): number {
+  const BIAS = 0x84;
+  const MAX = 32635;
+  const sign = sample < 0 ? 0x80 : 0;
+  if (sample < 0) sample = -sample;
+  if (sample > MAX) sample = MAX;
+  sample += BIAS;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "xi-api-key": config.elevenlabsApiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      model_id: "eleven_multilingual_v2",
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
+  let exponent = 7;
+  for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; exponent--, mask >>= 1);
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`ElevenLabs TTS failed (${res.status}): ${body}`);
-  }
-
-  const arrayBuf = await res.arrayBuffer();
-  log.info(`[elevenlabs] Got ${arrayBuf.byteLength} bytes of ulaw audio`);
-  return Buffer.from(arrayBuf);
+  const mantissa = (sample >> (exponent + 3)) & 0x0f;
+  const mulaw = ~(sign | (exponent << 4) | mantissa) & 0xff;
+  return mulaw;
 }
 
-/** TTS returning MP3 — for local speaker playback (wake word responses) */
-export async function textToSpeechMp3(text: string): Promise<Buffer> {
-  const voiceId = config.elevenlabsVoiceId;
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
+/**
+ * Downsample PCM from sourceRate to 8000 Hz and encode as mu-law.
+ */
+function pcmToMulaw(pcm: Float32Array, sourceRate: number): Buffer {
+  const ratio = sourceRate / 8000;
+  const outLen = Math.floor(pcm.length / ratio);
+  const out = Buffer.alloc(outLen);
 
-  log.info(`[elevenlabs] TTS MP3 request: "${text.slice(0, 80)}..."`);
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "xi-api-key": config.elevenlabsApiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      model_id: "eleven_multilingual_v2",
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`ElevenLabs TTS MP3 failed (${res.status}): ${body}`);
+  for (let i = 0; i < outLen; i++) {
+    const srcIdx = Math.floor(i * ratio);
+    const sample = Math.max(-1, Math.min(1, pcm[srcIdx]));
+    const int16 = Math.round(sample * 32767);
+    out[i] = linearToMulaw(int16);
   }
 
-  const arrayBuf = await res.arrayBuffer();
-  log.info(`[elevenlabs] Got ${arrayBuf.byteLength} bytes of MP3 audio`);
-  return Buffer.from(arrayBuf);
+  return out;
+}
+
+/** TTS returning mu-law 8kHz — for Twilio phone pipeline. */
+export async function textToSpeechUlaw(text: string): Promise<Buffer> {
+  log.info(`[tts] Ulaw request via Edge TTS: "${text.slice(0, 80)}..."`);
+
+  const mp3Buffer = await edgeTtsToMp3(text, DEFAULT_VOICE);
+
+  // Decode MP3 to raw PCM using Web Audio-style decoding
+  // Use AudioContext-like approach: spawn ffmpeg if available, else basic conversion
+  try {
+    const { execSync } = await import("node:child_process");
+    // ffmpeg: MP3 → raw PCM 16-bit LE 8kHz mono → then encode to mulaw
+    const pcmBuffer = execSync(
+      `ffmpeg -i pipe:0 -f s16le -acodec pcm_s16le -ar 8000 -ac 1 pipe:1`,
+      { input: mp3Buffer, maxBuffer: 10 * 1024 * 1024, stdio: ["pipe", "pipe", "ignore"] },
+    );
+    // Convert s16le PCM to mulaw
+    const out = Buffer.alloc(pcmBuffer.length / 2);
+    for (let i = 0; i < out.length; i++) {
+      const sample = pcmBuffer.readInt16LE(i * 2);
+      out[i] = linearToMulaw(sample);
+    }
+    log.info(`[tts] Got ${out.length} bytes of ulaw audio via ffmpeg`);
+    return out;
+  } catch {
+    // ffmpeg not available — use raw MP3 and log warning
+    log.warn(`[tts] ffmpeg not available — returning MP3 for Twilio (may not work for streaming)`);
+    return mp3Buffer;
+  }
+}
+
+/** TTS returning MP3 — for dashboard, Telegram voice messages, wake word. */
+export async function textToSpeechMp3(text: string): Promise<Buffer> {
+  log.info(`[tts] MP3 request via Edge TTS: "${text.slice(0, 80)}..."`);
+  const mp3 = await edgeTtsToMp3(text, DEFAULT_VOICE);
+  log.info(`[tts] Got ${mp3.length} bytes of MP3 audio`);
+  return mp3;
 }
