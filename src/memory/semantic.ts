@@ -8,6 +8,7 @@ import { config } from "../config/env.js";
 import { getDb, getSummary, getTurns } from "../storage/store.js";
 import { log } from "../utils/log.js";
 import { calculateTrust, type DataKind } from "./trust-decay.js";
+import { defer } from "./deferred.js";
 
 // --- Types ---
 
@@ -608,12 +609,16 @@ export async function extractAndStoreMemories(chatId: number, conversation: stri
       if (!mem.content || typeof mem.content !== "string" || mem.content.length < 5) continue;
       const category = validCategories.has(mem.category) ? mem.category as MemoryCategory : "knowledge";
 
-      try {
-        await addMemory(mem.content, category, "auto", chatId);
-        stored++;
-      } catch (err) {
-        log.debug(`[semantic] Failed to store memory: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      // Defer embedding-heavy addMemory to background queue
+      const content = mem.content;
+      defer(async () => {
+        try {
+          await addMemory(content, category, "auto", chatId);
+        } catch (err) {
+          log.debug(`[semantic] Deferred store failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      });
+      stored++;
     }
 
     return stored;

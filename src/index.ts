@@ -17,6 +17,7 @@ import { startXttsServer } from "./voice/xttsLauncher.js";
 import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
 import { startAgents, shutdownAgents } from "./agents/startup.js";
 import { cleanupDatabase } from "./storage/store.js";
+import { startDeferredQueue, stopDeferredQueue } from "./memory/deferred.js";
 import { startDashboard } from "./dashboard/server.js";
 import { isOllamaAvailable } from "./llm/ollamaClient.js";
 import { emitHook } from "./hooks/hooks.js";
@@ -129,6 +130,7 @@ async function main() {
     log.info(`[bastilon] ${signal} received — shutting down gracefully...`);
     shutdownAgents();
     stopScheduler();
+    stopDeferredQueue().catch(() => {});
     // Give in-flight requests up to 5 seconds to complete
     setTimeout(() => {
       log.info("[bastilon] Grace period ended — exiting.");
@@ -212,6 +214,9 @@ async function main() {
   } catch (err) {
     log.warn(`[xtts] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  // Start deferred memory queue (background processing of embeddings/KG ops)
+  startDeferredQueue();
 
   try {
     // Start scheduler with its own chatId (1) to avoid polluting Nicolas's CLI session

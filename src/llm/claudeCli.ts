@@ -23,6 +23,7 @@ const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 /** Cached file contents — loaded once, avoids repeated disk I/O */
 let _cachedAutonomous: string | null = null;
 let _cachedSoul: string | null = null;
+let _soulMtime = 0;
 
 /** Load AUTONOMOUS.md if it exists (cached after first call) */
 function loadAutonomousPrompt(): string {
@@ -38,18 +39,19 @@ function loadAutonomousPrompt(): string {
   return "";
 }
 
-/** Load SOUL.md if it exists (cached after first call) */
+/** Load SOUL.md if it exists — mtime-aware cache (refreshes when file is edited). */
 function loadSoulPrompt(): string {
-  if (_cachedSoul !== null) return _cachedSoul;
   try {
     const p = path.resolve(process.cwd(), "relay", "SOUL.md");
-    if (fs.existsSync(p)) {
-      _cachedSoul = fs.readFileSync(p, "utf-8");
-      return _cachedSoul;
-    }
-  } catch { /* ignore */ }
-  _cachedSoul = "";
-  return "";
+    if (!fs.existsSync(p)) return "";
+    const stat = fs.statSync(p);
+    if (_cachedSoul !== null && stat.mtimeMs === _soulMtime) return _cachedSoul;
+    _cachedSoul = fs.readFileSync(p, "utf-8");
+    _soulMtime = stat.mtimeMs;
+    return _cachedSoul;
+  } catch {
+    return "";
+  }
 }
 
 /**
