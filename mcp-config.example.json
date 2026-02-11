@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kingston": {
+      "command": "npx",
+      "args": ["tsx", "src/gateway/mcp.ts"],
+      "cwd": "C:\\Users\\Nicolas\\Documents\\Claude\\claude-telegram-relay"
+    }
+  }
+}

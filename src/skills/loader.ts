@@ -34,6 +34,10 @@ export function getSkill(name: string): Skill | undefined {
   return registry.get(name);
 }
 
+export function getRegistry(): Map<string, Skill> {
+  return registry;
+}
+
 export function getAllSkills(): Skill[] {
   return Array.from(registry.values());
 }
