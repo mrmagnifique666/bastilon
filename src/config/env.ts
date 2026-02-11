@@ -178,6 +178,9 @@ function buildConfig() {
     // Free API keys
     newsApiKey: optional("NEWS_API_KEY", ""),
     huggingfaceApiKey: optional("HUGGINGFACE_API_KEY", ""),
+    serperApiKey: optional("SERPER_API_KEY", ""),
+    abstractEmailApiKey: optional("ABSTRACT_EMAIL_API_KEY", ""),
+    abstractPhoneApiKey: optional("ABSTRACT_PHONE_API_KEY", ""),
 
     // Memory management
     memoryMaxItems: Number(optional("MEMORY_MAX_ITEMS", "10000")),

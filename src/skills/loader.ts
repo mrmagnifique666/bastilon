@@ -176,7 +176,7 @@ const TIER1_PREFIXES = [
   "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
   "trading.", "mood.", "soul.", "cron.", "mind.", "kg.", "episodic.", "rules.",
   "planner.", "revenue.", "client.", "selfimprove.", "content.",
-  "news.", "forex.", "nlp.", "solutions.",
+  "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -486,9 +486,21 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/forex.js");
   await import("./builtin/huggingface.js");
   await import("./builtin/solutions.js");
+  await import("./builtin/serper.js");
+  await import("./builtin/abstract-api.js");
+  await import("./builtin/skill-create.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");
+
+  // Load dynamic SKILL.md files (hot-reloadable by Kingston)
+  try {
+    const { loadMarkdownSkills } = await import("./markdown/loader.js");
+    const mdCount = loadMarkdownSkills();
+    if (mdCount > 0) log.info(`Loaded ${mdCount} markdown skill(s) from relay/skills/`);
+  } catch (err) {
+    log.debug(`[skill:md] No markdown skills loaded: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   log.info(`Loaded ${registry.size} built-in skills.`);
 }
