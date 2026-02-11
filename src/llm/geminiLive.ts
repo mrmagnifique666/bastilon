@@ -389,6 +389,18 @@ export class GeminiLiveSession {
       }
     } catch {}
 
+    // 2b. Previous voice conversation turns (chatId 5)
+    try {
+      const voiceTurns = getTurns(this.opts.chatId);
+      const recentVoice = voiceTurns.slice(-20);
+      if (recentVoice.length > 0) {
+        const lines = recentVoice.map(
+          (t) => `[${t.role === "user" ? "Nicolas (voice)" : "Kingston"}] ${(t.content || "").slice(0, 200)}`,
+        );
+        parts.push(`\n[HISTORIQUE VOICE RÉCENT — ${recentVoice.length} messages]\n${lines.join("\n")}`);
+      }
+    } catch {}
+
     // 3. Recent episodic events (today)
     try {
       const db = getDb();

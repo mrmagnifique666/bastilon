@@ -162,6 +162,16 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
     });
   }
 
+  // Cross-channel: include recent voice turns (chatId 5) if not already voice
+  if (chatId !== 5) {
+    const voiceTurns = getTurns(5).slice(-10);
+    if (voiceTurns.length > 0) {
+      messages.push({ role: "system", content: "[RECENT VOICE CONVERSATION]\n" +
+        voiceTurns.map(t => `${t.role === "user" ? "Nicolas (voice)" : "Kingston"}: ${(t.content || "").slice(0, 200)}`).join("\n"),
+      });
+    }
+  }
+
   // Add current user message
   messages.push({ role: "user", content: userMessage });
 

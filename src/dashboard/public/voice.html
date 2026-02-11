@@ -613,7 +613,10 @@ async function processLocalUtterance(text) {
   wakeText.className = '';
 
   try {
-    // 1. Send to Kingston API
+    // 1. Send to Kingston API (with timeout)
+    const chatController = new AbortController();
+    const chatTimeout = setTimeout(() => chatController.abort(), 120000); // 2min max
+
     const chatRes = await fetch(API_BASE + '/api/chat/kingston', {
       method: 'POST',
       headers: {
@@ -621,7 +624,9 @@ async function processLocalUtterance(text) {
         'X-Auth-Token': AUTH_TOKEN,
       },
       body: JSON.stringify({ message: text }),
+      signal: chatController.signal,
     });
+    clearTimeout(chatTimeout);
 
     if (!chatRes.ok) throw new Error('Chat API error: ' + chatRes.status);
     const chatData = await chatRes.json();
@@ -633,6 +638,9 @@ async function processLocalUtterance(text) {
     setStatus('speaking', 'Kingston parle...');
     wakeText.textContent = 'Synthese vocale...';
 
+    const ttsController = new AbortController();
+    const ttsTimeout = setTimeout(() => ttsController.abort(), 30000); // 30s max
+
     const ttsRes = await fetch(API_BASE + '/api/tts', {
       method: 'POST',
       headers: {
@@ -640,7 +648,9 @@ async function processLocalUtterance(text) {
         'X-Auth-Token': AUTH_TOKEN,
       },
       body: JSON.stringify({ text: response.slice(0, 2000), voice: 'fr-male' }),
+      signal: ttsController.signal,
     });
+    clearTimeout(ttsTimeout);
 
     if (ttsRes.ok) {
       const mp3Blob = await ttsRes.blob();
@@ -660,11 +670,17 @@ async function processLocalUtterance(text) {
         };
         localAudio.play().catch(() => resolve());
       });
+    } else {
+      console.warn('TTS failed:', ttsRes.status);
     }
 
   } catch (err) {
     console.error('Local processing error:', err);
-    addMsg('system', 'Erreur: ' + (err.message || 'echec'));
+    if (err.name === 'AbortError') {
+      addMsg('system', 'Timeout — Kingston met trop de temps.');
+    } else {
+      addMsg('system', 'Erreur: ' + (err.message || 'echec'));
+    }
   }
 
   // 3. Resume listening
@@ -794,7 +810,18 @@ function handleServerMessage(msg) {
       break;
 
     case 'session_closed':
-      addMsg('system', 'Session Gemini expiree — reconnexion...');
+      addMsg('system', 'Session Gemini expiree — reconnexion automatique...');
+      // Auto-reconnect: close current WS, reopen after short delay
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      stopMic(); stopPlayback();
+      isSpeaking = false;
+      currentTranscriptEl = null;
+      setTimeout(() => {
+        if (sessionActive) {
+          setStatus('connecting', 'Reconnexion...');
+          connectWS();
+        }
+      }, 1500);
       break;
 
     case 'error':

@@ -310,6 +310,19 @@ async function buildFullPrompt(
     }
   }
 
+  // Recent voice conversation (cross-channel memory — chatId 5)
+  if (chatId !== 5) {
+    const voiceTurns = getTurns(5);
+    const recentVoice = voiceTurns.slice(-10);
+    if (recentVoice.length > 0) {
+      parts.push("\n[RECENT VOICE CONVERSATION]");
+      for (const t of recentVoice) {
+        const label = t.role === "user" ? "Nicolas (voice)" : "Kingston";
+        parts.push(`${label}: ${(t.content || "").slice(0, 200)}`);
+      }
+    }
+  }
+
   // Current message
   parts.push(`\n[CURRENT MESSAGE]\nUser: ${userMessage}`);
 

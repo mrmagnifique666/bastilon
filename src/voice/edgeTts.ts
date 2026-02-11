@@ -31,19 +31,19 @@ export async function edgeTtsToMp3(
   const tts = new MsEdgeTTS();
   const selectedVoice = voice || DEFAULT_VOICE;
 
-  await tts.setMetadata(selectedVoice, MsEdgeTTS.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+  await tts.setMetadata(selectedVoice, "audio-24khz-96kbitrate-mono-mp3");
 
-  const readable = tts.toStream(text);
+  const { audioStream } = tts.toStream(text);
 
   return new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    readable.on("data", (chunk: Buffer) => {
+    audioStream.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
     });
-    readable.on("end", () => {
+    audioStream.on("end", () => {
       resolve(Buffer.concat(chunks));
     });
-    readable.on("error", (err: Error) => {
+    audioStream.on("error", (err: Error) => {
       reject(err);
     });
   });
