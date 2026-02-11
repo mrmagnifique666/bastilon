@@ -237,13 +237,9 @@
 const API_BASE = window.location.origin;
 const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/voice';
 const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
-// Wake word variants — Web Speech API often mistranscribes
-const WAKE_WORDS = [
-  'kingston', 'kengston', 'kingstonn', 'kengstone', 'kingstone',
-  'king stone', 'king ston', 'kington', 'kenston', 'kinston',
-  'kingstown', 'kingstonne', 'kings ton', 'kings tone',
-  'quinston', 'quingston', 'kingstan', 'kinkston',
-];
+// Wake word — phonetic regex matching (catches French STT variations)
+// Matches: kingston, kengston, king stone, quinze tonnes, kinston, etc.
+const WAKE_REGEX = /k[ieéèauo]n[gk]?[sz]?[ez]?\s*t[oaeu]nn?e?s?|qu[ieé]n[gkcsz]?[ez]?\s*[sz]?t[oaeu]nn?e?s?|king\s*ston/i;
 
 // Auth prompt
 if (!AUTH_TOKEN) {
@@ -501,9 +497,9 @@ function startWakeWord() {
       wakeText.textContent = display;
     }
 
-    // Check for wake word in any text (fuzzy matching)
+    // Check for wake word (phonetic regex — catches French STT variations)
     const check = (final || interim).toLowerCase().replace(/[.,!?;:'"]/g, '');
-    if (WAKE_WORDS.some(w => check.includes(w))) {
+    if (WAKE_REGEX.test(check)) {
       onWakeWordDetected();
     }
   };
@@ -561,18 +557,44 @@ function restartWakeWord() {
 }
 
 function onWakeWordDetected() {
-  addMsg('system', '"Kingston" detecte — demarrage conversation...');
+  addMsg('system', '"Kingston" detecte!');
   playBeep(880, 120);
   wakeText.textContent = 'Kingston detecte!';
   wakeText.className = 'heard';
 
   stopWakeWord();
 
-  // Small delay to let speech recognition release the mic
-  setTimeout(() => {
+  // Immediately speak a greeting (like Alexa) then start session
+  speakGreeting().then(() => {
     if (voiceMode === 'local') startLocalSession();
     else startSession();
-  }, 400);
+  });
+}
+
+/** Speak a short greeting immediately after wake word — like Alexa's "ding" + response */
+async function speakGreeting() {
+  const greetings = ['Oui?', 'Je t\'ecoute.', 'Oui, dis-moi.', 'Qu\'est-ce que je peux faire?'];
+  const text = greetings[Math.floor(Math.random() * greetings.length)];
+  addMsg('model', text);
+  setStatus('speaking', 'Kingston...');
+
+  try {
+    const res = await fetch(API_BASE + '/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': AUTH_TOKEN },
+      body: JSON.stringify({ text, voice: 'fr-male' }),
+    });
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      await new Promise(resolve => {
+        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.play().catch(resolve);
+      });
+    }
+  } catch {}
 }
 
 function toggleWakeWord() {
