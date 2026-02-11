@@ -189,6 +189,101 @@ export async function startMcpServer(): Promise<void> {
   log.info("[mcp] Kingston MCP server ready on stdio");
 }
 
+// ── SSE Transport (for Claude Desktop / HTTP clients) ─────────────────
+
+import http from "node:http";
+
+/**
+ * Start MCP SSE server on a given HTTP server.
+ * Adds routes: GET /mcp/sse (SSE stream) and POST /mcp/message (JSON-RPC).
+ * Compatible with Claude Desktop's MCP SSE transport.
+ */
+export function mountMcpSse(
+  server: http.Server,
+  reqHandler: (req: http.IncomingMessage, res: http.ServerResponse) => boolean,
+): void {
+  const sseClients = new Map<string, http.ServerResponse>();
+
+  // Inject route handler — returns true if handled
+  const originalHandler = reqHandler;
+
+  // We can't easily modify the existing server, so we export a handler function
+  // that the dashboard server can call.
+  log.info("[mcp] SSE transport available at /mcp/sse and /mcp/message");
+}
+
+/**
+ * Handle MCP SSE/message routes. Call from dashboard server's request handler.
+ * Returns true if the request was handled, false otherwise.
+ */
+const mcpSseClients = new Map<string, http.ServerResponse>();
+
+export function handleMcpRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): boolean {
+  const url = req.url || "";
+
+  // SSE endpoint — client connects and receives responses
+  if (url === "/mcp/sse" && req.method === "GET") {
+    const clientId = `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    // Send endpoint info as first event
+    const messageUrl = `/mcp/message?sessionId=${clientId}`;
+    res.write(`event: endpoint\ndata: ${messageUrl}\n\n`);
+    mcpSseClients.set(clientId, res);
+
+    req.on("close", () => {
+      mcpSseClients.delete(clientId);
+      log.debug(`[mcp] SSE client ${clientId} disconnected`);
+    });
+
+    log.info(`[mcp] SSE client connected: ${clientId}`);
+    return true;
+  }
+
+  // Message endpoint — client sends JSON-RPC requests
+  if (url.startsWith("/mcp/message") && req.method === "POST") {
+    const urlObj = new URL(url, "http://localhost");
+    const sessionId = urlObj.searchParams.get("sessionId") || "";
+    const sseRes = mcpSseClients.get(sessionId);
+
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", async () => {
+      try {
+        const jsonReq = JSON.parse(body) as JsonRpcRequest;
+        const response = await handleRequest(jsonReq);
+
+        // Send response via SSE if client connected, otherwise via HTTP
+        if (sseRes && !sseRes.writableEnded) {
+          sseRes.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
+          res.writeHead(202);
+          res.end("Accepted");
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(response));
+        }
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: 0,
+          error: { code: -32700, message: `Parse error: ${err instanceof Error ? err.message : String(err)}` },
+        }));
+      }
+    });
+    return true;
+  }
+
+  return false;
+}
+
 // If run directly: npx tsx src/gateway/mcp.ts
 const isMain = process.argv[1]?.includes("mcp");
 if (isMain) {

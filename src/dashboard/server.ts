@@ -575,6 +575,32 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!checkAuth(req, res)) return;
       return json(res, apiMemoryItems());
     }
+    // ── Webhook trigger endpoint ──
+    if (pathname.startsWith("/api/webhook/") && method === "POST") {
+      const webhookId = pathname.slice("/api/webhook/".length);
+      const body = await parseBody(req);
+      try {
+        const { handleWebhookTrigger } = await import("../workflows/engine.js");
+        const run = await handleWebhookTrigger(webhookId, (body as Record<string, unknown>) || {});
+        if (!run) return sendJson(res, 404, { error: `No workflow registered for webhook: ${webhookId}` });
+        return json(res, { ok: true, run_id: run.id, status: run.status });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    // ── Workflow callback endpoint ──
+    if (pathname.startsWith("/api/callback/") && method === "POST") {
+      const runId = pathname.slice("/api/callback/".length);
+      const body = await parseBody(req);
+      try {
+        const { triggerCallback } = await import("../workflows/engine.js");
+        const triggered = triggerCallback(runId, (body as Record<string, unknown>) || {});
+        if (!triggered) return sendJson(res, 404, { error: `No pending callback for run: ${runId}` });
+        return json(res, { ok: true });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
     if (pathname === "/api/config" && method === "GET") {
       if (!checkAuth(req, res)) return;
       return json(res, apiConfig());
@@ -794,6 +820,12 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         log.error(`[visionclaw] Error: ${errMsg}`);
         return sendJson(res, 500, { error: { message: errMsg, type: "server_error" } });
       }
+    }
+
+    // ── MCP SSE transport ──
+    if (pathname.startsWith("/mcp/")) {
+      const { handleMcpRequest } = await import("../gateway/mcp.js");
+      if (handleMcpRequest(req, res)) return;
     }
 
     if (pathname.startsWith("/api/") || pathname.startsWith("/v1/")) {

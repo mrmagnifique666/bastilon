@@ -5,8 +5,12 @@ import { registerSkill } from "../loader.js";
 import {
   loadWorkflow, listWorkflows, saveWorkflow, runWorkflow,
   resumeWorkflow, listRuns, loadRun,
+  registerWebhook, listWebhooks, triggerCallback, initWebhooks,
   type WorkflowDefinition, type WorkflowStep,
 } from "../../workflows/engine.js";
+
+// Auto-register webhooks on skill load
+try { initWebhooks(); } catch { /* workflows dir may not exist yet */ }
 
 registerSkill({
   name: "workflow.create",
@@ -183,5 +187,64 @@ registerSkill({
       `\nVariables: ${JSON.stringify(run.variables).slice(0, 500)}\n` +
       `\nSteps:\n${stepSummary || "  (none)"}`
     );
+  },
+});
+
+// ── Webhook Skills ──
+
+registerSkill({
+  name: "workflow.webhook",
+  description: "Register a webhook trigger for a workflow. Incoming POST to /api/webhook/{id} will start the workflow.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      webhook_id: { type: "string", description: "Unique webhook identifier (used in URL)" },
+      workflow_name: { type: "string", description: "Workflow to trigger" },
+    },
+    required: ["webhook_id", "workflow_name"],
+  },
+  async execute(args): Promise<string> {
+    const webhookId = String(args.webhook_id).replace(/[^a-zA-Z0-9-_]/g, "");
+    const workflowName = String(args.workflow_name);
+
+    const wf = loadWorkflow(workflowName);
+    if (!wf) return `Workflow not found: ${workflowName}`;
+
+    registerWebhook(webhookId, workflowName);
+    return `Webhook registered: POST /api/webhook/${webhookId} → workflow "${workflowName}"`;
+  },
+});
+
+registerSkill({
+  name: "workflow.webhooks",
+  description: "List all registered webhook triggers.",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    const hooks = listWebhooks();
+    if (hooks.length === 0) return "No webhooks registered.";
+    return hooks.map(h => `- /api/webhook/${h.webhookId} → ${h.workflowName}`).join("\n");
+  },
+});
+
+registerSkill({
+  name: "workflow.callback",
+  description: "Send a callback to a waiting workflow step. Used when a step has wait_callback: true.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      run_id: { type: "string", description: "Workflow run ID waiting for callback" },
+      data: { type: "string", description: "JSON data to pass to the waiting step" },
+    },
+    required: ["run_id"],
+  },
+  async execute(args): Promise<string> {
+    const data = args.data ? JSON.parse(String(args.data)) : {};
+    const triggered = triggerCallback(String(args.run_id), data);
+    return triggered
+      ? `Callback sent to run ${args.run_id}`
+      : `No pending callback for run ${args.run_id}`;
   },
 });

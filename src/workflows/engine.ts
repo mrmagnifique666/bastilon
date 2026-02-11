@@ -39,6 +39,14 @@ export interface WorkflowStep {
   on_error?: string;
   /** Store result in this variable name */
   output?: string;
+  /** Sub-pipeline: execute another workflow by name */
+  pipeline?: string;
+  /** Wait for external callback (webhook/event) before continuing */
+  wait_callback?: boolean;
+  /** Timeout in ms for wait_callback (default: 1h) */
+  wait_timeout?: number;
+  /** Merge strategy for parallel results: "all" | "first" | "concat" */
+  merge?: MergeStrategy;
 }
 
 export interface WorkflowDefinition {
@@ -49,6 +57,10 @@ export interface WorkflowDefinition {
   steps: WorkflowStep[];
   /** Notification on completion */
   notify?: string;
+  /** Error workflow to run if this workflow fails */
+  on_error_workflow?: string;
+  /** Webhook triggers that start this workflow */
+  webhook_id?: string;
 }
 
 export type WorkflowStatus = "pending" | "running" | "paused" | "completed" | "failed";
@@ -253,7 +265,7 @@ export function loadWorkflow(name: string): WorkflowDefinition | null {
 }
 
 /** List all available workflows */
-export function listWorkflows(): Array<{ name: string; description: string }> {
+export function listWorkflows(): Array<{ name: string; description: string; webhook_id?: string }> {
   if (!fs.existsSync(WORKFLOWS_DIR)) return [];
   const files = fs.readdirSync(WORKFLOWS_DIR).filter(f =>
     f.endsWith(".json") || f.endsWith(".yaml") || f.endsWith(".yml")
@@ -263,11 +275,24 @@ export function listWorkflows(): Array<{ name: string; description: string }> {
     try {
       const content = fs.readFileSync(path.join(WORKFLOWS_DIR, f), "utf-8");
       const wf = parseWorkflow(content);
-      return { name, description: wf.description };
+      return { name, description: wf.description, webhook_id: wf.webhook_id };
     } catch {
       return { name, description: "" };
     }
   });
+}
+
+/** Load all workflows and register their webhooks */
+export function initWebhooks(): void {
+  const workflows = listWorkflows();
+  for (const wf of workflows) {
+    if (wf.webhook_id) {
+      registerWebhook(wf.webhook_id, wf.name);
+    }
+  }
+  if (webhookTriggers.size > 0) {
+    log.info(`[workflow] Registered ${webhookTriggers.size} webhook trigger(s)`);
+  }
 }
 
 /** Save a workflow definition */
@@ -282,6 +307,7 @@ export function saveWorkflow(name: string, definition: WorkflowDefinition): void
 async function executeStep(
   step: WorkflowStep,
   vars: Record<string, unknown>,
+  runId?: string,
 ): Promise<{ status: string; result: string; duration_ms: number }> {
   const startTime = Date.now();
 
@@ -290,15 +316,39 @@ async function executeStep(
     return { status: "skipped", result: "Condition not met", duration_ms: 0 };
   }
 
-  // Handle parallel steps
+  // Handle sub-pipeline
+  if (step.pipeline) {
+    const pipelineName = String(interpolate(step.pipeline, vars));
+    log.info(`[workflow] Step ${step.id}: executing sub-pipeline "${pipelineName}"`);
+    return executeSubPipeline(pipelineName, vars);
+  }
+
+  // Handle parallel steps with merge
   if (step.parallel && step.parallel.length > 0) {
     const results = await Promise.all(
-      step.parallel.map(s => executeStep(s, vars))
+      step.parallel.map(s => executeStep(s, vars, runId))
     );
+    if (step.merge) {
+      return mergeResults(results, step.merge);
+    }
     const combined = results.map((r, i) =>
       `[${step.parallel![i].id || i}] ${r.status}: ${r.result}`
     ).join("\n");
     return { status: "completed", result: combined, duration_ms: Date.now() - startTime };
+  }
+
+  // Handle wait/callback
+  if (step.wait_callback && runId) {
+    const timeoutMs = step.wait_timeout || 3600000;
+    log.info(`[workflow] Step ${step.id}: waiting for callback (timeout: ${timeoutMs / 1000}s)`);
+    try {
+      const callbackData = await waitForCallback(runId, timeoutMs);
+      // Merge callback data into vars
+      Object.assign(vars, callbackData);
+      return { status: "completed", result: JSON.stringify(callbackData), duration_ms: Date.now() - startTime };
+    } catch (err) {
+      return { status: "error", result: err instanceof Error ? err.message : String(err), duration_ms: Date.now() - startTime };
+    }
   }
 
   // Execute skill
@@ -375,13 +425,18 @@ export async function runWorkflow(
     }
 
     // Execute step
-    const result = await executeStep(step, vars);
+    const result = await executeStep(step, vars, runId);
     stepResults[stepId] = result;
 
     // Store output variable
     if (step.output && result.status === "completed") {
       vars[step.output] = result.result;
     }
+
+    // Update state after each step (enables crash recovery)
+    db.prepare(
+      "UPDATE workflow_runs SET variables = ?, step_results = ? WHERE id = ?"
+    ).run(JSON.stringify(vars), JSON.stringify(stepResults), runId);
 
     // Handle error
     if (result.status === "error") {
@@ -407,7 +462,16 @@ export async function runWorkflow(
   ).run(finalStatus, JSON.stringify(vars), JSON.stringify(stepResults), error, runId);
 
   log.info(`[workflow] Workflow "${name}" ${finalStatus} (run: ${runId})`);
-  return loadRun(runId)!;
+
+  const finalRun = loadRun(runId)!;
+
+  // Trigger error workflow if failed
+  if (finalStatus === "failed" && definition.on_error_workflow) {
+    // Fire and forget — don't block the caller
+    runErrorWorkflow(definition.on_error_workflow, finalRun).catch(() => {});
+  }
+
+  return finalRun;
 }
 
 /** Resume a paused workflow (after approval) */
@@ -456,12 +520,17 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
     }
 
     // Execute step
-    const result = await executeStep(step, vars);
+    const result = await executeStep(step, vars, runId);
     stepResults[stepId] = result;
 
     if (step.output && result.status === "completed") {
       vars[step.output] = result.result;
     }
+
+    // Persist state after each step
+    db.prepare(
+      "UPDATE workflow_runs SET variables = ?, step_results = ? WHERE id = ?"
+    ).run(JSON.stringify(vars), JSON.stringify(stepResults), runId);
 
     if (result.status === "error") {
       if (step.on_error) {
@@ -505,6 +574,159 @@ export function loadRun(runId: string): WorkflowRun | null {
     completed_at: row.completed_at,
     error: row.error,
   };
+}
+
+// ── Sub-Pipeline Support ──────────────────────────────────────────────
+
+/**
+ * Execute a sub-pipeline (another workflow) as a step.
+ * Supports passing variables between parent and child workflows.
+ */
+async function executeSubPipeline(
+  pipelineRef: string,
+  vars: Record<string, unknown>,
+): Promise<{ status: string; result: string; duration_ms: number }> {
+  const startTime = Date.now();
+  try {
+    const run = await runWorkflow(pipelineRef, { ...vars });
+    const resultStr = run.status === "completed"
+      ? JSON.stringify(run.variables).slice(0, 2000)
+      : run.error || `Sub-pipeline ${run.status}`;
+    return { status: run.status === "completed" ? "completed" : "error", result: resultStr, duration_ms: Date.now() - startTime };
+  } catch (err) {
+    return { status: "error", result: err instanceof Error ? err.message : String(err), duration_ms: Date.now() - startTime };
+  }
+}
+
+// ── Wait/Callback Support ─────────────────────────────────────────────
+
+/** Pending callbacks: runId → { resolve, timer } */
+const pendingCallbacks = new Map<string, {
+  resolve: (data: Record<string, unknown>) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+/**
+ * Pause workflow execution and wait for an external callback.
+ * The workflow resumes when `triggerCallback(runId, data)` is called.
+ */
+function waitForCallback(runId: string, timeoutMs: number = 3600000): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingCallbacks.delete(runId);
+      reject(new Error(`Callback timeout after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    pendingCallbacks.set(runId, { resolve, timer });
+  });
+}
+
+/**
+ * Trigger a pending callback for a workflow run.
+ * Called by webhook or external event.
+ */
+export function triggerCallback(runId: string, data: Record<string, unknown> = {}): boolean {
+  const pending = pendingCallbacks.get(runId);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  pendingCallbacks.delete(runId);
+  pending.resolve(data);
+  log.info(`[workflow] Callback triggered for run ${runId}`);
+  return true;
+}
+
+// ── Merge Pattern ─────────────────────────────────────────────────────
+
+type MergeStrategy = "all" | "first" | "concat";
+
+function mergeResults(
+  results: Array<{ status: string; result: string; duration_ms: number }>,
+  strategy: MergeStrategy = "all",
+): { status: string; result: string; duration_ms: number } {
+  const startTime = Date.now();
+  switch (strategy) {
+    case "first":
+      return results[0] || { status: "error", result: "No results", duration_ms: 0 };
+    case "concat":
+      return {
+        status: results.every(r => r.status === "completed") ? "completed" : "error",
+        result: results.map(r => r.result).join("\n---\n"),
+        duration_ms: Math.max(...results.map(r => r.duration_ms)),
+      };
+    case "all":
+    default:
+      return {
+        status: results.every(r => r.status === "completed") ? "completed" : "error",
+        result: JSON.stringify(results.map(r => ({ status: r.status, result: r.result.slice(0, 500) }))),
+        duration_ms: Math.max(...results.map(r => r.duration_ms)),
+      };
+  }
+}
+
+// ── Error Workflows ───────────────────────────────────────────────────
+
+/** Run an error handler workflow when a pipeline fails */
+async function runErrorWorkflow(
+  errorWorkflowName: string,
+  failedRun: WorkflowRun,
+): Promise<void> {
+  try {
+    const errorInputs = {
+      failed_workflow: failedRun.workflow_name,
+      failed_run_id: failedRun.id,
+      error: failedRun.error || "Unknown error",
+      failed_step: failedRun.current_step,
+    };
+    log.info(`[workflow] Running error workflow "${errorWorkflowName}" for failed run ${failedRun.id}`);
+    await runWorkflow(errorWorkflowName, errorInputs);
+  } catch (err) {
+    log.warn(`[workflow] Error workflow "${errorWorkflowName}" failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ── Webhook Triggers ──────────────────────────────────────────────────
+
+/** Registry of webhook-triggered workflows */
+const webhookTriggers = new Map<string, { workflowName: string; inputMapping?: Record<string, string> }>();
+
+/** Register a webhook trigger for a workflow */
+export function registerWebhook(
+  webhookId: string,
+  workflowName: string,
+  inputMapping?: Record<string, string>,
+): void {
+  webhookTriggers.set(webhookId, { workflowName, inputMapping });
+  log.info(`[workflow] Registered webhook "${webhookId}" → workflow "${workflowName}"`);
+}
+
+/** Handle an incoming webhook trigger */
+export async function handleWebhookTrigger(
+  webhookId: string,
+  payload: Record<string, unknown>,
+): Promise<WorkflowRun | null> {
+  const trigger = webhookTriggers.get(webhookId);
+  if (!trigger) return null;
+
+  // Map payload to workflow inputs
+  const inputs: Record<string, unknown> = {};
+  if (trigger.inputMapping) {
+    for (const [inputKey, payloadKey] of Object.entries(trigger.inputMapping)) {
+      inputs[inputKey] = payload[payloadKey] ?? payload[inputKey];
+    }
+  } else {
+    Object.assign(inputs, payload);
+  }
+
+  log.info(`[workflow] Webhook "${webhookId}" triggered workflow "${trigger.workflowName}"`);
+  return runWorkflow(trigger.workflowName, inputs);
+}
+
+/** List all registered webhook triggers */
+export function listWebhooks(): Array<{ webhookId: string; workflowName: string }> {
+  return Array.from(webhookTriggers.entries()).map(([webhookId, t]) => ({
+    webhookId,
+    workflowName: t.workflowName,
+  }));
 }
 
 /** List recent workflow runs */
