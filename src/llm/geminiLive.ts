@@ -22,7 +22,7 @@ import {
 import { normalizeArgs } from "./gemini.js";
 import { isToolPermitted } from "../security/policy.js";
 import { buildSemanticContext } from "../memory/semantic.js";
-import { getTurns } from "../storage/store.js";
+import { getTurns, getDb } from "../storage/store.js";
 
 const MODEL = "gemini-2.5-flash-native-audio-latest";
 const SESSION_TIMEOUT_MS = 14 * 60 * 1000;
@@ -222,16 +222,9 @@ export class GeminiLiveSession {
       return;
     }
 
-    // Pre-fetch semantic memories (fire once, cached for session)
+    // Pre-fetch rich context (fire once, cached for session)
     if (!this.cachedMemoryContext) {
-      try {
-        this.cachedMemoryContext = await buildSemanticContext(
-          "Nicolas profil préférences projets",
-          5,
-        );
-      } catch {
-        this.cachedMemoryContext = "";
-      }
+      this.cachedMemoryContext = await this.buildRichContext();
     }
 
     const url =
@@ -365,6 +358,68 @@ export class GeminiLiveSession {
     }
   }
 
+  /** Build rich context: memories + recent Telegram + episodic events + notes. */
+  private async buildRichContext(): Promise<string> {
+    const parts: string[] = [];
+
+    // 1. Semantic memories — broad query, more results
+    try {
+      const mem = await buildSemanticContext(
+        "Nicolas profil préférences projets activités récentes travail aujourd'hui Kingston Bastilon",
+        15,
+      );
+      if (mem) parts.push(mem);
+    } catch {}
+
+    // 2. Recent Telegram conversation (last 20 turns from main chat)
+    try {
+      const telegramChatId = config.allowedUsers?.[0] || this.opts.userId;
+      const turns = getTurns(telegramChatId);
+      const recent = turns.slice(-20);
+      if (recent.length > 0) {
+        const lines = recent.map(
+          (t) => `[${t.role === "user" ? "Nicolas" : "Kingston"}] ${(t.content || "").slice(0, 200)}`,
+        );
+        parts.push(`\n[HISTORIQUE TELEGRAM RÉCENT — ${recent.length} messages]\n${lines.join("\n")}`);
+      }
+    } catch {}
+
+    // 3. Recent episodic events (today)
+    try {
+      const db = getDb();
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const events = db
+        .prepare(
+          `SELECT description, event_type, importance FROM episodic_events
+           WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 10`,
+        )
+        .all(todayStart.toISOString()) as { description: string; event_type: string; importance: number }[];
+      if (events.length > 0) {
+        const lines = events.map(
+          (e) => `- [${e.event_type}] ${e.description.slice(0, 150)}`,
+        );
+        parts.push(`\n[ÉVÉNEMENTS AUJOURD'HUI]\n${lines.join("\n")}`);
+      }
+    } catch {}
+
+    // 4. Recent notes (last 5)
+    try {
+      const db = getDb();
+      const notes = db
+        .prepare(`SELECT text FROM notes ORDER BY created_at DESC LIMIT 5`)
+        .all() as { text: string }[];
+      if (notes.length > 0) {
+        const lines = notes.map((n) => `- ${n.text.slice(0, 150)}`);
+        parts.push(`\n[NOTES RÉCENTES]\n${lines.join("\n")}`);
+      }
+    } catch {}
+
+    const ctx = parts.join("\n");
+    log.info(`[gemini-live] Rich context: ${ctx.length} chars (mem+telegram+episodic+notes)`);
+    return ctx;
+  }
+
   /** Save conversation log as a note so Kingston remembers next session. */
   private saveConversationSummary(): void {
     if (this.conversationLog.length < 2) return;
@@ -426,7 +481,7 @@ export class GeminiLiveSession {
       hour12: false,
     });
 
-    // Compact system prompt
+    // Rich system prompt — same level of context as Telegram Kingston
     const systemParts: string[] = [
       `Tu es Kingston, une IA autonome sur Bastilon OS.`,
       `Ton utilisateur est Nicolas, entrepreneur francophone au Canada (Gatineau, Québec).`,
@@ -435,23 +490,31 @@ export class GeminiLiveSession {
       `## Mode vocal`,
       `Conversation vocale temps réel. Parle ${lang === "fr" ? "français" : "anglais"} naturellement.`,
       `Sois concis — pas de markdown, pas de listes. Tu PARLES, tu n'écris pas.`,
-      `Si tu ne sais pas, dis-le. Ne fabrique jamais de données.`,
-      `Quand tu utilises un outil, dis brièvement ce que tu fais.`,
+      `Si tu ne sais pas, utilise tes outils pour trouver l'information.`,
+      `Ne fabrique jamais de données.`,
+      ``,
+      `## Capacités`,
+      `Tu as ${this.toolDecls.length} outils disponibles. Tu peux AGIR, pas juste parler:`,
+      `- Lire/écrire des fichiers, exécuter du code, gérer des notes`,
+      `- Chercher dans ta mémoire (memory_search), consulter le web (web_search)`,
+      `- Envoyer des messages Telegram, gérer les emails, le calendrier`,
+      `- Consulter l'historique (telegram_history), les agents, le trading`,
+      `- Gérer des cron jobs, des rappels, des plans`,
+      `Quand Nicolas te demande quelque chose, FAIS-LE avec les outils. Ne dis pas "je ne peux pas".`,
       ``,
       `## Date et heure`,
       `${dateStr}, ${timeStr} (heure de l'Est / America/Toronto).`,
-      `Utilise toujours le tool time_now pour confirmer l'heure exacte si nécessaire.`,
     ];
 
-    // Inject semantic memories
+    // Inject rich context (memories + telegram history + episodic + notes)
     if (this.cachedMemoryContext) {
-      systemParts.push(``, `## Mémoire`, this.cachedMemoryContext);
+      systemParts.push(``, `## Contexte`, this.cachedMemoryContext);
     }
 
     // Inject recent conversation log for continuity across reconnects
     if (this.conversationLog.length > 0) {
       const recent = this.conversationLog.slice(-10).join("\n");
-      systemParts.push(``, `## Conversation récente (contexte)`, recent);
+      systemParts.push(``, `## Conversation vocale en cours`, recent);
     }
 
     const systemText = systemParts.join("\n");
