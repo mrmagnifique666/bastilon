@@ -77,8 +77,16 @@
 - [TODO] Sandbox execution — Docker containers pour tool execution
 - [DONE] RAG dans les pipelines — step.rag_query + step.rag_limit dans le workflow engine
 
+## Priority 10 — Token Optimization (OpenClaw-inspired) — ALL DONE
+
+- [DONE] Token usage tracker — per provider per day (token_usage table + analytics.tokens skill)
+- [DONE] Rate delay enforcement — configurable min delay between API calls per provider
+- [DONE] USER.md workspace file — user context loaded into all LLM system prompts
+- [DONE] Context size monitoring — warns when system prompt exceeds Ollama context limit
+
 ## Completed (archive)
 
+- [DONE] Token optimization — tracking, rate delays, USER.md, context monitoring — 2026-02-11
 - [DONE] Kingston Autonomy — strategic trading, max moltbook, enhanced briefing, rules graduation, executor upgrade — 2026-02-11
 - [DONE] Workflow Engine v2 — sub-pipelines, wait/callback, merge, error workflows, webhooks, MCP SSE — 2026-02-11
 - [DONE] Voice page fix — token prompt loop, uptime calculation, WS retry — 2026-02-11
