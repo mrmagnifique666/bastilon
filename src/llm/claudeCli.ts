@@ -16,6 +16,7 @@ import { getCompactToolCatalog } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { buildSemanticContext } from "../memory/semantic.js";
+import { loadSessionLog } from "./gemini.js";
 
 const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 
@@ -82,6 +83,12 @@ function buildCoreIdentity(isAdmin: boolean, chatId?: number): string {
   lines.push(`- Date: ${new Date().toISOString().split("T")[0]}`);
   lines.push(`- Admin: ${isAdmin ? "yes" : "no"}`);
   if (chatId) lines.push(`- Telegram chat ID: ${chatId}`);
+
+  // Inject session log (unified cross-channel knowledge)
+  const sessionLog = loadSessionLog();
+  if (sessionLog) {
+    lines.push("", `[SESSION LOG — shared across all channels]`, sessionLog);
+  }
 
   return lines.join("\n");
 }
@@ -195,6 +202,12 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     if (lifeboat) {
       lines.push("", lifeboat);
     }
+  }
+
+  // Inject session log (unified cross-channel knowledge)
+  const sessionLog = loadSessionLog();
+  if (sessionLog) {
+    lines.push("", `## Session Log (shared across all channels)`, sessionLog);
   }
 
   return lines.join("\n");

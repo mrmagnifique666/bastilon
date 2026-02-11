@@ -4,6 +4,8 @@
  * Falls back to Claude CLI on failure (rate limit, safety filter, etc.).
  */
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { getTurns } from "../storage/store.js";
@@ -73,6 +75,28 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_TOOL_RESULT_LENGTH = 8000;
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000];
+
+// --- Session log (unified cross-channel knowledge) ---
+
+let _cachedSessionLog: string | null = null;
+let _sessionLogMtime = 0;
+
+/** Load relay/SESSION_LOG.md — cached, refreshes if file changed. */
+export function loadSessionLog(): string {
+  try {
+    const p = path.resolve(process.cwd(), "relay", "SESSION_LOG.md");
+    if (!fs.existsSync(p)) return "";
+    const stat = fs.statSync(p);
+    if (_cachedSessionLog !== null && stat.mtimeMs === _sessionLogMtime) {
+      return _cachedSessionLog;
+    }
+    _cachedSessionLog = fs.readFileSync(p, "utf-8");
+    _sessionLogMtime = stat.mtimeMs;
+    return _cachedSessionLog;
+  } catch {
+    return "";
+  }
+}
 
 // --- System instruction ---
 
@@ -166,6 +190,12 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     if (lifeboat) {
       lines.push("", lifeboat);
     }
+  }
+
+  // Inject session log (unified cross-channel knowledge)
+  const sessionLog = loadSessionLog();
+  if (sessionLog) {
+    lines.push("", `## Session Log (shared across all channels)`, sessionLog);
   }
 
   return lines.join("\n");

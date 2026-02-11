@@ -19,7 +19,7 @@ import {
   validateArgs as validateSkillArgs,
   type Skill,
 } from "../skills/loader.js";
-import { normalizeArgs } from "./gemini.js";
+import { normalizeArgs, loadSessionLog } from "./gemini.js";
 import { isToolPermitted } from "../security/policy.js";
 import { buildSemanticContext, extractAndStoreMemories } from "../memory/semantic.js";
 import { getTurns, getDb, addTurn } from "../storage/store.js";
@@ -558,6 +558,12 @@ export class GeminiLiveSession {
       `## Date et heure`,
       `${dateStr}, ${timeStr} (heure de l'Est / America/Toronto).`,
     ];
+
+    // Inject session log (unified cross-channel knowledge — services, API keys, recent improvements)
+    const sessionLog = loadSessionLog();
+    if (sessionLog) {
+      systemParts.push(``, `## Session Log`, sessionLog);
+    }
 
     // Inject rich context (memories + telegram history + episodic + notes)
     if (this.cachedMemoryContext) {

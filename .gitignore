@@ -50,6 +50,7 @@ PROSPECTS_*.md
 OUTREACH_*.md
 INDEX_SCOUT_*.md
 SESSION_*.md
+!relay/SESSION_LOG.md
 SCOUT_*.txt
 SCOUT_*.json
 START_HERE_*.md
