@@ -206,7 +206,7 @@
     <div class="webcam-tag" id="camTag">Webcam</div>
   </div>
   <div class="transcript" id="transcript">
-    <div class="msg system">Dis "Kingston" pour demarrer la conversation, ou appuie sur le bouton.</div>
+    <div class="msg system">Dis "Computer" pour demarrer la conversation, ou appuie sur le bouton.</div>
   </div>
 </div>
 
@@ -226,7 +226,7 @@
     <input id="textIn" placeholder="Ou tape ton message..." />
     <button id="textSend">Envoyer</button>
   </div>
-  <div class="hint" id="hintText">Local — Web Speech + Edge TTS &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; Dis "Kingston" pour activer</div>
+  <div class="hint" id="hintText">Local — Web Speech + Edge TTS &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; Dis "Computer" pour activer</div>
 </div>
 
 <script>
@@ -237,9 +237,9 @@
 const API_BASE = window.location.origin;
 const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/voice';
 const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
-// Wake word — phonetic regex matching (catches French STT variations)
-// Matches: kingston, kengston, king stone, quinze tonnes, kinston, etc.
-const WAKE_REGEX = /k[ieéèauo]n[gk]?[sz]?[ez]?\s*t[oaeu]nn?e?s?|qu[ieé]n[gkcsz]?[ez]?\s*[sz]?t[oaeu]nn?e?s?|king\s*ston/i;
+// Wake word — "Computer" (well recognized by French & English STT)
+const WAKE_REGEX = /comput[eè]r|comput[eè]ur|komput[eè]r|ordinat[eè]ur|computer/i;
+const WAKE_DISPLAY = 'Computer';
 
 // Auth prompt
 if (!AUTH_TOKEN) {
@@ -420,13 +420,13 @@ function updateModeUI() {
     modeBtn.style.borderColor = '#4caf50';
     modeBtn.style.color = '#4caf50';
     modeLabel.textContent = 'Local';
-    hintText.textContent = 'Local — Web Speech + Edge TTS ($0)  |  Escape = stop  |  Dis "Kingston" pour activer';
+    hintText.textContent = 'Local — Web Speech + Edge TTS ($0)  |  Escape = stop  |  Dis "Computer" pour activer';
   } else {
     modeBtn.innerHTML = '&#x1F504; Cloud';
     modeBtn.style.borderColor = '#a78bfa';
     modeBtn.style.color = '#a78bfa';
     modeLabel.textContent = 'Gemini Live';
-    hintText.textContent = 'Gemini Live — conversation naturelle en temps reel  |  Escape = stop  |  Dis "Kingston" pour activer';
+    hintText.textContent = 'Gemini Live — conversation naturelle en temps reel  |  Escape = stop  |  Dis "Computer" pour activer';
   }
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches
     || window.navigator.standalone === true;
@@ -479,7 +479,7 @@ function startWakeWord() {
     wakeText.textContent = 'En ecoute...';
     wakeText.className = '';
     if (!sessionActive) {
-      setStatus('wakeword', 'Dis "Kingston"...');
+      setStatus('wakeword', 'Dis "Computer"...');
     }
   };
 
@@ -557,9 +557,9 @@ function restartWakeWord() {
 }
 
 function onWakeWordDetected() {
-  addMsg('system', '"Kingston" detecte!');
+  addMsg('system', '"Computer" detecte!');
   playBeep(880, 120);
-  wakeText.textContent = 'Kingston detecte!';
+  wakeText.textContent = 'Computer detecte!';
   wakeText.className = 'heard';
 
   stopWakeWord();
@@ -604,7 +604,7 @@ function toggleWakeWord() {
   if (wakeWordEnabled) {
     if (!sessionActive) {
       startWakeWord();
-      addMsg('system', 'Wake word active — dis "Kingston" pour demarrer.');
+      addMsg('system', 'Wake word active — dis "Computer" pour demarrer.');
     }
   } else {
     stopWakeWord();
@@ -854,7 +854,7 @@ function stopLocalSession() {
     setTimeout(() => {
       if (!sessionActive) {
         startWakeWord();
-        setStatus('wakeword', 'Dis "Kingston"...');
+        setStatus('wakeword', 'Dis "Computer"...');
       }
     }, 500);
   } else {
@@ -1209,7 +1209,7 @@ function stopSession() {
     setTimeout(() => {
       if (!sessionActive) {
         startWakeWord();
-        setStatus('wakeword', 'Dis "Kingston"...');
+        setStatus('wakeword', 'Dis "Computer"...');
       }
     }, 500);
   } else {
