@@ -252,8 +252,7 @@ function startListening() {
     // Also check interim for wake word (faster response)
     if (!wakeDetected && !isProcessing && interimText.trim()) {
       const lower = interimText.trim().toLowerCase();
-      const wake = getWakeWord().toLowerCase();
-      if (lower.includes(wake)) {
+      if (matchesWakeWord(lower)) {
         onWakeDetected();
       }
     }
@@ -317,6 +316,27 @@ function getWakeWord() {
   return (wakeWordInput.value || 'kingston').trim();
 }
 
+// Fuzzy wake word matching — tolerates common speech recognition errors
+function matchesWakeWord(text) {
+  const wake = getWakeWord().toLowerCase();
+  // Exact match
+  if (text.includes(wake)) return true;
+  // Common misrecognitions of "kingston"
+  const variants = [
+    wake,
+    wake.replace(/g/g, 'k'),  // "kinkston"
+    wake.replace(/ton$/, 'stone'), // "kingstone"
+    wake.replace(/ton$/, 'ston'), // "kingston" without e
+    wake.replace(/k/, 'c'), // "cingston"
+  ];
+  // Also try without spaces: "king stone" → "kingstone"
+  const noSpaces = text.replace(/\s+/g, '');
+  for (const v of variants) {
+    if (text.includes(v) || noSpaces.includes(v)) return true;
+  }
+  return false;
+}
+
 // ── Wake word detection + command capture ──
 function onWakeDetected() {
   if (wakeDetected || isProcessing) return;
@@ -328,13 +348,13 @@ function onWakeDetected() {
   // Play a subtle notification sound
   playBeep(880, 100);
 
-  // Timeout: if no command within 8 seconds, reset
+  // Timeout: if no command within 15 seconds, reset
   commandTimeout = setTimeout(() => {
     if (wakeDetected && !isProcessing) {
       addMsg('system', 'Pas de commande detectee — retour en ecoute.');
       resetWake();
     }
-  }, 8000);
+  }, 15000);
 }
 
 function handleTranscript(text) {
@@ -342,15 +362,16 @@ function handleTranscript(text) {
   const wake = getWakeWord().toLowerCase();
 
   if (!wakeDetected && !isProcessing) {
-    // Check if wake word is in this transcript
-    const idx = lower.indexOf(wake);
-    if (idx >= 0) {
+    // Check if wake word is in this transcript (fuzzy match)
+    if (matchesWakeWord(lower)) {
       onWakeDetected();
-      // Extract command part after wake word
-      const after = text.substring(idx + wake.length).trim();
-      if (after.length > 2) {
-        // Command came in same utterance as wake word
-        processCommand(after);
+      // Extract command part after wake word (try exact position, then end)
+      const idx = lower.indexOf(wake);
+      if (idx >= 0) {
+        const after = text.substring(idx + wake.length).trim();
+        if (after.length > 2) {
+          processCommand(after);
+        }
       }
       // else: wait for next transcript with the command
     }
@@ -383,11 +404,16 @@ async function processCommand(command) {
   addMsg('user', command);
 
   try {
-    // Send to Kingston via dashboard API
+    // Send to Kingston via dashboard API — voice mode prompt
+    const voicePrompt =
+      '[VOICE MODE — Wake Word]\n' +
+      'IMPORTANT: Reponds EN TEXTE COURT (1-3 phrases). Ne fais PAS telegram.send — ta reponse sera lue a voix haute ici.\n' +
+      'Ne dis PAS "Je vais envoyer un message" — reponds directement.\n\n' +
+      command;
     const resp = await fetch(API_BASE + '/api/chat/kingston', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: '[Wake Word] ' + command }),
+      body: JSON.stringify({ message: voicePrompt }),
     });
 
     if (!resp.ok) {
@@ -426,11 +452,12 @@ function resetWake() {
   }
 }
 
-// ── TTS playback via server-side ElevenLabs ──
+// ── TTS playback via Edge TTS server → browser SpeechSynthesis fallback ──
 async function speakResponse(text) {
   // Limit TTS to first 500 chars
-  const ttsText = text.slice(0, 500);
+  const ttsText = text.slice(0, 500).replace(/\*\*/g, '').replace(/[#_`]/g, '');
 
+  // Try server-side Edge TTS first
   try {
     const resp = await fetch(API_BASE + '/api/tts', {
       method: 'POST',
@@ -438,47 +465,54 @@ async function speakResponse(text) {
       body: JSON.stringify({ text: ttsText }),
     });
 
-    if (!resp.ok) {
-      console.warn('TTS error:', resp.status);
-      return;
+    if (resp.ok) {
+      const blob = await resp.blob();
+      if (blob.size > 0) {
+        const url = URL.createObjectURL(blob);
+        if (audioEl) { audioEl.pause(); audioEl = null; }
+        audioEl = new Audio(url);
+        await audioEl.play();
+        await new Promise(resolve => {
+          if (!audioEl) return resolve();
+          audioEl.onended = () => { URL.revokeObjectURL(url); audioEl = null; resolve(); };
+          audioEl.onerror = () => { URL.revokeObjectURL(url); audioEl = null; resolve(); };
+        });
+        return; // Server TTS worked
+      }
     }
-
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-
-    // Stop any current audio
-    if (audioEl) {
-      audioEl.pause();
-      audioEl = null;
-    }
-
-    audioEl = new Audio(url);
-    audioEl.onended = () => {
-      URL.revokeObjectURL(url);
-      audioEl = null;
-    };
-    audioEl.onerror = () => {
-      URL.revokeObjectURL(url);
-      audioEl = null;
-    };
-    await audioEl.play();
-
-    // Wait for audio to finish
-    await new Promise(resolve => {
-      if (!audioEl) return resolve();
-      audioEl.onended = () => {
-        URL.revokeObjectURL(url);
-        audioEl = null;
-        resolve();
-      };
-      audioEl.onerror = () => {
-        URL.revokeObjectURL(url);
-        audioEl = null;
-        resolve();
-      };
-    });
+    console.warn('Server TTS failed:', resp.status, '— falling back to browser TTS');
   } catch (err) {
-    console.warn('TTS playback error:', err);
+    console.warn('Server TTS error:', err, '— falling back to browser TTS');
+  }
+
+  // Fallback: browser SpeechSynthesis (works offline, no server needed)
+  if ('speechSynthesis' in window) {
+    try {
+      // Stop recognition temporarily so it doesn't pick up Kingston's voice
+      const wasListening = isListening;
+      if (recognition) { try { recognition.stop(); } catch {} }
+
+      await new Promise((resolve) => {
+        const utter = new SpeechSynthesisUtterance(ttsText);
+        utter.lang = langSelect.value;
+        utter.rate = 1.05;
+        utter.pitch = 1.0;
+        // Try to find a French voice
+        const voices = speechSynthesis.getVoices();
+        const frVoice = voices.find(v => v.lang.startsWith('fr') && v.name.includes('Microsoft'));
+        if (frVoice) utter.voice = frVoice;
+        utter.onend = resolve;
+        utter.onerror = resolve;
+        speechSynthesis.speak(utter);
+      });
+
+      // Restart recognition after speaking
+      if (wasListening) {
+        setTimeout(() => { if (isListening) restartRecognition(); }, 300);
+      }
+    } catch (err) {
+      console.warn('Browser TTS error:', err);
+    }
   }
 }
 

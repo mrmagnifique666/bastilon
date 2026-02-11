@@ -443,6 +443,14 @@ async function handleMessageInner(
       log.debug(`[router] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
+    // Dashboard chatIds (2, 3) should NOT send Telegram messages — return text for voice/TTS instead
+    if ((chatId === 2 || chatId === 3) && tool === "telegram.send") {
+      const textContent = safeArgs.text || safeArgs.message || JSON.stringify(safeArgs);
+      log.info(`[router] Dashboard chatId=${chatId}: blocked telegram.send, returning text for TTS`);
+      addTurn(chatId, { role: "assistant", content: textContent });
+      return textContent;
+    }
+
     // Hard block: agents (chatId 100-106) cannot use browser.* tools — they open visible windows
     if (chatId >= 100 && chatId <= 106 && tool.startsWith("browser.")) {
       const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
