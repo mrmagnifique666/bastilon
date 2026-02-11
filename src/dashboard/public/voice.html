@@ -87,6 +87,43 @@
     font-size: 10px; color: #666; margin-bottom: 3px;
     text-transform: uppercase; font-weight: 600;
   }
+  .msg img {
+    max-width: 100%; border-radius: 8px; margin: 6px 0;
+    cursor: pointer; transition: transform 0.2s;
+  }
+  .msg img:hover { transform: scale(1.02); }
+  .msg code {
+    background: #0d0d15; padding: 2px 6px; border-radius: 4px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px;
+    color: #a78bfa;
+  }
+  .msg pre {
+    background: #0d0d15; padding: 10px 12px; border-radius: 8px;
+    overflow-x: auto; margin: 6px 0; white-space: pre-wrap;
+    font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px;
+    line-height: 1.4; border: 1px solid #1a1a2e;
+  }
+  .msg pre code { background: none; padding: 0; }
+  .msg a { color: #6c8cff; text-decoration: none; }
+  .msg a:hover { text-decoration: underline; }
+  .msg strong { color: #fff; }
+  .msg ul, .msg ol { margin: 4px 0 4px 18px; }
+  .msg li { margin: 2px 0; }
+  .msg blockquote {
+    border-left: 3px solid #6c8cff; padding-left: 10px;
+    margin: 6px 0; color: #aaa; font-style: italic;
+  }
+  .msg .img-caption {
+    font-size: 11px; color: #666; text-align: center; margin-top: 2px;
+  }
+  /* Fullscreen image overlay */
+  .img-overlay {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.9); z-index: 1000; cursor: zoom-out;
+    justify-content: center; align-items: center;
+  }
+  .img-overlay.active { display: flex; }
+  .img-overlay img { max-width: 95%; max-height: 95%; object-fit: contain; border-radius: 8px; }
 
   /* Wake word live text */
   .wake-bar {
@@ -150,6 +187,10 @@
 </head>
 <body>
 
+<div class="img-overlay" id="imgOverlay" onclick="this.classList.remove('active')">
+  <img id="overlayImg" src="" alt="Fullscreen">
+</div>
+
 <div class="header">
   <h1><span>Kingston</span> Voice <small style="font-size:11px;color:#555;margin-left:6px" id="modeLabel">Local</small></h1>
   <div class="header-right">
@@ -196,7 +237,13 @@
 const API_BASE = window.location.origin;
 const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/voice';
 const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
-const WAKE_WORD = 'kingston';
+// Wake word variants — Web Speech API often mistranscribes
+const WAKE_WORDS = [
+  'kingston', 'kengston', 'kingstonn', 'kengstone', 'kingstone',
+  'king stone', 'king ston', 'kington', 'kenston', 'kinston',
+  'kingstown', 'kingstonne', 'kings ton', 'kings tone',
+  'quinston', 'quingston', 'kingstan', 'kinkston',
+];
 
 // Auth prompt
 if (!AUTH_TOKEN) {
@@ -285,12 +332,87 @@ function addMsg(role, text) {
     lbl.textContent = role === 'user' ? 'Toi' : 'Kingston';
     div.appendChild(lbl);
   }
-  const span = document.createElement('span');
-  span.textContent = text;
-  div.appendChild(span);
+  const content = document.createElement('div');
+  if (role === 'model' || role === 'tool') {
+    content.innerHTML = renderRichText(text);
+    // Make images clickable for fullscreen
+    content.querySelectorAll('img').forEach(img => {
+      img.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.getElementById('overlayImg').src = img.src;
+        document.getElementById('imgOverlay').classList.add('active');
+      });
+    });
+  } else {
+    content.textContent = text;
+  }
+  div.appendChild(content);
   transcript.appendChild(div);
   transcript.scrollTop = transcript.scrollHeight;
   return div;
+}
+
+/** Parse markdown-like text into HTML with image support */
+function renderRichText(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+    '<pre><code>' + code.trim() + '</code></pre>');
+
+  // Inline code (`...`)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Images: ![alt](url)
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) =>
+    '<img src="' + url + '" alt="' + alt + '" loading="lazy">' +
+    (alt ? '<div class="img-caption">' + alt + '</div>' : ''));
+
+  // Standalone image URLs on their own line
+  html = html.replace(/(^|\n)(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg|bmp)(?:\?[^\s]*)?)(\n|$)/gi, (_, pre, url, post) =>
+    pre + '<img src="' + url + '" alt="Image" loading="lazy">' + post);
+
+  // Base64 images (data:image/...)
+  html = html.replace(/(data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)/g,
+    '<img src="$1" alt="Image" loading="lazy">');
+
+  // Links: [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  // Bare URLs (not already in href or src)
+  html = html.replace(/(?<!(?:href|src)=")(?<!["\w])(https?:\/\/[^\s<]+[^\s<.,;:!?\)])/g,
+    '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
+  // Bold: **text** or __text__
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+  // Italic: *text* or _text_
+  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+
+  // Blockquotes: > text
+  html = html.replace(/(^|\n)&gt; (.+)/g, '$1<blockquote>$2</blockquote>');
+
+  // Unordered lists: - item or * item
+  html = html.replace(/(^|\n)[*-] (.+)/g, '$1<li>$2</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+
+  // Clean up double <br> inside blocks
+  html = html.replace(/<br><\/?(ul|ol|pre|blockquote)/g, '</$1');
+
+  return html;
+}
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -379,9 +501,9 @@ function startWakeWord() {
       wakeText.textContent = display;
     }
 
-    // Check for wake word in any text
-    const check = (final || interim).toLowerCase();
-    if (check.includes(WAKE_WORD)) {
+    // Check for wake word in any text (fuzzy matching)
+    const check = (final || interim).toLowerCase().replace(/[.,!?;:'"]/g, '');
+    if (WAKE_WORDS.some(w => check.includes(w))) {
       onWakeWordDetected();
     }
   };
@@ -777,9 +899,12 @@ function handleServerMessage(msg) {
         if (!currentTranscriptEl || currentTranscriptEl.dataset.role !== 'model') {
           currentTranscriptEl = addMsg('model', msg.text);
           currentTranscriptEl.dataset.role = 'model';
+          currentTranscriptEl._rawText = msg.text;
         } else {
-          const span = currentTranscriptEl.querySelector('span');
-          if (span) span.textContent += msg.text;
+          // Append streaming text then re-render rich content
+          currentTranscriptEl._rawText = (currentTranscriptEl._rawText || '') + msg.text;
+          const contentDiv = currentTranscriptEl.querySelector('div:last-child');
+          if (contentDiv) contentDiv.innerHTML = renderRichText(currentTranscriptEl._rawText);
           transcript.scrollTop = transcript.scrollHeight;
         }
       } else {
