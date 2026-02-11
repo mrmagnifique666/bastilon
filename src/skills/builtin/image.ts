@@ -9,6 +9,15 @@ import { config } from "../../config/env.js";
 import { getBotPhotoFn } from "./telegram.js";
 import { log } from "../../utils/log.js";
 
+const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT) || 3200;
+
+/** For dashboard/voice chatIds (< 1000), return a local URL instead of sending to Telegram. */
+function imageResultForDashboard(filePath: string, caption: string, extra: string, saved: string): string {
+  const filename = path.basename(filePath);
+  const url = `http://localhost:${DASHBOARD_PORT}/uploads/${filename}`;
+  return `![${caption.slice(0, 80)}](${url})${extra}${saved}`;
+}
+
 const GEMINI_TIMEOUT_MS = 60_000;
 
 interface GeminiResponse {
@@ -208,12 +217,7 @@ registerSkill({
   async execute(args): Promise<string> {
     const imagePath = args.imagePath as string;
     const prompt = args.prompt as string;
-    const chatId = Number((args.chatId ?? args.chat_id) as string);
-
-    if (!chatId || isNaN(chatId)) {
-      return "Error: invalid chatId.";
-    }
-
+    const chatId = Number((args.chatId ?? args.chat_id) as string) || 0;
     const saveTo = args.save_to as string | undefined;
 
     try {
@@ -231,13 +235,20 @@ registerSkill({
         }
       }
 
+      const extra = textResponse ? `\n${textResponse.slice(0, 200)}` : "";
+      const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
+
+      // Dashboard/voice chatIds (< 1000) — return URL for inline display
+      if (chatId < 1000) {
+        return imageResultForDashboard(filePath, prompt, extra, saved);
+      }
+
+      // Real Telegram chat — send via bot
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
         const caption = prompt.length > 200 ? prompt.slice(0, 197) + "..." : prompt;
         await sendPhoto(chatId, filePath, caption);
         fs.unlinkSync(filePath);
-        const extra = textResponse ? `\nGemini note: ${textResponse.slice(0, 200)}` : "";
-        const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
         return `Image edited and sent to chat ${chatId}.${extra}${saved}`;
       }
 
@@ -266,12 +277,7 @@ registerSkill({
   },
   async execute(args): Promise<string> {
     const prompt = args.prompt as string;
-    const chatId = Number((args.chatId ?? args.chat_id) as string);
-
-    if (!chatId || isNaN(chatId)) {
-      return "Error: invalid chatId.";
-    }
-
+    const chatId = Number((args.chatId ?? args.chat_id) as string) || 0;
     const saveTo = args.save_to as string | undefined;
 
     try {
@@ -289,15 +295,20 @@ registerSkill({
         }
       }
 
-      // Send to Telegram
+      const extra = textResponse ? `\n${textResponse.slice(0, 200)}` : "";
+      const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
+
+      // Dashboard/voice chatIds (< 1000) — return URL for inline display
+      if (chatId < 1000) {
+        return imageResultForDashboard(filePath, prompt, extra, saved);
+      }
+
+      // Real Telegram chat — send via bot
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
         const caption = prompt.length > 200 ? prompt.slice(0, 197) + "..." : prompt;
         await sendPhoto(chatId, filePath, caption);
-        // Clean up temp file after sending
         fs.unlinkSync(filePath);
-        const extra = textResponse ? `\nGemini note: ${textResponse.slice(0, 200)}` : "";
-        const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
         return `Image generated and sent to chat ${chatId}.${extra}${saved}`;
       }
 
@@ -330,12 +341,8 @@ registerSkill({
     const topText = (args.top_text as string) || "";
     const bottomText = (args.bottom_text as string) || "";
     const concept = args.concept as string;
-    const chatId = Number((args.chatId ?? args.chat_id) as string);
+    const chatId = Number((args.chatId ?? args.chat_id) as string) || 0;
     const saveTo = args.save_to as string | undefined;
-
-    if (!chatId || isNaN(chatId)) {
-      return "Error: invalid chatId.";
-    }
 
     // Build a meme-optimized prompt
     const memePrompt =
@@ -360,14 +367,19 @@ registerSkill({
         }
       }
 
+      const memeCaption = topText && bottomText ? `${topText} / ${bottomText}` : topText || bottomText || concept;
+      const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
+
+      // Dashboard/voice chatIds (< 1000) — return URL for inline display
+      if (chatId < 1000) {
+        return imageResultForDashboard(filePath, memeCaption, "", saved);
+      }
+
+      // Real Telegram chat — send via bot
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
-        const caption = topText && bottomText
-          ? `${topText} / ${bottomText}`
-          : topText || bottomText || concept;
-        await sendPhoto(chatId, filePath, caption.slice(0, 200));
+        await sendPhoto(chatId, filePath, memeCaption.slice(0, 200));
         fs.unlinkSync(filePath);
-        const saved = saveTo ? `\nSaved to: ${saveTo}` : "";
         return `Meme generated and sent!${saved}`;
       }
 

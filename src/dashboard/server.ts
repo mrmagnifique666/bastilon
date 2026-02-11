@@ -48,8 +48,13 @@ const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
+  ".mp3": "audio/mpeg",
 };
 
 // ── Auth ────────────────────────────────────────────────────
@@ -831,6 +836,20 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
     if (pathname.startsWith("/api/") || pathname.startsWith("/v1/")) {
       return sendJson(res, 404, { ok: false, error: "Not found" });
+    }
+
+    // ── Serve generated images from relay/uploads ──
+    if (pathname.startsWith("/uploads/")) {
+      const uploadsDir = path.resolve(config.uploadsDir);
+      const fileName = pathname.replace("/uploads/", "");
+      const resolved = path.resolve(uploadsDir, fileName);
+      if (!resolved.startsWith(uploadsDir)) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
+      serveFile(res, resolved);
+      return;
     }
 
     // ── Static files ──

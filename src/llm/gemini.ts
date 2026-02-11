@@ -312,8 +312,8 @@ export function normalizeArgs(
     log.debug(`[gemini] Normalized message → text for ${tool}`);
   }
 
-  // Auto-inject chatId for telegram.*/browser.* skills
-  if ((tool.startsWith("telegram.") || tool.startsWith("browser.")) && !normalized.chatId) {
+  // Auto-inject chatId for any skill that requires it
+  if (!normalized.chatId && skill?.argsSchema?.required?.includes("chatId")) {
     normalized.chatId = String(chatId);
     log.debug(`[gemini] Auto-injected chatId=${chatId} for ${tool}`);
   }
