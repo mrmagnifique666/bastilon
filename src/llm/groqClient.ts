@@ -5,6 +5,7 @@
  */
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { logTokens, enforceRateDelay, markCallComplete } from "./tokenTracker.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -56,6 +57,7 @@ export async function runGroq(
   const timer = setTimeout(() => controller.abort(), config.groqTimeoutMs);
 
   try {
+    await enforceRateDelay("groq");
     const res = await fetch(GROQ_URL, {
       method: "POST",
       headers: {
@@ -87,6 +89,12 @@ export async function runGroq(
       `[groq] ${model} — ${content.length} chars` +
         (tokens ? ` (${tokens.prompt_tokens}+${tokens.completion_tokens} tokens)` : ""),
     );
+
+    // Track actual token usage
+    if (tokens) {
+      logTokens("groq", tokens.prompt_tokens, tokens.completion_tokens);
+    }
+    markCallComplete("groq");
 
     return content;
   } catch (err) {

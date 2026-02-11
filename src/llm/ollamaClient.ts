@@ -15,6 +15,7 @@ import { isToolPermitted } from "../security/policy.js";
 import { getSkill, validateArgs } from "../skills/loader.js";
 import { getSkillsForOllama } from "../skills/loader.js";
 import { buildSystemInstruction, normalizeArgs } from "./gemini.js";
+import { logEstimatedTokens } from "./tokenTracker.js";
 
 const SYSTEM_PROMPT = [
   "Tu es Kingston, un assistant IA personnel pour Nicolas.",
@@ -82,6 +83,7 @@ export async function runOllama(chatId: number, message: string): Promise<Ollama
     }
 
     log.info(`[ollama] 🦙 Response (${text.length} chars)`);
+    logEstimatedTokens("ollama", message.length + SYSTEM_PROMPT.length, text.length);
     return { type: "message", text };
   } finally {
     clearTimeout(timer);
@@ -196,6 +198,7 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
         throw new Error("Ollama chat returned empty response");
       }
       log.info(`[ollama-chat] 🦙 Response (${text.length} chars, ${step} tool steps)`);
+      logEstimatedTokens("ollama", userMessage.length + systemPrompt.length, text.length);
       return text;
     }
 
@@ -224,12 +227,12 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
         continue;
       }
 
-      // Hard block: agents (100-106) cannot use browser.*
-      if (chatId >= 100 && chatId <= 106 && toolName.startsWith("browser.")) {
-        log.warn(`[ollama-chat] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
+      // Hard block: agents/cron (internal chatIds) cannot use browser.*
+      if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
+        log.warn(`[ollama-chat] Internal session chatId=${chatId} tried to call ${toolName} — blocked`);
         messages.push({
           role: "tool",
-          content: `Error: Tool "${toolName}" is blocked for agents — use web.search instead.`,
+          content: `Error: Tool "${toolName}" is blocked for agents/cron — use web.search instead.`,
         });
         continue;
       }
@@ -245,11 +248,11 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
       // Normalize args (snake_case → camelCase, auto-inject chatId, type coercion)
       const safeArgs = normalizeArgs(toolName, rawArgs, chatId, skill);
 
-      // Agent chatId fix: agents (100-106) use fake chatIds for session isolation.
+      // Agent/cron chatId fix: internal chatIds (100-106 agents, 200-249 cron) use fake IDs for session isolation.
       // Rewrite telegram.* targets to the real admin chatId so messages actually deliver.
-      if (chatId >= 100 && chatId <= 106 && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+      if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
         safeArgs.chatId = String(config.adminChatId);
-        log.debug(`[ollama-chat] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
+        log.debug(`[ollama-chat] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
       }
 
       // Validate args

@@ -14,6 +14,7 @@ import { getSkill, validateArgs } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { getSkillsForGemini } from "../skills/loader.js";
+import { logEstimatedTokens, enforceRateDelay, markCallComplete } from "./tokenTracker.js";
 
 // --- Types ---
 
@@ -76,7 +77,7 @@ const MAX_TOOL_RESULT_LENGTH = 8000;
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000];
 
-// --- Session log (unified cross-channel knowledge) ---
+// --- Workspace files (cached, mtime-aware) ---
 
 let _cachedSessionLog: string | null = null;
 let _sessionLogMtime = 0;
@@ -93,6 +94,26 @@ export function loadSessionLog(): string {
     _cachedSessionLog = fs.readFileSync(p, "utf-8");
     _sessionLogMtime = stat.mtimeMs;
     return _cachedSessionLog;
+  } catch {
+    return "";
+  }
+}
+
+let _cachedUserMd: string | null = null;
+let _userMdMtime = 0;
+
+/** Load relay/USER.md — user context (timezone, mission, preferences). */
+export function loadUserMd(): string {
+  try {
+    const p = path.resolve(process.cwd(), "relay", "USER.md");
+    if (!fs.existsSync(p)) return "";
+    const stat = fs.statSync(p);
+    if (_cachedUserMd !== null && stat.mtimeMs === _userMdMtime) {
+      return _cachedUserMd;
+    }
+    _cachedUserMd = fs.readFileSync(p, "utf-8");
+    _userMdMtime = stat.mtimeMs;
+    return _cachedUserMd;
   } catch {
     return "";
   }
@@ -192,13 +213,27 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     }
   }
 
+  // Inject USER.md context (user preferences, mission, rules)
+  const userMd = loadUserMd();
+  if (userMd) {
+    lines.push("", userMd);
+  }
+
   // Inject session log (unified cross-channel knowledge)
   const sessionLog = loadSessionLog();
   if (sessionLog) {
     lines.push("", `## Session Log (shared across all channels)`, sessionLog);
   }
 
-  return lines.join("\n");
+  const systemPrompt = lines.join("\n");
+
+  // Context size monitoring — log approximate token count
+  const estimatedTokens = Math.ceil(systemPrompt.length / 4);
+  if (estimatedTokens > 6000) {
+    log.warn(`[gemini] System prompt is ${estimatedTokens} est. tokens — consider pruning (Ollama context limit: 8192)`);
+  }
+
+  return systemPrompt;
 }
 
 // --- Conversation history conversion ---
@@ -254,6 +289,7 @@ async function callGeminiAPI(
   try {
     log.debug(`[gemini] Calling ${model} (attempt ${retryCount + 1}, ${contents.length} messages, ${tools.length} tools)`);
 
+    await enforceRateDelay("gemini");
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -503,7 +539,12 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
 
     // If no function call was made, return the text
     if (!hasFunctionCall) {
-      return finalText || "(empty response)";
+      const result = finalText || "(empty response)";
+      // Estimate tokens: sum of all content parts
+      const inputChars = contents.reduce((sum, c) => sum + c.parts.reduce((s, p) => s + ((p as any).text || "").length, 0), 0) + systemInstruction.length;
+      logEstimatedTokens("gemini", inputChars, result.length);
+      markCallComplete("gemini");
+      return result;
     }
 
     // Otherwise loop continues — Gemini will process the functionResponse

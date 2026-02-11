@@ -5,6 +5,7 @@
 import { registerSkill } from "../loader.js";
 import { getDb } from "../../storage/store.js";
 import { log } from "../../utils/log.js";
+import { getTodayUsage, getUsageSummary } from "../../llm/tokenTracker.js";
 
 function ensureTable(): void {
   const db = getDb();
@@ -194,4 +195,65 @@ registerSkill({
   },
 });
 
-log.debug("Registered 4 analytics.* skills");
+// ── Token Usage Skills ──
+
+registerSkill({
+  name: "analytics.tokens",
+  description: "Show token usage per LLM provider (today or last N days). Tracks: ollama, groq, gemini, claude, haiku.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      days: { type: "number", description: "Number of days to show (default: 1 = today)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const days = Number(args.days) || 1;
+
+    if (days === 1) {
+      const today = getTodayUsage();
+      if (Object.keys(today).length === 0) return "Pas de données token pour aujourd'hui.";
+
+      let totalIn = 0, totalOut = 0, totalReqs = 0;
+      const lines = ["**Token Usage (aujourd'hui):**\n"];
+
+      for (const [provider, stats] of Object.entries(today)) {
+        totalIn += stats.input;
+        totalOut += stats.output;
+        totalReqs += stats.requests;
+        const totalK = ((stats.input + stats.output) / 1000).toFixed(1);
+        lines.push(
+          `**${provider}**: ${totalK}K tokens (${stats.input.toLocaleString()} in / ${stats.output.toLocaleString()} out) — ${stats.requests} requests — $${stats.cost.toFixed(4)}`
+        );
+      }
+
+      const grandTotalK = ((totalIn + totalOut) / 1000).toFixed(1);
+      lines.push(`\n**Total**: ${grandTotalK}K tokens, ${totalReqs} requests`);
+      return lines.join("\n");
+    }
+
+    // Multi-day view
+    const rows = getUsageSummary(days);
+    if (rows.length === 0) return `Pas de données token pour les ${days} derniers jours.`;
+
+    const byDate: Record<string, Record<string, { in: number; out: number; reqs: number }>> = {};
+    for (const r of rows) {
+      if (!byDate[r.date]) byDate[r.date] = {};
+      byDate[r.date][r.provider] = { in: r.input_tokens, out: r.output_tokens, reqs: r.requests };
+    }
+
+    const lines = [`**Token Usage (${days} derniers jours):**\n`];
+    for (const [date, providers] of Object.entries(byDate)) {
+      const dayTotal = Object.values(providers).reduce((s, p) => s + p.in + p.out, 0);
+      const dayReqs = Object.values(providers).reduce((s, p) => s + p.reqs, 0);
+      lines.push(`**${date}**: ${(dayTotal / 1000).toFixed(1)}K tokens, ${dayReqs} requests`);
+      for (const [p, s] of Object.entries(providers)) {
+        lines.push(`  ${p}: ${((s.in + s.out) / 1000).toFixed(1)}K (${s.reqs} req)`);
+      }
+    }
+
+    return lines.join("\n");
+  },
+});
+
+log.debug("Registered 5 analytics.* skills");
