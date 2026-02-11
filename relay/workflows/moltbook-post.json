@@ -1,0 +1,63 @@
+{
+  "name": "moltbook-post",
+  "description": "Research a topic, draft content, get approval, then post to Moltbook",
+  "inputs": {
+    "topic": { "type": "string", "description": "Topic to research and post about" },
+    "submolt": { "type": "string", "default": "general", "description": "Target submolt" }
+  },
+  "steps": [
+    {
+      "id": "research",
+      "name": "Research topic",
+      "skill": "web.search",
+      "args": { "query": "{{topic}} AI agents 2026" },
+      "output": "research_results",
+      "retries": 1
+    },
+    {
+      "id": "check-recent",
+      "name": "Check recent posts",
+      "skill": "moltbook.my_posts",
+      "args": { "limit": "5" },
+      "output": "recent_posts"
+    },
+    {
+      "id": "draft",
+      "name": "Draft content",
+      "skill": "content.draft",
+      "args": {
+        "topic": "{{topic}}",
+        "platform": "moltbook",
+        "body": "Research: {{research_results}}"
+      },
+      "output": "draft_id"
+    },
+    {
+      "id": "approve",
+      "name": "Human approval gate",
+      "skill": "notes.add",
+      "args": { "content": "Workflow paused — approve Moltbook post about {{topic}}", "tag": "workflow" },
+      "approval": true
+    },
+    {
+      "id": "post",
+      "name": "Post to Moltbook",
+      "skill": "moltbook.post",
+      "args": {
+        "submolt": "{{submolt}}",
+        "title": "{{topic}}",
+        "content": "{{research_results}}",
+        "type": "text"
+      },
+      "output": "post_result",
+      "on_error": "notify-error"
+    },
+    {
+      "id": "notify",
+      "name": "Notify Nicolas",
+      "skill": "telegram.send",
+      "args": { "message": "Moltbook post published: {{topic}}" }
+    }
+  ],
+  "notify": "telegram.send"
+}

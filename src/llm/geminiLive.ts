@@ -41,7 +41,7 @@ const PRIORITY_PREFIXES = [
   "hash.", "convert.", "trading.", "mood.", "soul.", "stocks.",
   "crypto.", "desktop.", "app.", "process.", "image.",
   "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
-  "cohere.", "mistral.", "together.", "replicate.",
+  "cohere.", "mistral.", "together.", "replicate.", "workflow.",
 ];
 
 // ── Gemini type mapping ────────────────────────────────────────────

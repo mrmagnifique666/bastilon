@@ -10,6 +10,7 @@ import { handleMessage } from "../orchestrator/router.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { cronTick, drainMainSessionQueue } from "./cron.js";
+import { publishScheduledContent } from "./content-publisher.js";
 
 const TICK_MS = 60_000;
 const TZ = "America/Toronto";
@@ -586,6 +587,13 @@ async function tick(): Promise<void> {
     await cronTick(schedulerChatId, schedulerUserId);
   } catch (err) {
     log.error(`[scheduler] cronTick error: ${err}`);
+  }
+
+  // Auto-publish scheduled content
+  try {
+    await publishScheduledContent();
+  } catch (err) {
+    log.error(`[scheduler] content-publisher error: ${err}`);
   }
 
   // Check custom reminders

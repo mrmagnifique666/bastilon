@@ -10,7 +10,7 @@
 - [DONE] Dynamic behavior merge — LLM fusionne les nouvelles rules automatiquement
 - [DONE] SOUL.md persona file — identity en Markdown, modifiable par Kingston
 
-## Priority 2 — Architecture — MOSTLY DONE
+## Priority 2 — Architecture — ALL DONE
 
 - [DONE] Auth cooldown tracking — skip providers rate-limités dans fallback chain
 - [DONE] Solutions memory — cache les résolutions réussies (solutions.save/recall/list)
@@ -18,7 +18,7 @@
 - [DONE] Adaptive context compaction — Ollama/Groq summarization, token-aware auto-trigger
 - [DONE] SKILL.md standard — skills en Markdown, créables par Kingston via skills.create
 - [DONE] Message Bus / Gateway — Channel abstraction + WebSocket channel + MCP server
-- [TODO] Typed workflows (Lobster-style) — pipelines YAML avec approval gates
+- [DONE] Typed workflows (Lobster-style) — YAML/JSON pipelines avec approval gates
 
 ## Priority 3 — API Gratuites — ALL DONE
 
@@ -33,24 +33,25 @@
 - [DONE] Together.ai — together.chat + together.image (needs TOGETHER_API_KEY)
 - [DONE] Replicate — replicate.run + replicate.image (needs REPLICATE_API_KEY)
 
-## Priority 4 — Features (Inspiré de PicoClaw/AgentZero/OpenClaw)
+## Priority 4 — Features — MOSTLY DONE
 
 - [DONE] Self-generating skills — via SKILL.md standard + skills.create
 - [DONE] MCP server — exposer Kingston comme serveur MCP (src/gateway/mcp.ts)
 - [DONE] Multi-channel abstraction — interface Channel (src/gateway/channel.ts)
-- [TODO] Agent profile folders — config/prompts/tools par agent
-- [TODO] Subordinate agents — hiérarchie avec délégation typée
+- [DONE] Agent profile folders — config/prompts/tools par agent (relay/agents/{id}/)
+- [DONE] Subordinate agents — agents.spawn/spawn_parallel + hierarchy delegation
 - [TODO] Sandbox execution — Docker containers pour tool execution
 - [TODO] Device nodes — companion mobile/desktop
 
 ## Priority 5 — Reddit & Social
 
 - [BLOCKED] Reddit API — awaiting kingston_cdr dev account approval
-- [TODO] Moltbook presence automation — post réguliers via cron
+- [DONE] Moltbook presence automation — content auto-publisher in scheduler
 - [TODO] LinkedIn API — OAuth flow pour posting
 
 ## Completed (archive)
 
+- [DONE] Agent profiles + Subordinate agents + Typed workflows + Content auto-publish — 2026-02-11
 - [DONE] Cohere + Mistral + Together + Replicate + Gateway + MCP — 2026-02-11
 - [DONE] Serper.dev + Abstract API + SKILL.md dynamic skills — 2026-02-11
 - [DONE] Provider cooldown + Solutions memory + Lifecycle hooks + Free APIs — 2026-02-11

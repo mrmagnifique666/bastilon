@@ -1,0 +1,41 @@
+{
+  "name": "prospect-pipeline",
+  "description": "Search for prospects, validate, save to CRM, and notify",
+  "inputs": {
+    "industry": { "type": "string", "default": "real estate", "description": "Target industry" },
+    "region": { "type": "string", "default": "Gatineau/Ottawa", "description": "Target region" }
+  },
+  "steps": [
+    {
+      "id": "search",
+      "name": "Search for prospects",
+      "skill": "web.search",
+      "args": { "query": "{{industry}} broker {{region}} contact" },
+      "output": "search_results",
+      "retries": 2
+    },
+    {
+      "id": "save-results",
+      "name": "Save raw results",
+      "skill": "notes.add",
+      "args": {
+        "content": "Prospect search for {{industry}} in {{region}}: {{search_results}}",
+        "tag": "prospect"
+      },
+      "output": "note_id"
+    },
+    {
+      "id": "approve",
+      "name": "Review prospects before saving",
+      "skill": "notes.add",
+      "args": { "content": "Review prospect results before CRM save", "tag": "workflow" },
+      "approval": true
+    },
+    {
+      "id": "notify",
+      "name": "Notify Nicolas",
+      "skill": "telegram.send",
+      "args": { "message": "Prospect pipeline complete for {{industry}} in {{region}}. Results saved in notes." }
+    }
+  ]
+}

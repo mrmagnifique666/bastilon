@@ -1,0 +1,12 @@
+{
+  "name": "Executor",
+  "role": "Code request queue processor",
+  "heartbeatMs": 300000,
+  "enabled": true,
+  "chatId": 103,
+  "cycleCount": 1,
+  "tools": {
+    "allowlist": ["notes.*", "telegram.send", "files.*"],
+    "blocklist": ["browser.*"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Analyst",
+  "role": "Performance analysis & reporting",
+  "heartbeatMs": 21600000,
+  "enabled": false,
+  "chatId": 101,
+  "cycleCount": 4,
+  "quietHours": { "start": 23, "end": 7 },
+  "tools": {
+    "allowlist": ["market.*", "analytics.*", "notes.*", "telegram.send", "web.search", "trading.*"],
+    "blocklist": ["browser.*"]
+  }
+}

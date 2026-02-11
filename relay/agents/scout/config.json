@@ -1,0 +1,17 @@
+{
+  "name": "Scout",
+  "role": "Prospection & market intelligence",
+  "heartbeatMs": 1800000,
+  "enabled": false,
+  "chatId": 100,
+  "cycleCount": 6,
+  "quietHours": { "start": 22, "end": 8 },
+  "tools": {
+    "allowlist": ["web.*", "contacts.*", "notes.*", "analytics.*", "telegram.send", "gmail.*", "shell.exec", "api.call"],
+    "blocklist": ["browser.*"]
+  },
+  "variables": {
+    "target_region": "Gatineau/Ottawa",
+    "target_industry": "immobilier & assurance"
+  }
+}

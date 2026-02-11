@@ -1,0 +1,13 @@
+{
+  "name": "Sentinel",
+  "role": "Autonomous presence & monitoring",
+  "heartbeatMs": 1800000,
+  "enabled": true,
+  "chatId": 105,
+  "cycleCount": 8,
+  "quietHours": { "start": 23, "end": 7 },
+  "tools": {
+    "allowlist": ["web.*", "notes.*", "telegram.send", "trading.*", "api.call", "moltbook.*"],
+    "blocklist": ["browser.*"]
+  }
+}

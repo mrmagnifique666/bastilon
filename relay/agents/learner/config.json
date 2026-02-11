@@ -1,0 +1,13 @@
+{
+  "name": "Learner",
+  "role": "Error analysis & self-improvement",
+  "heartbeatMs": 7200000,
+  "enabled": false,
+  "chatId": 102,
+  "cycleCount": 3,
+  "quietHours": { "start": 23, "end": 7 },
+  "tools": {
+    "allowlist": ["notes.*", "analytics.*", "files.*", "system.*", "shell.exec", "errors.*", "selfimprove.*", "rules.*"],
+    "blocklist": ["browser.*"]
+  }
+}

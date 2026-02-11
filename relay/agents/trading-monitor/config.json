@@ -1,0 +1,17 @@
+{
+  "name": "Trading Monitor",
+  "role": "Quantitative portfolio surveillance",
+  "heartbeatMs": 60000,
+  "enabled": true,
+  "chatId": 104,
+  "cycleCount": 3,
+  "tools": {
+    "allowlist": ["trading.*", "market.*", "web.search", "web.fetch", "notes.*", "telegram.send", "analytics.*"],
+    "blocklist": ["browser.*"]
+  },
+  "variables": {
+    "max_position_pct": "1",
+    "daily_loss_limit_pct": "3",
+    "max_open_positions": "10"
+  }
+}

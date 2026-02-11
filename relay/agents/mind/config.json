@@ -1,0 +1,14 @@
+{
+  "name": "Kingston Mind",
+  "role": "Autonomous business brain",
+  "heartbeatMs": 1200000,
+  "enabled": true,
+  "chatId": 106,
+  "cycleCount": 4,
+  "quietHours": { "start": 23, "end": 7 },
+  "tools": {},
+  "variables": {
+    "autonomy_limit": "$500",
+    "strategy_file": "relay/KINGSTON_MIND.md"
+  }
+}
