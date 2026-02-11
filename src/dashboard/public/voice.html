@@ -3,319 +3,459 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kingston Voice</title>
+<title>Kingston — Tableau de Bord</title>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#6c8cff">
+<meta name="theme-color" content="#0f1923">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Kingston">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0b1017; --bg2: #111921; --bg3: #182230; --bg4: #1e2d3d;
+    --border: #1e2d3d; --border2: #2a3f54;
+    --text: #c8d6e5; --text2: #8899aa; --text3: #556677;
+    --accent: #4facfe; --accent2: #00f2fe; --gold: #f0c27f;
+    --green: #00d68f; --red: #ff6b6b; --purple: #a78bfa;
+    --card-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #0a0a0f;
-    color: #e0e0e0;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg); color: var(--text);
+    height: 100vh; display: flex; overflow: hidden;
   }
 
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 20px;
-    background: #111118;
-    border-bottom: 1px solid #222;
+  /* ─── Left Sidebar ─── */
+  .sidebar {
+    width: 64px; background: var(--bg2); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 16px 0; gap: 6px; z-index: 10;
   }
-  .header h1 { font-size: 18px; font-weight: 600; }
-  .header h1 span { color: #6c8cff; }
-  .header-right { display: flex; gap: 10px; align-items: center; }
-  .status-dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    display: inline-block; transition: background 0.3s;
+  .sidebar .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 18px; color: #fff; margin-bottom: 16px;
+    box-shadow: 0 4px 15px rgba(79,172,254,0.3);
   }
-  .status-dot.disconnected { background: #666; }
-  .status-dot.wakeword { background: #ff9800; animation: pulse 2.5s infinite; }
-  .status-dot.connecting { background: #ff9800; animation: blink 1s infinite; }
-  .status-dot.ready { background: #4caf50; }
-  .status-dot.listening { background: #ff9800; animation: blink 0.6s infinite; }
-  .status-dot.speaking { background: #6c8cff; animation: blink 1.2s infinite; }
-  .status-dot.processing { background: #a78bfa; animation: blink 0.8s infinite; }
-  .status-dot.local-listening { background: #4caf50; animation: pulse 2s infinite; }
+  .nav-btn {
+    width: 44px; height: 44px; border-radius: 12px; border: none;
+    background: transparent; color: var(--text3); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; transition: all 0.2s; position: relative;
+  }
+  .nav-btn:hover { background: var(--bg3); color: var(--text); }
+  .nav-btn.active { background: var(--bg3); color: var(--accent); }
+  .nav-btn .badge {
+    position: absolute; top: 4px; right: 4px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+  }
+  .sidebar-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
+
+  /* ─── Main Content ─── */
+  .main-content {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg);
+  }
+  /* Top Bar */
+  .topbar {
+    height: 56px; padding: 0 24px; display: flex; align-items: center;
+    justify-content: space-between; border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+  }
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+  .topbar-title { font-size: 16px; font-weight: 600; }
+  .topbar-title span { color: var(--accent); }
+  .topbar-mode {
+    font-size: 11px; padding: 3px 10px; border-radius: 20px;
+    background: var(--bg3); color: var(--text2); font-weight: 500;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 20px; background: var(--bg3);
+    font-size: 12px; color: var(--text2);
+  }
+  .status-pill .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    transition: background 0.3s;
+  }
+  .dot-off { background: var(--text3); }
+  .dot-wake { background: var(--gold); animation: pulse 2.5s infinite; }
+  .dot-on { background: var(--green); }
+  .dot-speak { background: var(--accent); animation: blink 1s infinite; }
+  .dot-think { background: var(--purple); animation: blink 0.7s infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
   @keyframes blink { 50% { opacity: 0.3; } }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-  #statusLabel { font-size: 13px; color: #888; }
 
-  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-
-  /* Webcam */
-  .webcam-box {
-    position: absolute; top: 10px; right: 16px;
-    width: 180px; height: 135px; border-radius: 10px;
-    overflow: hidden; border: 2px solid #333; background: #000;
-    z-index: 10; transition: border-color 0.3s;
+  .topbar-btn {
+    padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border2);
+    background: transparent; color: var(--text2); cursor: pointer;
+    font-size: 12px; font-family: inherit; transition: all 0.15s;
   }
-  .webcam-box.hidden { display: none; }
-  .webcam-box.vision { border-color: #a78bfa; }
-  .webcam-box video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-  .webcam-tag {
-    position: absolute; bottom: 4px; left: 6px;
-    font-size: 10px; background: rgba(0,0,0,0.7); padding: 2px 6px;
-    border-radius: 4px; color: #aaa;
+  .topbar-btn:hover { background: var(--bg3); color: var(--text); border-color: var(--accent); }
+  .topbar-btn.on { background: rgba(79,172,254,0.12); color: var(--accent); border-color: var(--accent); }
+
+  /* ─── Center Panel ─── */
+  .center {
+    flex: 1; overflow-y: auto; padding: 24px;
+    display: flex; flex-direction: column; gap: 20px;
   }
 
-  /* Transcript */
+  /* Dashboard Cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 14px;
+    padding: 20px; box-shadow: var(--card-shadow); transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--border2); }
+  .card-label { font-size: 11px; color: var(--text3); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+  .card-value { font-size: 28px; font-weight: 700; margin: 6px 0 2px; color: #fff; }
+  .card-sub { font-size: 12px; color: var(--text2); }
+  .card-icon { font-size: 24px; float: right; opacity: 0.5; }
+
+  /* Agent Status */
+  .agents-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .agent-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; display: flex; align-items: center; gap: 14px;
+  }
+  .agent-avatar {
+    width: 42px; height: 42px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  .agent-info { flex: 1; min-width: 0; }
+  .agent-name { font-size: 14px; font-weight: 600; color: #fff; }
+  .agent-stat { font-size: 12px; color: var(--text2); }
+  .agent-badge {
+    padding: 3px 8px; border-radius: 6px; font-size: 10px;
+    font-weight: 600; text-transform: uppercase;
+  }
+  .agent-badge.ok { background: rgba(0,214,143,0.15); color: var(--green); }
+  .agent-badge.err { background: rgba(255,107,107,0.15); color: var(--red); }
+
+  /* Section Headers */
+  .section-header {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px;
+  }
+
+  /* Visual content area */
+  .visual-area {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    min-height: 200px;
+  }
+  .visual-area img {
+    max-width: 100%; max-height: 60vh; border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+  .visual-placeholder {
+    color: var(--text3); text-align: center; font-size: 14px;
+  }
+  .visual-placeholder svg { opacity: 0.15; margin-bottom: 12px; }
+
+  /* ─── Right Chat Panel ─── */
+  .chat-panel {
+    width: 380px; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; background: var(--bg2);
+  }
+  .chat-panel.hidden { display: none; }
+  .chat-header {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .chat-header-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+  .chat-close {
+    width: 28px; height: 28px; border-radius: 6px; border: none;
+    background: transparent; color: var(--text3); cursor: pointer; font-size: 16px;
+  }
+  .chat-close:hover { background: var(--bg3); color: var(--text); }
+
   .transcript {
-    flex: 1; overflow-y: auto; padding: 20px;
-    display: flex; flex-direction: column; gap: 10px;
+    flex: 1; overflow-y: auto; padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
   }
   .msg {
-    max-width: 80%; padding: 10px 14px; border-radius: 12px;
-    font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
+    max-width: 95%; padding: 10px 14px; border-radius: 12px;
+    font-size: 13px; line-height: 1.5; word-wrap: break-word;
   }
   .msg.user { align-self: flex-end; background: #1a3a6a; border-bottom-right-radius: 4px; }
-  .msg.model { align-self: flex-start; background: #1e1e2a; border-bottom-left-radius: 4px; }
-  .msg.system { align-self: center; color: #666; font-size: 13px; font-style: italic; }
+  .msg.model { align-self: flex-start; background: var(--bg3); border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; color: var(--text3); font-size: 11px; font-style: italic; padding: 4px 10px; }
   .msg.tool {
-    align-self: flex-start; background: #1a1a2e; border-left: 3px solid #6c8cff;
-    font-size: 13px; color: #aaa; max-width: 90%;
+    align-self: flex-start; background: var(--bg); border-left: 2px solid var(--accent);
+    font-size: 11px; color: var(--text2); max-width: 95%; padding: 6px 10px;
   }
   .msg .lbl {
-    font-size: 10px; color: #666; margin-bottom: 3px;
-    text-transform: uppercase; font-weight: 600;
+    font-size: 9px; color: var(--text3); margin-bottom: 2px;
+    text-transform: uppercase; font-weight: 600; letter-spacing: 0.3px;
   }
-  .msg img {
-    max-width: 100%; border-radius: 8px; margin: 6px 0;
-    cursor: pointer; transition: transform 0.2s;
-  }
-  .msg img:hover { transform: scale(1.02); }
-  .msg code {
-    background: #0d0d15; padding: 2px 6px; border-radius: 4px;
-    font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px;
-    color: #a78bfa;
-  }
-  .msg pre {
-    background: #0d0d15; padding: 10px 12px; border-radius: 8px;
-    overflow-x: auto; margin: 6px 0; white-space: pre-wrap;
-    font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px;
-    line-height: 1.4; border: 1px solid #1a1a2e;
-  }
+  .msg img { max-width: 100%; border-radius: 8px; margin: 4px 0; cursor: pointer; }
+  .msg code { background: var(--bg); padding: 2px 5px; border-radius: 4px; font-size: 12px; color: var(--purple); }
+  .msg pre { background: var(--bg); padding: 8px 10px; border-radius: 8px; overflow-x: auto; margin: 4px 0; font-size: 12px; border: 1px solid var(--border); white-space: pre-wrap; }
   .msg pre code { background: none; padding: 0; }
-  .msg a { color: #6c8cff; text-decoration: none; }
+  .msg a { color: var(--accent); text-decoration: none; }
   .msg a:hover { text-decoration: underline; }
   .msg strong { color: #fff; }
-  .msg ul, .msg ol { margin: 4px 0 4px 18px; }
-  .msg li { margin: 2px 0; }
-  .msg blockquote {
-    border-left: 3px solid #6c8cff; padding-left: 10px;
-    margin: 6px 0; color: #aaa; font-style: italic;
+  .msg blockquote { border-left: 2px solid var(--accent); padding-left: 8px; margin: 4px 0; color: var(--text2); font-style: italic; }
+
+  /* Wake bar */
+  .wake-bar {
+    padding: 6px 14px; background: var(--bg); border-top: 1px solid var(--border);
+    min-height: 26px; display: none;
   }
-  .msg .img-caption {
-    font-size: 11px; color: #666; text-align: center; margin-top: 2px;
+  .wake-bar.active { display: block; }
+  #wakeText { font-size: 11px; color: var(--text3); font-style: italic; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #wakeText.heard { color: var(--gold); }
+
+  /* Chat input */
+  .chat-input {
+    padding: 12px 14px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px;
   }
+  .chat-input input {
+    flex: 1; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 13px;
+    font-family: inherit; outline: none;
+  }
+  .chat-input input:focus { border-color: var(--accent); }
+  .chat-input button {
+    padding: 10px 16px; border-radius: 10px; border: none;
+    background: var(--accent); color: #fff; cursor: pointer;
+    font-size: 13px; font-weight: 600; font-family: inherit;
+  }
+
+  /* Voice controls (floating) */
+  .voice-controls {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(calc(-50% + 32px));
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg2); border: 1px solid var(--border2);
+    padding: 10px 20px; border-radius: 50px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    z-index: 50;
+  }
+  .mic-btn {
+    width: 56px; height: 56px; border-radius: 50%;
+    border: 2px solid var(--border2); background: var(--bg3);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 24px; transition: all 0.2s;
+  }
+  .mic-btn:hover { border-color: var(--accent); }
+  .mic-btn.active { border-color: var(--green); background: rgba(0,214,143,0.12); animation: glow-green 2s infinite; }
+  .mic-btn.speaking { border-color: var(--accent); background: rgba(79,172,254,0.12); }
+  .mic-btn.processing { border-color: var(--purple); background: rgba(167,139,250,0.12); }
+  .mic-btn.wake { border-color: var(--gold); background: rgba(240,194,127,0.1); }
+  @keyframes glow-green { 50% { box-shadow: 0 0 20px rgba(0,214,143,0.3); } }
+  .vc-btn {
+    padding: 8px 14px; border-radius: 20px; border: 1px solid var(--border);
+    background: transparent; color: var(--text2); cursor: pointer;
+    font-size: 12px; font-family: inherit; transition: all 0.15s;
+  }
+  .vc-btn:hover { background: var(--bg3); color: var(--text); }
+  .vc-btn.on { border-color: var(--accent); color: var(--accent); background: rgba(79,172,254,0.08); }
+
   /* Fullscreen image overlay */
   .img-overlay {
     display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0,0,0,0.9); z-index: 1000; cursor: zoom-out;
+    background: rgba(0,0,0,0.92); z-index: 1000; cursor: zoom-out;
     justify-content: center; align-items: center;
   }
   .img-overlay.active { display: flex; }
-  .img-overlay img { max-width: 95%; max-height: 95%; object-fit: contain; border-radius: 8px; }
+  .img-overlay img { max-width: 95%; max-height: 95%; object-fit: contain; border-radius: 10px; }
 
-  /* Wake word live text */
-  .wake-bar {
-    padding: 6px 20px;
-    background: #0d0d15;
-    border-top: 1px solid #1a1a24;
-    min-height: 28px;
-    display: none;
+  /* Webcam */
+  .webcam-float {
+    position: fixed; top: 70px; right: 400px;
+    width: 180px; border-radius: 12px; overflow: hidden;
+    border: 2px solid var(--border); background: #000; z-index: 20;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
   }
-  .wake-bar.active { display: block; }
-  #wakeText {
-    font-size: 12px; color: #555; font-style: italic;
-    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  }
-  #wakeText.heard { color: #ff9800; }
-
-  /* Controls */
-  .controls {
-    padding: 14px 20px 22px;
-    display: flex; flex-direction: column; align-items: center; gap: 10px;
-    background: #111118; border-top: 1px solid #222;
-  }
-  .big-btn {
-    width: 80px; height: 80px; border-radius: 50%;
-    border: 3px solid #333; background: #1a1a24;
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-    font-size: 32px; transition: all 0.2s; position: relative;
-  }
-  .big-btn:hover { border-color: #6c8cff; }
-  .big-btn.active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
-  .big-btn.speaking { border-color: #6c8cff; background: #0a0a2a; }
-  .big-btn.wakeword { border-color: #ff9800; background: #1a1408; }
-  .big-btn.local-active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
-  .big-btn.processing { border-color: #a78bfa; background: #1a0a2a; }
-  @keyframes glow { 50% { box-shadow: 0 0 20px rgba(76,175,80,0.3); } }
-  .ctrl.mode-toggle { border-color: #a78bfa; color: #a78bfa; font-weight: 600; }
-
-  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
-  .ctrl {
-    padding: 6px 12px; border-radius: 6px; border: 1px solid #333;
-    background: #1a1a24; color: #aaa; cursor: pointer; font-size: 12px;
-    transition: all 0.2s;
-  }
-  .ctrl:hover { border-color: #6c8cff; color: #fff; }
-  .ctrl.on { border-color: #4caf50; color: #4caf50; }
-
-  .text-row { display: flex; gap: 8px; width: 100%; max-width: 600px; }
-  .text-row input {
-    flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #333;
-    background: #1a1a24; color: #e0e0e0; font-size: 14px; outline: none;
-  }
-  .text-row input:focus { border-color: #6c8cff; }
-  .text-row button {
-    padding: 10px 16px; border-radius: 8px; border: none;
-    background: #6c8cff; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600;
-  }
-  .hint { color: #555; font-size: 11px; }
-
+  .webcam-float.hidden { display: none; }
+  .webcam-float.vision { border-color: var(--purple); }
+  .webcam-float video { width: 100%; display: block; transform: scaleX(-1); }
   canvas { display: none; }
 </style>
 </head>
 <body>
 
 <div class="img-overlay" id="imgOverlay" onclick="this.classList.remove('active')">
-  <img id="overlayImg" src="" alt="Fullscreen">
+  <img id="overlayImg" src="" alt="">
 </div>
 
-<div class="header">
-  <h1><span>Kingston</span> Voice <small style="font-size:11px;color:#555;margin-left:6px" id="modeLabel">Local</small></h1>
-  <div class="header-right">
-    <span class="status-dot disconnected" id="dot"></span>
-    <span id="statusLabel">Deconnecte</span>
+<!-- ─── Left Sidebar ─── -->
+<nav class="sidebar">
+  <div class="logo">K</div>
+  <button class="nav-btn active" id="navDash" title="Dashboard">
+    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="3" y="13" width="7" height="4" rx="1"/><rect x="13" y="3" width="4" height="14" rx="1"/></svg>
+  </button>
+  <button class="nav-btn" id="navAgents" title="Agents">
+    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="7" r="3"/><path d="M3 18c0-4 3-7 7-7s7 3 7 7"/></svg>
+    <div class="badge"></div>
+  </button>
+  <button class="nav-btn" id="navMemory" title="Memoire">
+    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"/><path d="M10 6v4l3 2"/></svg>
+  </button>
+  <button class="nav-btn" id="navTrading" title="Trading">
+    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 14 7 10 11 13 17 5"/><polyline points="13 5 17 5 17 9"/></svg>
+  </button>
+  <div class="sidebar-bottom">
+    <button class="nav-btn" id="navSettings" title="Parametres">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="3"/><path d="M10 1v3m0 12v3M1 10h3m12 0h3M3.5 3.5l2 2m9 9 2 2M16.5 3.5l-2 2m-9 9-2 2"/></svg>
+    </button>
+  </div>
+</nav>
+
+<!-- ─── Main Content ─── -->
+<div class="main-content">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="topbar-title"><span>Kingston</span> Dashboard</div>
+      <div class="topbar-mode" id="modeLabel">Local</div>
+    </div>
+    <div class="topbar-right">
+      <div class="status-pill">
+        <div class="dot dot-off" id="statusDot"></div>
+        <span id="statusLabel">Pret</span>
+      </div>
+      <button class="topbar-btn" id="modeBtn">Mode: Local</button>
+      <button class="topbar-btn" id="wakeBtn">Computer</button>
+      <button class="topbar-btn" id="chatToggle">Chat</button>
+    </div>
+  </div>
+
+  <div class="center" id="centerPanel">
+    <!-- Dashboard view (default) -->
+    <div id="viewDash">
+      <div class="section-header">Vue d'ensemble</div>
+      <div class="cards" id="statsCards">
+        <div class="card"><div class="card-icon">&#x23F1;</div><div class="card-label">Uptime</div><div class="card-value" id="statUptime">--</div><div class="card-sub">heures</div></div>
+        <div class="card"><div class="card-icon">&#x1F4AC;</div><div class="card-label">Notes</div><div class="card-value" id="statNotes">--</div><div class="card-sub">enregistrees</div></div>
+        <div class="card"><div class="card-icon">&#x1F9E0;</div><div class="card-label">Memoire</div><div class="card-value" id="statMemory">--</div><div class="card-sub">souvenirs</div></div>
+        <div class="card"><div class="card-icon">&#x1F916;</div><div class="card-label">Skills</div><div class="card-value" id="statSkills">--</div><div class="card-sub">disponibles</div></div>
+      </div>
+
+      <div class="section-header" style="margin-top:8px">Agents</div>
+      <div class="agents-grid" id="agentsGrid"></div>
+
+      <div class="section-header" style="margin-top:8px">Contenu Visuel</div>
+      <div class="visual-area" id="visualArea">
+        <div class="visual-placeholder">
+          <svg width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+          <div>Les images et visuels de Kingston apparaitront ici</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agents view -->
+    <div id="viewAgents" style="display:none">
+      <div class="section-header">Agents — Statut Detaille</div>
+      <div class="agents-grid" id="agentsDetailGrid"></div>
+    </div>
+
+    <!-- Memory view -->
+    <div id="viewMemory" style="display:none">
+      <div class="section-header">Memoire — Statistiques</div>
+      <div class="cards" id="memoryCards"></div>
+    </div>
+
+    <!-- Trading view -->
+    <div id="viewTrading" style="display:none">
+      <div class="section-header">Trading — Portefeuille</div>
+      <div class="cards" id="tradingCards"></div>
+    </div>
   </div>
 </div>
 
-<div class="main">
-  <div class="webcam-box hidden" id="camBox">
-    <video id="camVideo" autoplay playsinline muted></video>
-    <canvas id="camCanvas"></canvas>
-    <div class="webcam-tag" id="camTag">Webcam</div>
+<!-- ─── Right Chat Panel ─── -->
+<div class="chat-panel" id="chatPanel">
+  <div class="chat-header">
+    <span class="chat-header-title">Conversation</span>
+    <button class="chat-close" id="chatCloseBtn" title="Fermer">&times;</button>
   </div>
   <div class="transcript" id="transcript">
-    <div class="msg system">Dis "Computer" pour demarrer la conversation, ou appuie sur le bouton.</div>
+    <div class="msg system">Dis "Computer" ou appuie sur le micro.</div>
+  </div>
+  <div class="wake-bar" id="wakeBar"><div id="wakeText">...</div></div>
+  <div class="chat-input">
+    <input id="textIn" placeholder="Message..." />
+    <button id="textSend">&#x27A4;</button>
   </div>
 </div>
 
-<div class="wake-bar" id="wakeBar">
-  <div id="wakeText">...</div>
+<!-- Webcam float -->
+<div class="webcam-float hidden" id="camBox">
+  <video id="camVideo" autoplay playsinline muted></video>
+  <canvas id="camCanvas"></canvas>
 </div>
 
-<div class="controls">
-  <button class="big-btn" id="mainBtn" title="Demarrer / Arreter">&#x1F3A4;</button>
-  <div class="btn-row">
-    <button class="ctrl mode-toggle" id="modeBtn">&#x1F504; Local</button>
-    <button class="ctrl" id="wakeBtn">&#x1F514; Wake Word</button>
-    <button class="ctrl" id="camBtn">&#x1F4F7; Webcam</button>
-    <button class="ctrl" id="visionBtn">&#x1F441; Vision</button>
-  </div>
-  <div class="text-row">
-    <input id="textIn" placeholder="Ou tape ton message..." />
-    <button id="textSend">Envoyer</button>
-  </div>
-  <div class="hint" id="hintText">Local — Web Speech + Edge TTS &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; Dis "Computer" pour activer</div>
+<!-- ─── Floating Voice Controls ─── -->
+<div class="voice-controls" id="voiceControls">
+  <button class="vc-btn" id="vcWake">Computer</button>
+  <button class="mic-btn" id="micBtn" title="Parler">&#x1F3A4;</button>
+  <button class="vc-btn" id="vcCam">Webcam</button>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════════
-// Kingston Voice — Local + Gemini Live + Wake Word
+// Kingston Dashboard — Voice + Dashboard + Agents
 // ═══════════════════════════════════════════════════════
 
-const API_BASE = window.location.origin;
-const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/voice';
-const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
-// Wake word — "Computer" (well recognized by French & English STT)
+const API = window.location.origin;
+const WS_URL = API.replace(/^http/, 'ws') + '/ws/voice';
+const TOKEN = localStorage.getItem('bastilon_token') || '';
 const WAKE_REGEX = /comput[eè]r|comput[eè]ur|komput[eè]r|ordinat[eè]ur|computer/i;
-const WAKE_DISPLAY = 'Computer';
 
-// Auth prompt
-if (!AUTH_TOKEN) {
-  const t = prompt('Token Bastilon (DASHBOARD_TOKEN):');
+if (!TOKEN) {
+  const t = prompt('Token Bastilon:');
   if (t) { localStorage.setItem('bastilon_token', t); location.reload(); }
 }
 
-// ─── Modes: 'local' | 'cloud' ───
+// ─── Mode ───
 let voiceMode = localStorage.getItem('kingston_voice_mode') || 'local';
 
 // ─── State ───
-let ws = null;
-let sessionActive = false;
-let micStream = null;
-let audioCtx = null;
-let workletNode = null;
-let playCtx = null;
-let nextPlayTime = 0;
-let playQueue = [];
-let webcamOn = false;
-let visionOn = false;
-let visionInterval = null;
-let currentTranscriptEl = null;
-let isSpeaking = false;
-
-// Wake word state
-let wakeWordEnabled = false;
-let wakeRecognition = null;
-let wakeWordActive = false; // currently listening via Web Speech
-
-// Local mode state
-let localRecognition = null;
-let localListening = false;
-let localProcessing = false;
-let localAudio = null;       // current Audio element for TTS playback
-let localSilenceTimer = null;
-let localFinalText = '';     // accumulates final results for current utterance
+let ws = null, sessionActive = false, micStream = null, audioCtx = null, workletNode = null;
+let playCtx = null, nextPlayTime = 0, playQueue = [];
+let webcamOn = false, visionOn = false, visionInterval = null;
+let currentTranscriptEl = null, isSpeaking = false;
+let wakeWordEnabled = false, wakeRecognition = null, wakeWordActive = false;
+let localRecognition = null, localListening = false, localProcessing = false;
+let localAudio = null, localSilenceTimer = null, localFinalText = '';
 
 // ─── DOM ───
-const dot = document.getElementById('dot');
-const statusLabel = document.getElementById('statusLabel');
-const transcript = document.getElementById('transcript');
-const mainBtn = document.getElementById('mainBtn');
-const textIn = document.getElementById('textIn');
-const camVideo = document.getElementById('camVideo');
-const camCanvas = document.getElementById('camCanvas');
-const camBox = document.getElementById('camBox');
-const camTag = document.getElementById('camTag');
-const wakeBar = document.getElementById('wakeBar');
-const wakeText = document.getElementById('wakeText');
-const wakeBtn = document.getElementById('wakeBtn');
-const modeBtn = document.getElementById('modeBtn');
-const modeLabel = document.getElementById('modeLabel');
-const hintText = document.getElementById('hintText');
+const $ = id => document.getElementById(id);
+const statusDot = $('statusDot'), statusLabel = $('statusLabel');
+const transcript = $('transcript'), micBtn = $('micBtn'), textIn = $('textIn');
+const wakeBar = $('wakeBar'), wakeText = $('wakeText');
+const chatPanel = $('chatPanel'), centerPanel = $('centerPanel');
+const camVideo = $('camVideo'), camCanvas = $('camCanvas'), camBox = $('camBox');
 
 // ═══════════════════════════════════════════════════════
-// Status
+// Status + UI
 // ═══════════════════════════════════════════════════════
 function setStatus(state, label) {
-  dot.className = 'status-dot ' + state;
   statusLabel.textContent = label;
+  statusDot.className = 'dot ' + ({
+    disconnected:'dot-off', wakeword:'dot-wake', connecting:'dot-off',
+    ready:'dot-on', 'local-listening':'dot-on', listening:'dot-on',
+    speaking:'dot-speak', processing:'dot-think'
+  }[state] || 'dot-off');
+  const mic = micBtn;
   if (state === 'ready' || state === 'listening' || state === 'local-listening') {
-    mainBtn.className = 'big-btn ' + (voiceMode === 'local' ? 'local-active' : 'active');
-    mainBtn.innerHTML = '&#x1F534;';
+    mic.className = 'mic-btn active'; mic.innerHTML = '&#x1F534;';
   } else if (state === 'speaking') {
-    mainBtn.className = 'big-btn speaking';
-    mainBtn.innerHTML = '&#x1F50A;';
+    mic.className = 'mic-btn speaking'; mic.innerHTML = '&#x1F50A;';
   } else if (state === 'processing') {
-    mainBtn.className = 'big-btn processing';
-    mainBtn.innerHTML = '&#x23F3;';
+    mic.className = 'mic-btn processing'; mic.innerHTML = '&#x23F3;';
   } else if (state === 'wakeword') {
-    mainBtn.className = 'big-btn wakeword';
-    mainBtn.innerHTML = '&#x1F514;';
+    mic.className = 'mic-btn wake'; mic.innerHTML = '&#x1F514;';
   } else {
-    mainBtn.className = 'big-btn';
-    mainBtn.innerHTML = '&#x1F3A4;';
+    mic.className = 'mic-btn'; mic.innerHTML = '&#x1F3A4;';
   }
 }
 
@@ -330,994 +470,345 @@ function addMsg(role, text) {
   }
   const content = document.createElement('div');
   if (role === 'model' || role === 'tool') {
-    content.innerHTML = renderRichText(text);
-    // Make images clickable for fullscreen
+    content.innerHTML = renderRich(text);
     content.querySelectorAll('img').forEach(img => {
-      img.addEventListener('click', (e) => {
+      img.addEventListener('click', e => {
         e.stopPropagation();
-        document.getElementById('overlayImg').src = img.src;
-        document.getElementById('imgOverlay').classList.add('active');
+        $('overlayImg').src = img.src;
+        $('imgOverlay').classList.add('active');
+        // Also show in center visual area
+        showVisual(img.src);
       });
     });
-  } else {
-    content.textContent = text;
-  }
+  } else { content.textContent = text; }
   div.appendChild(content);
   transcript.appendChild(div);
   transcript.scrollTop = transcript.scrollHeight;
+  // Auto-show chat panel on new model messages
+  if (role === 'model') chatPanel.classList.remove('hidden');
   return div;
 }
 
-/** Parse markdown-like text into HTML with image support */
-function renderRichText(text) {
-  if (!text) return '';
-  let html = escapeHtml(text);
-
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
-    '<pre><code>' + code.trim() + '</code></pre>');
-
-  // Inline code (`...`)
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Images: ![alt](url)
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) =>
-    '<img src="' + url + '" alt="' + alt + '" loading="lazy">' +
-    (alt ? '<div class="img-caption">' + alt + '</div>' : ''));
-
-  // Standalone image URLs on their own line
-  html = html.replace(/(^|\n)(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg|bmp)(?:\?[^\s]*)?)(\n|$)/gi, (_, pre, url, post) =>
-    pre + '<img src="' + url + '" alt="Image" loading="lazy">' + post);
-
-  // Base64 images (data:image/...)
-  html = html.replace(/(data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)/g,
-    '<img src="$1" alt="Image" loading="lazy">');
-
-  // Links: [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-  // Bare URLs (not already in href or src)
-  html = html.replace(/(?<!(?:href|src)=")(?<!["\w])(https?:\/\/[^\s<]+[^\s<.,;:!?\)])/g,
-    '<a href="$1" target="_blank" rel="noopener">$1</a>');
-
-  // Bold: **text** or __text__
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
-
-  // Italic: *text* or _text_
-  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-
-  // Blockquotes: > text
-  html = html.replace(/(^|\n)&gt; (.+)/g, '$1<blockquote>$2</blockquote>');
-
-  // Unordered lists: - item or * item
-  html = html.replace(/(^|\n)[*-] (.+)/g, '$1<li>$2</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-
-  // Line breaks
-  html = html.replace(/\n/g, '<br>');
-
-  // Clean up double <br> inside blocks
-  html = html.replace(/<br><\/?(ul|ol|pre|blockquote)/g, '</$1');
-
-  return html;
+function renderRich(t) {
+  if (!t) return '';
+  let h = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, (_,l,c) => '<pre><code>'+c.trim()+'</code></pre>');
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  h = h.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_,a,u) => '<img src="'+u+'" alt="'+a+'" loading="lazy">');
+  h = h.replace(/(^|\n)(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s]*)?)(\n|$)/gi, (_,p,u,s) => p+'<img src="'+u+'" loading="lazy">'+s);
+  h = h.replace(/(data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)/g, '<img src="$1" loading="lazy">');
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/(^|\n)&gt; (.+)/g, '$1<blockquote>$2</blockquote>');
+  h = h.replace(/\n/g, '<br>');
+  return h;
 }
 
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function showVisual(src) {
+  const area = $('visualArea');
+  area.innerHTML = '<img src="'+src+'" style="cursor:pointer" onclick="document.getElementById(\'overlayImg\').src=this.src;document.getElementById(\'imgOverlay\').classList.add(\'active\')">';
+}
+
+// ═══════════════════════════════════════════════════════
+// Dashboard Data
+// ═══════════════════════════════════════════════════════
+async function apiFetch(path) {
+  const r = await fetch(API + path, { headers: { 'X-Auth-Token': TOKEN } });
+  return r.ok ? r.json() : null;
+}
+
+async function loadDashboard() {
+  const [stats, agents, memory, skills] = await Promise.all([
+    apiFetch('/api/stats'), apiFetch('/api/agents'),
+    apiFetch('/api/memory/stats'), apiFetch('/api/skills'),
+  ]);
+  if (stats) {
+    $('statUptime').textContent = Math.floor(stats.uptime / 3600);
+    $('statNotes').textContent = stats.noteCount;
+  }
+  if (memory) $('statMemory').textContent = memory.total || memory.count || '?';
+  if (skills) $('statSkills').textContent = Array.isArray(skills) ? skills.length : skills.total || '?';
+
+  if (agents && Array.isArray(agents)) {
+    const colors = { scout:'#4facfe', analyst:'#00d68f', learner:'#a78bfa', executor:'#f0c27f', 'trading-monitor':'#ff6b6b', sentinel:'#ff9800', mind:'#00f2fe' };
+    const icons = { scout:'&#x1F50D;', analyst:'&#x1F4CA;', learner:'&#x1F4DA;', executor:'&#x2699;', 'trading-monitor':'&#x1F4C8;', sentinel:'&#x1F6E1;', mind:'&#x1F9E0;' };
+    const html = agents.map(a => `
+      <div class="agent-card">
+        <div class="agent-avatar" style="background:${colors[a.agent_id]||'#333'}22;color:${colors[a.agent_id]||'#888'}">${icons[a.agent_id]||'&#x1F916;'}</div>
+        <div class="agent-info">
+          <div class="agent-name">${a.agent_id}</div>
+          <div class="agent-stat">${a.successes}/${a.total} runs &bull; ${Math.round(a.avg_duration/1000)}s moy</div>
+        </div>
+        <div class="agent-badge ${a.errors > 0 ? 'err' : 'ok'}">${a.errors > 0 ? a.errors+' err' : 'OK'}</div>
+      </div>`).join('');
+    $('agentsGrid').innerHTML = html;
+    $('agentsDetailGrid').innerHTML = html;
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Navigation
+// ═══════════════════════════════════════════════════════
+const views = ['Dash','Agents','Memory','Trading'];
+function showView(name) {
+  views.forEach(v => {
+    const el = $('view'+v); if (el) el.style.display = v === name ? '' : 'none';
+    const btn = $('nav'+v); if (btn) btn.classList.toggle('active', v === name);
+  });
+}
+$('navDash').onclick = () => showView('Dash');
+$('navAgents').onclick = () => showView('Agents');
+$('navMemory').onclick = () => { showView('Memory'); loadMemoryView(); };
+$('navTrading').onclick = () => { showView('Trading'); loadTradingView(); };
+$('navSettings').onclick = () => window.open('/', '_blank');
+
+async function loadMemoryView() {
+  const mem = await apiFetch('/api/memory/stats');
+  if (!mem) return;
+  $('memoryCards').innerHTML = `
+    <div class="card"><div class="card-label">Total</div><div class="card-value">${mem.total||mem.count||0}</div></div>
+    <div class="card"><div class="card-label">Categories</div><div class="card-value">${Object.keys(mem.byCategory||{}).length}</div></div>
+  ` + Object.entries(mem.byCategory||{}).map(([k,v]) =>
+    `<div class="card"><div class="card-label">${k}</div><div class="card-value">${v}</div></div>`
+  ).join('');
+}
+
+async function loadTradingView() {
+  const data = await apiFetch('/api/trading');
+  if (!data) { $('tradingCards').innerHTML = '<div class="card"><div class="card-label">Trading</div><div class="card-sub">Pas de donnees</div></div>'; return; }
+  $('tradingCards').innerHTML = `
+    <div class="card"><div class="card-label">Portfolio</div><div class="card-value">$${(data.equity||0).toLocaleString()}</div></div>
+    <div class="card"><div class="card-label">Positions</div><div class="card-value">${(data.positions||[]).length}</div></div>
+    <div class="card"><div class="card-label">P&L Jour</div><div class="card-value" style="color:${(data.dailyPnl||0)>=0?'var(--green)':'var(--red)'}">$${(data.dailyPnl||0).toFixed(2)}</div></div>
+  `;
 }
 
 // ═══════════════════════════════════════════════════════
 // Mode switching
 // ═══════════════════════════════════════════════════════
-function updateModeUI() {
-  if (voiceMode === 'local') {
-    modeBtn.innerHTML = '&#x1F504; Local';
-    modeBtn.style.borderColor = '#4caf50';
-    modeBtn.style.color = '#4caf50';
-    modeLabel.textContent = 'Local';
-    hintText.textContent = 'Local — Web Speech + Edge TTS ($0)  |  Escape = stop  |  Dis "Computer" pour activer';
-  } else {
-    modeBtn.innerHTML = '&#x1F504; Cloud';
-    modeBtn.style.borderColor = '#a78bfa';
-    modeBtn.style.color = '#a78bfa';
-    modeLabel.textContent = 'Gemini Live';
-    hintText.textContent = 'Gemini Live — conversation naturelle en temps reel  |  Escape = stop  |  Dis "Computer" pour activer';
-  }
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-    || window.navigator.standalone === true;
-  if (isStandalone) {
-    hintText.textContent = 'Kingston Voice — application installee  |  ' + (voiceMode === 'local' ? 'Mode Local ($0)' : 'Mode Gemini Live');
-  }
+function updateMode() {
+  $('modeBtn').textContent = 'Mode: ' + (voiceMode === 'local' ? 'Local' : 'Cloud');
+  $('modeLabel').textContent = voiceMode === 'local' ? 'Local' : 'Gemini Live';
+  $('modeBtn').classList.toggle('on', voiceMode === 'cloud');
 }
-
-function toggleMode() {
-  // Stop any active session first
-  if (sessionActive) {
-    if (voiceMode === 'local') stopLocalSession();
-    else stopSession();
-  }
+$('modeBtn').onclick = () => {
+  if (sessionActive) { if (voiceMode==='local') stopLocalSession(); else stopSession(); }
   voiceMode = voiceMode === 'local' ? 'cloud' : 'local';
   localStorage.setItem('kingston_voice_mode', voiceMode);
-  updateModeUI();
-  addMsg('system', 'Mode: ' + (voiceMode === 'local' ? 'Local (Web Speech + Edge TTS)' : 'Cloud (Gemini Live)'));
-
-  // Restart wake word
-  if (wakeWordEnabled && !sessionActive) {
-    restartWakeWord();
-  }
-}
+  updateMode();
+  addMsg('system', 'Mode: ' + (voiceMode === 'local' ? 'Local' : 'Cloud'));
+  if (wakeWordEnabled && !sessionActive) restartWakeWord();
+};
 
 // ═══════════════════════════════════════════════════════
-// Wake Word — Web Speech API (runs when idle in both modes)
+// Chat panel toggle
 // ═══════════════════════════════════════════════════════
-function hasWebSpeech() {
-  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-}
+$('chatToggle').onclick = () => chatPanel.classList.toggle('hidden');
+$('chatCloseBtn').onclick = () => chatPanel.classList.add('hidden');
+
+// ═══════════════════════════════════════════════════════
+// Wake Word — Web Speech API
+// ═══════════════════════════════════════════════════════
+function hasWebSpeech() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
 
 function startWakeWord() {
-  if (!hasWebSpeech()) {
-    addMsg('system', 'Web Speech API non supportee. Utilise Chrome ou Edge.');
-    return;
-  }
-  if (wakeWordActive || sessionActive) return;
-
+  if (!hasWebSpeech() || wakeWordActive || sessionActive) return;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   wakeRecognition = new SR();
   wakeRecognition.continuous = true;
   wakeRecognition.interimResults = true;
   wakeRecognition.lang = 'fr-FR';
-  wakeRecognition.maxAlternatives = 1;
-
   wakeRecognition.onstart = () => {
-    wakeWordActive = true;
-    wakeBar.classList.add('active');
-    wakeText.textContent = 'En ecoute...';
-    wakeText.className = '';
-    if (!sessionActive) {
-      setStatus('wakeword', 'Dis "Computer"...');
-    }
+    wakeWordActive = true; wakeBar.classList.add('active');
+    wakeText.textContent = 'Ecoute...'; wakeText.className = '';
+    if (!sessionActive) setStatus('wakeword', 'Dis "Computer"...');
   };
-
-  wakeRecognition.onresult = (event) => {
-    let interim = '';
-    let final = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const t = event.results[i][0].transcript;
-      if (event.results[i].isFinal) final += t;
-      else interim += t;
+  wakeRecognition.onresult = (e) => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t; else interim += t;
     }
-
-    const display = (final || interim).trim();
-    if (display) {
-      wakeText.textContent = display;
-    }
-
-    // Check for wake word (phonetic regex — catches French STT variations)
-    const check = (final || interim).toLowerCase().replace(/[.,!?;:'"]/g, '');
-    if (WAKE_REGEX.test(check)) {
-      onWakeWordDetected();
-    }
+    const display = (final||interim).trim();
+    if (display) wakeText.textContent = display;
+    const check = (final||interim).toLowerCase().replace(/[.,!?;:'"]/g, '');
+    if (WAKE_REGEX.test(check)) onWakeWordDetected();
   };
-
-  wakeRecognition.onerror = (event) => {
-    if (event.error === 'no-speech' || event.error === 'aborted') return;
-    console.warn('Wake word speech error:', event.error);
-    if (event.error === 'not-allowed') {
-      addMsg('system', 'Microphone refuse — autorise l\'acces au micro.');
-      wakeWordActive = false;
-      wakeWordEnabled = false;
-      wakeBtn.classList.remove('on');
-      wakeBar.classList.remove('active');
-      return;
-    }
-    // Auto-restart on transient errors
-    if (wakeWordEnabled && !sessionActive) {
-      setTimeout(() => restartWakeWord(), 500);
-    }
+  wakeRecognition.onerror = (e) => {
+    if (e.error==='no-speech'||e.error==='aborted') return;
+    if (e.error==='not-allowed') { wakeWordActive=false; wakeWordEnabled=false; $('vcWake').classList.remove('on'); wakeBar.classList.remove('active'); return; }
+    if (wakeWordEnabled && !sessionActive) setTimeout(restartWakeWord, 500);
   };
-
   wakeRecognition.onend = () => {
     wakeWordActive = false;
-    // Auto-restart if still enabled and no session
-    if (wakeWordEnabled && !sessionActive) {
-      setTimeout(() => restartWakeWord(), 300);
-    } else {
-      wakeBar.classList.remove('active');
-      if (!sessionActive) {
-        setStatus('disconnected', 'Deconnecte');
-      }
-    }
+    if (wakeWordEnabled && !sessionActive) setTimeout(restartWakeWord, 300);
+    else { wakeBar.classList.remove('active'); if (!sessionActive) setStatus('disconnected','Pret'); }
   };
-
-  try {
-    wakeRecognition.start();
-  } catch (e) {
-    console.warn('Wake word start failed:', e);
-  }
+  try { wakeRecognition.start(); } catch {}
 }
-
-function stopWakeWord() {
-  wakeWordActive = false;
-  try { if (wakeRecognition) wakeRecognition.stop(); } catch {}
-  wakeRecognition = null;
-  wakeBar.classList.remove('active');
-}
-
-function restartWakeWord() {
-  if (!wakeWordEnabled || sessionActive || wakeWordActive) return;
-  stopWakeWord();
-  setTimeout(() => {
-    if (wakeWordEnabled && !sessionActive) startWakeWord();
-  }, 200);
-}
+function stopWakeWord() { wakeWordActive=false; try{if(wakeRecognition)wakeRecognition.stop();}catch{} wakeRecognition=null; wakeBar.classList.remove('active'); }
+function restartWakeWord() { if(!wakeWordEnabled||sessionActive||wakeWordActive)return; stopWakeWord(); setTimeout(()=>{if(wakeWordEnabled&&!sessionActive)startWakeWord();},200); }
 
 function onWakeWordDetected() {
-  addMsg('system', '"Computer" detecte!');
-  playBeep(880, 120);
-  wakeText.textContent = 'Computer detecte!';
-  wakeText.className = 'heard';
-
+  addMsg('system','"Computer" detecte!');
+  playBeep(880,120); wakeText.textContent='Detecte!'; wakeText.className='heard';
   stopWakeWord();
-
-  // Immediately speak a greeting (like Alexa) then start session
-  speakGreeting().then(() => {
-    if (voiceMode === 'local') startLocalSession();
-    else startSession();
-  });
+  speakGreeting().then(()=>{ if(voiceMode==='local')startLocalSession(); else startSession(); });
 }
-
-/** Speak a short greeting immediately after wake word — like Alexa's "ding" + response */
 async function speakGreeting() {
-  const greetings = ['Oui?', 'Je t\'ecoute.', 'Oui, dis-moi.', 'Qu\'est-ce que je peux faire?'];
-  const text = greetings[Math.floor(Math.random() * greetings.length)];
-  addMsg('model', text);
-  setStatus('speaking', 'Kingston...');
-
+  const texts=['Oui?','Je t\'ecoute.','Oui, dis-moi.','A ton service.'];
+  const text=texts[Math.floor(Math.random()*texts.length)];
+  addMsg('model',text); setStatus('speaking','Kingston...');
   try {
-    const res = await fetch(API_BASE + '/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': AUTH_TOKEN },
-      body: JSON.stringify({ text, voice: 'fr-male' }),
-    });
-    if (res.ok) {
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      await new Promise(resolve => {
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.play().catch(resolve);
-      });
-    }
-  } catch {}
+    const r=await fetch(API+'/api/tts',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({text,voice:'fr-male'})});
+    if(r.ok){const b=await r.blob();const u=URL.createObjectURL(b);const a=new Audio(u);await new Promise(res=>{a.onended=()=>{URL.revokeObjectURL(u);res();};a.onerror=()=>{URL.revokeObjectURL(u);res();};a.play().catch(res);});}
+  }catch{}
 }
-
 function toggleWakeWord() {
-  wakeWordEnabled = !wakeWordEnabled;
-  wakeBtn.classList.toggle('on', wakeWordEnabled);
-
-  if (wakeWordEnabled) {
-    if (!sessionActive) {
-      startWakeWord();
-      addMsg('system', 'Wake word active — dis "Computer" pour demarrer.');
-    }
-  } else {
-    stopWakeWord();
-    if (!sessionActive) {
-      setStatus('disconnected', 'Deconnecte');
-    }
-    addMsg('system', 'Wake word desactive.');
-  }
+  wakeWordEnabled=!wakeWordEnabled; $('vcWake').classList.toggle('on',wakeWordEnabled); $('wakeBtn').classList.toggle('on',wakeWordEnabled);
+  if(wakeWordEnabled){if(!sessionActive){startWakeWord();addMsg('system','Wake word active.');}}
+  else{stopWakeWord();if(!sessionActive)setStatus('disconnected','Pret');addMsg('system','Wake word off.');}
 }
-
-function playBeep(freq, duration) {
-  try {
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = freq;
-    osc.type = 'sine';
-    gain.gain.value = 0.15;
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
-    osc.stop(ctx.currentTime + duration / 1000 + 0.05);
-    setTimeout(() => ctx.close(), duration + 200);
-  } catch {}
-}
+function playBeep(f,d){try{const c=new AudioContext();const o=c.createOscillator();const g=c.createGain();o.frequency.value=f;o.type='sine';g.gain.value=0.12;o.connect(g);g.connect(c.destination);o.start();g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+d/1000);o.stop(c.currentTime+d/1000+.05);setTimeout(()=>c.close(),d+200);}catch{}}
 
 // ═══════════════════════════════════════════════════════
-// LOCAL MODE — Web Speech STT → Kingston API → Edge TTS
+// LOCAL MODE — Web Speech → Claude API → Edge TTS
 // ═══════════════════════════════════════════════════════
+function startLocalSession(){if(sessionActive)return;sessionActive=true;localProcessing=false;localFinalText='';stopWakeWord();addMsg('system','Mode local — parle, Kingston ecoute...');startLocalListening();}
 
-function startLocalSession() {
-  if (sessionActive) return;
-  sessionActive = true;
-  localListening = false;
-  localProcessing = false;
-  localFinalText = '';
-
-  stopWakeWord();
-  addMsg('system', 'Mode local — parle, Kingston ecoute...');
-  startLocalListening();
-}
-
-function startLocalListening() {
-  if (!hasWebSpeech() || localProcessing) return;
-  if (localListening) return;
-
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  localRecognition = new SR();
-  localRecognition.continuous = true;
-  localRecognition.interimResults = true;
-  localRecognition.lang = 'fr-FR';
-  localRecognition.maxAlternatives = 1;
-
-  localRecognition.onstart = () => {
-    localListening = true;
-    localFinalText = '';
-    wakeBar.classList.add('active');
-    wakeText.textContent = 'Ecoute...';
-    wakeText.className = '';
-    setStatus('local-listening', 'Kingston ecoute...');
-  };
-
-  localRecognition.onresult = (event) => {
-    let interim = '';
-    let newFinal = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const t = event.results[i][0].transcript;
-      if (event.results[i].isFinal) newFinal += t;
-      else interim += t;
-    }
-
-    if (newFinal) {
-      localFinalText += (localFinalText ? ' ' : '') + newFinal.trim();
-    }
-
-    const display = (localFinalText + (interim ? ' ' + interim : '')).trim();
-    if (display) {
-      wakeText.textContent = display;
-    }
-
-    // Reset silence timer on any speech
+function startLocalListening(){
+  if(!hasWebSpeech()||localProcessing||localListening)return;
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  localRecognition=new SR(); localRecognition.continuous=true; localRecognition.interimResults=true; localRecognition.lang='fr-FR';
+  localRecognition.onstart=()=>{localListening=true;localFinalText='';wakeBar.classList.add('active');wakeText.textContent='Ecoute...';wakeText.className='';setStatus('local-listening','Kingston ecoute...');};
+  localRecognition.onresult=(e)=>{
+    let interim='',nf='';
+    for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)nf+=t;else interim+=t;}
+    if(nf)localFinalText+=(localFinalText?' ':'')+nf.trim();
+    const d=(localFinalText+(interim?' '+interim:'')).trim();
+    if(d)wakeText.textContent=d;
     clearTimeout(localSilenceTimer);
-    if (localFinalText) {
-      // After 1.5s of silence following final text, send to Kingston
-      localSilenceTimer = setTimeout(() => {
-        if (localFinalText && !localProcessing && sessionActive) {
-          processLocalUtterance(localFinalText.trim());
-        }
-      }, 1500);
-    }
+    if(localFinalText){localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},1500);}
   };
-
-  localRecognition.onerror = (event) => {
-    if (event.error === 'no-speech' || event.error === 'aborted') return;
-    console.warn('Local speech error:', event.error);
-    if (event.error === 'not-allowed') {
-      addMsg('system', 'Microphone refuse.');
-      stopLocalSession();
-      return;
-    }
-    // Auto-restart on transient errors
-    if (sessionActive && !localProcessing) {
-      localListening = false;
-      setTimeout(() => {
-        if (sessionActive && !localProcessing) startLocalListening();
-      }, 300);
-    }
-  };
-
-  localRecognition.onend = () => {
-    localListening = false;
-    wakeBar.classList.remove('active');
-    // Auto-restart if session active and not processing
-    if (sessionActive && !localProcessing) {
-      setTimeout(() => {
-        if (sessionActive && !localProcessing) startLocalListening();
-      }, 200);
-    }
-  };
-
-  try {
-    localRecognition.start();
-  } catch (e) {
-    console.warn('Local listening start failed:', e);
-    localListening = false;
-  }
+  localRecognition.onerror=(e)=>{if(e.error==='no-speech'||e.error==='aborted')return;if(e.error==='not-allowed'){stopLocalSession();return;}if(sessionActive&&!localProcessing){localListening=false;setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},300);}};
+  localRecognition.onend=()=>{localListening=false;wakeBar.classList.remove('active');if(sessionActive&&!localProcessing)setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},200);};
+  try{localRecognition.start();}catch{localListening=false;}
 }
+function stopLocalListening(){localListening=false;clearTimeout(localSilenceTimer);try{if(localRecognition)localRecognition.stop();}catch{}localRecognition=null;wakeBar.classList.remove('active');}
 
-function stopLocalListening() {
-  localListening = false;
-  clearTimeout(localSilenceTimer);
-  try { if (localRecognition) localRecognition.stop(); } catch {}
-  localRecognition = null;
-  wakeBar.classList.remove('active');
+async function processLocal(text){
+  if(!text||localProcessing)return; localProcessing=true; localFinalText='';
+  stopLocalListening(); addMsg('user',text);
+  setStatus('processing','Kingston reflechit...'); wakeBar.classList.add('active'); wakeText.textContent='Reflexion...'; wakeText.className='';
+  try{
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),120000);
+    const r=await fetch(API+'/api/chat/kingston',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({message:text}),signal:ctrl.signal});
+    clearTimeout(to);
+    if(!r.ok)throw new Error('API '+r.status);
+    const d=await r.json(); const resp=d.response||'Desole, pas de reponse.';
+    addMsg('model',resp);
+    // Check if response contains image URLs — show in visual area
+    const imgMatch=resp.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp)/i);
+    if(imgMatch)showVisual(imgMatch[0]);
+    setStatus('speaking','Kingston parle...'); wakeText.textContent='Synthese...';
+    const tCtrl=new AbortController();const tTo=setTimeout(()=>tCtrl.abort(),30000);
+    const tr=await fetch(API+'/api/tts',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({text:resp.slice(0,2000),voice:'fr-male'}),signal:tCtrl.signal});
+    clearTimeout(tTo);
+    if(tr.ok){const b=await tr.blob();const u=URL.createObjectURL(b);localAudio=new Audio(u);await new Promise(res=>{localAudio.onended=()=>{URL.revokeObjectURL(u);localAudio=null;res();};localAudio.onerror=()=>{URL.revokeObjectURL(u);localAudio=null;res();};localAudio.play().catch(res);});}
+  }catch(err){if(err.name==='AbortError')addMsg('system','Timeout.');else addMsg('system','Erreur: '+(err.message||''));}
+  localProcessing=false; if(sessionActive)startLocalListening();
 }
-
-async function processLocalUtterance(text) {
-  if (!text || localProcessing) return;
-  localProcessing = true;
-  localFinalText = '';
-
-  // Stop listening while processing + speaking
-  stopLocalListening();
-
-  addMsg('user', text);
-  setStatus('processing', 'Kingston reflechit...');
-  wakeBar.classList.add('active');
-  wakeText.textContent = 'Reflexion...';
-  wakeText.className = '';
-
-  try {
-    // 1. Send to Kingston API (with timeout)
-    const chatController = new AbortController();
-    const chatTimeout = setTimeout(() => chatController.abort(), 120000); // 2min max
-
-    const chatRes = await fetch(API_BASE + '/api/chat/kingston', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Auth-Token': AUTH_TOKEN,
-      },
-      body: JSON.stringify({ message: text }),
-      signal: chatController.signal,
-    });
-    clearTimeout(chatTimeout);
-
-    if (!chatRes.ok) throw new Error('Chat API error: ' + chatRes.status);
-    const chatData = await chatRes.json();
-    const response = chatData.response || 'Desole, je n\'ai pas pu repondre.';
-
-    addMsg('model', response);
-
-    // 2. Convert response to speech via Edge TTS
-    setStatus('speaking', 'Kingston parle...');
-    wakeText.textContent = 'Synthese vocale...';
-
-    const ttsController = new AbortController();
-    const ttsTimeout = setTimeout(() => ttsController.abort(), 30000); // 30s max
-
-    const ttsRes = await fetch(API_BASE + '/api/tts', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Auth-Token': AUTH_TOKEN,
-      },
-      body: JSON.stringify({ text: response.slice(0, 2000), voice: 'fr-male' }),
-      signal: ttsController.signal,
-    });
-    clearTimeout(ttsTimeout);
-
-    if (ttsRes.ok) {
-      const mp3Blob = await ttsRes.blob();
-      const audioUrl = URL.createObjectURL(mp3Blob);
-      localAudio = new Audio(audioUrl);
-
-      await new Promise((resolve) => {
-        localAudio.onended = () => {
-          URL.revokeObjectURL(audioUrl);
-          localAudio = null;
-          resolve();
-        };
-        localAudio.onerror = () => {
-          URL.revokeObjectURL(audioUrl);
-          localAudio = null;
-          resolve();
-        };
-        localAudio.play().catch(() => resolve());
-      });
-    } else {
-      console.warn('TTS failed:', ttsRes.status);
-    }
-
-  } catch (err) {
-    console.error('Local processing error:', err);
-    if (err.name === 'AbortError') {
-      addMsg('system', 'Timeout — Kingston met trop de temps.');
-    } else {
-      addMsg('system', 'Erreur: ' + (err.message || 'echec'));
-    }
-  }
-
-  // 3. Resume listening
-  localProcessing = false;
-  if (sessionActive) {
-    startLocalListening();
-  }
-}
-
-function stopLocalSession() {
-  sessionActive = false;
-  localProcessing = false;
-  localFinalText = '';
-  clearTimeout(localSilenceTimer);
-
-  // Stop local listening
-  stopLocalListening();
-
-  // Stop any playing audio
-  if (localAudio) {
-    try { localAudio.pause(); } catch {}
-    localAudio = null;
-  }
-
-  // Resume wake word if enabled
-  if (wakeWordEnabled) {
-    setTimeout(() => {
-      if (!sessionActive) {
-        startWakeWord();
-        setStatus('wakeword', 'Dis "Computer"...');
-      }
-    }, 500);
-  } else {
-    setStatus('disconnected', 'Deconnecte');
-  }
-}
+function stopLocalSession(){sessionActive=false;localProcessing=false;localFinalText='';clearTimeout(localSilenceTimer);stopLocalListening();if(localAudio){try{localAudio.pause();}catch{}localAudio=null;}if(wakeWordEnabled)setTimeout(()=>{if(!sessionActive){startWakeWord();setStatus('wakeword','Dis "Computer"...');}},500);else setStatus('disconnected','Pret');}
 
 // ═══════════════════════════════════════════════════════
-// WebSocket connection (Gemini Live — Cloud mode)
+// CLOUD MODE — Gemini Live WebSocket
 // ═══════════════════════════════════════════════════════
-function connectWS() {
-  if (ws) return;
-  setStatus('connecting', 'Connexion...');
-
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: 'auth',
-      token: AUTH_TOKEN,
-      voice: 'Enceladus',
-      language: 'fr',
-    }));
-    setStatus('connecting', 'Authentification...');
-  };
-
-  ws.onmessage = (evt) => {
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
-    handleServerMessage(msg);
-  };
-
-  ws.onerror = () => {
-    addMsg('system', 'Erreur de connexion WebSocket.');
-  };
-
-  ws.onclose = () => {
-    ws = null;
-    if (sessionActive) {
-      addMsg('system', 'Connexion perdue.');
-      stopSession();
-    }
-  };
+function connectWS(){
+  if(ws)return; setStatus('connecting','Connexion...');
+  ws=new WebSocket(WS_URL);
+  ws.onopen=()=>{ws.send(JSON.stringify({type:'auth',token:TOKEN,voice:'Enceladus',language:'fr'}));setStatus('connecting','Auth...');};
+  ws.onmessage=(ev)=>{let m;try{m=JSON.parse(ev.data);}catch{return;}handleWS(m);};
+  ws.onerror=()=>addMsg('system','Erreur WebSocket.');
+  ws.onclose=()=>{ws=null;if(sessionActive){addMsg('system','Connexion perdue.');stopSession();}};
 }
-
-function handleServerMessage(msg) {
-  switch (msg.type) {
-    case 'ready':
-      setStatus('ready', 'Kingston ecoute...');
-      addMsg('system', 'Connecte! Parle naturellement — Kingston t\'entend en temps reel.');
-      startMic();
-      break;
-
-    case 'audio':
-      playAudioChunk(msg.data);
-      if (!isSpeaking) {
-        isSpeaking = true;
-        setStatus('speaking', 'Kingston parle...');
-      }
-      break;
-
+function handleWS(m){
+  switch(m.type){
+    case 'ready':setStatus('ready','Kingston ecoute...');addMsg('system','Gemini Live connecte.');startMic();break;
+    case 'audio':playChunk(m.data);if(!isSpeaking){isSpeaking=true;setStatus('speaking','Kingston parle...');}break;
     case 'transcript':
-      if (msg.role === 'model') {
-        if (!currentTranscriptEl || currentTranscriptEl.dataset.role !== 'model') {
-          currentTranscriptEl = addMsg('model', msg.text);
-          currentTranscriptEl.dataset.role = 'model';
-          currentTranscriptEl._rawText = msg.text;
-        } else {
-          // Append streaming text then re-render rich content
-          currentTranscriptEl._rawText = (currentTranscriptEl._rawText || '') + msg.text;
-          const contentDiv = currentTranscriptEl.querySelector('div:last-child');
-          if (contentDiv) contentDiv.innerHTML = renderRichText(currentTranscriptEl._rawText);
-          transcript.scrollTop = transcript.scrollHeight;
-        }
-      } else {
-        currentTranscriptEl = addMsg('user', msg.text);
-        currentTranscriptEl.dataset.role = 'user';
-      }
-      break;
-
-    case 'interrupted':
-      stopPlayback();
-      isSpeaking = false;
-      setStatus('ready', 'Kingston ecoute...');
-      currentTranscriptEl = null;
-      break;
-
-    case 'turn_complete':
-      isSpeaking = false;
-      setStatus('ready', 'Kingston ecoute...');
-      currentTranscriptEl = null;
-      break;
-
-    case 'tool':
-      if (msg.status === 'calling') {
-        addMsg('tool', '> ' + msg.name + '...');
-      } else if (msg.status === 'done') {
-        addMsg('tool', '< ' + msg.name + ': ' + (msg.result || '').slice(0, 200));
-      }
-      break;
-
-    case 'session_closed':
-      addMsg('system', 'Session Gemini expiree — reconnexion automatique...');
-      // Auto-reconnect: close current WS, reopen after short delay
-      if (ws) { try { ws.close(); } catch {} ws = null; }
-      stopMic(); stopPlayback();
-      isSpeaking = false;
-      currentTranscriptEl = null;
-      setTimeout(() => {
-        if (sessionActive) {
-          setStatus('connecting', 'Reconnexion...');
-          connectWS();
-        }
-      }, 1500);
-      break;
-
-    case 'error':
-      addMsg('system', 'Erreur: ' + msg.message);
-      break;
+      if(m.role==='model'){
+        if(!currentTranscriptEl||currentTranscriptEl.dataset.role!=='model'){currentTranscriptEl=addMsg('model',m.text);currentTranscriptEl.dataset.role='model';currentTranscriptEl._raw=m.text;}
+        else{currentTranscriptEl._raw=(currentTranscriptEl._raw||'')+m.text;const c=currentTranscriptEl.querySelector('div:last-child');if(c)c.innerHTML=renderRich(currentTranscriptEl._raw);transcript.scrollTop=transcript.scrollHeight;}
+      }else{currentTranscriptEl=addMsg('user',m.text);currentTranscriptEl.dataset.role='user';}break;
+    case 'interrupted':stopPlayback();isSpeaking=false;setStatus('ready','Kingston ecoute...');currentTranscriptEl=null;break;
+    case 'turn_complete':isSpeaking=false;setStatus('ready','Kingston ecoute...');currentTranscriptEl=null;break;
+    case 'tool':if(m.status==='calling')addMsg('tool','> '+m.name+'...');else if(m.status==='done')addMsg('tool','< '+m.name+': '+(m.result||'').slice(0,200));break;
+    case 'session_closed':addMsg('system','Session Gemini expiree — reconnexion...');if(ws){try{ws.close();}catch{}ws=null;}stopMic();stopPlayback();isSpeaking=false;currentTranscriptEl=null;setTimeout(()=>{if(sessionActive){setStatus('connecting','Reconnexion...');connectWS();}},1500);break;
+    case 'error':addMsg('system','Erreur: '+m.message);break;
   }
 }
 
-// ═══════════════════════════════════════════════════════
-// Microphone capture → PCM 16kHz mono int16 → base64
-// ═══════════════════════════════════════════════════════
-async function startMic() {
-  try {
-    audioCtx = new AudioContext({ sampleRate: 16000 });
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
+// ─── Mic capture (PCM 16kHz) ───
+async function startMic(){
+  try{
+    audioCtx=new AudioContext({sampleRate:16000});if(audioCtx.state==='suspended')await audioCtx.resume();
+    micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:true,noiseSuppression:true}});
+    const code=`class P extends AudioWorkletProcessor{constructor(){super();this.b=[];}process(i){const c=i[0]?.[0];if(!c)return true;for(let j=0;j<c.length;j++)this.b.push(c[j]);if(this.b.length>=1600){this.port.postMessage(new Float32Array(this.b.splice(0,1600)));}return true;}}registerProcessor('p',P);`;
+    const blob=new Blob([code],{type:'application/javascript'});const url=URL.createObjectURL(blob);await audioCtx.audioWorklet.addModule(url);URL.revokeObjectURL(url);
+    const src=audioCtx.createMediaStreamSource(micStream);workletNode=new AudioWorkletNode(audioCtx,'p');
+    workletNode.port.onmessage=(e)=>{if(!ws||ws.readyState!==1)return;const f=e.data;const i=new Int16Array(f.length);for(let j=0;j<f.length;j++)i[j]=Math.max(-32768,Math.min(32767,Math.round(f[j]*32767)));const b=new Uint8Array(i.buffer);let s='';for(let j=0;j<b.length;j++)s+=String.fromCharCode(b[j]);ws.send(JSON.stringify({type:'audio',data:btoa(s)}));};
+    src.connect(workletNode);workletNode.connect(audioCtx.destination);
+  }catch(err){console.warn('Worklet fail:',err);}
+}
+function stopMic(){if(workletNode){workletNode.disconnect();workletNode=null;}if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;}if(audioCtx){audioCtx.close().catch(()=>{});audioCtx=null;}}
 
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
-    });
+// ─── Audio playback (PCM 24kHz) ───
+function ensurePlay(){if(!playCtx)playCtx=new AudioContext({sampleRate:24000});if(playCtx.state==='suspended')playCtx.resume();}
+function playChunk(b64){ensurePlay();const r=atob(b64);const b=new Uint8Array(r.length);for(let i=0;i<r.length;i++)b[i]=r.charCodeAt(i);const i16=new Int16Array(b.buffer);const f=new Float32Array(i16.length);for(let i=0;i<i16.length;i++)f[i]=i16[i]/32768;const buf=playCtx.createBuffer(1,f.length,24000);buf.getChannelData(0).set(f);const s=playCtx.createBufferSource();s.buffer=buf;s.connect(playCtx.destination);const now=playCtx.currentTime;const at=Math.max(now+.01,nextPlayTime);s.start(at);nextPlayTime=at+buf.duration;playQueue.push(s);s.onended=()=>{const idx=playQueue.indexOf(s);if(idx>=0)playQueue.splice(idx,1);};}
+function stopPlayback(){playQueue.forEach(s=>{try{s.stop();}catch{}});playQueue=[];nextPlayTime=0;}
 
-    const workletCode = `
-      class PCMSender extends AudioWorkletProcessor {
-        constructor() {
-          super();
-          this.buffer = [];
-        }
-        process(inputs) {
-          const ch = inputs[0]?.[0];
-          if (!ch) return true;
-          for (let i = 0; i < ch.length; i++) this.buffer.push(ch[i]);
-          if (this.buffer.length >= 1600) {
-            const f32 = new Float32Array(this.buffer.splice(0, 1600));
-            this.port.postMessage(f32);
-          }
-          return true;
-        }
-      }
-      registerProcessor('pcm-sender', PCMSender);
-    `;
-    const blob = new Blob([workletCode], { type: 'application/javascript' });
-    const blobUrl = URL.createObjectURL(blob);
-    await audioCtx.audioWorklet.addModule(blobUrl);
-    URL.revokeObjectURL(blobUrl);
-
-    const source = audioCtx.createMediaStreamSource(micStream);
-    workletNode = new AudioWorkletNode(audioCtx, 'pcm-sender');
-
-    workletNode.port.onmessage = (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const float32 = e.data;
-      const int16 = new Int16Array(float32.length);
-      for (let i = 0; i < float32.length; i++) {
-        int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
-      }
-      const bytes = new Uint8Array(int16.buffer);
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      ws.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
-    };
-
-    source.connect(workletNode);
-    workletNode.connect(audioCtx.destination);
-  } catch (err) {
-    console.warn('AudioWorklet failed, using ScriptProcessor fallback:', err);
-    await startMicFallback();
-  }
+// ─── Webcam ───
+async function toggleCam(){
+  if(webcamOn){camVideo.srcObject?.getTracks().forEach(t=>t.stop());camVideo.srcObject=null;webcamOn=false;camBox.classList.add('hidden');$('vcCam').classList.remove('on');}
+  else{try{const s=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}},audio:false});camVideo.srcObject=s;webcamOn=true;camBox.classList.remove('hidden');$('vcCam').classList.add('on');}catch(e){addMsg('system','Webcam: '+e.message);}}
 }
 
-async function startMicFallback() {
-  audioCtx = new AudioContext();
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
+// ─── Session management ───
+function startSession(){if(sessionActive)return;if(voiceMode==='local'){startLocalSession();return;}sessionActive=true;stopWakeWord();connectWS();}
+function stopSession(){if(voiceMode==='local'){stopLocalSession();return;}sessionActive=false;stopMic();stopPlayback();if(ws){ws.close();ws=null;}isSpeaking=false;currentTranscriptEl=null;if(wakeWordEnabled)setTimeout(()=>{if(!sessionActive){startWakeWord();setStatus('wakeword','Dis "Computer"...');}},500);else setStatus('disconnected','Pret');}
+function toggleSession(){if(sessionActive)stopSession();else startSession();}
 
-  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const source = audioCtx.createMediaStreamSource(micStream);
-  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-
-  const nativeSR = audioCtx.sampleRate;
-  const targetSR = 16000;
-  const ratio = nativeSR / targetSR;
-
-  processor.onaudioprocess = (e) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const input = e.inputBuffer.getChannelData(0);
-    const len = Math.floor(input.length / ratio);
-    const int16 = new Int16Array(len);
-    for (let i = 0; i < len; i++) {
-      const sample = input[Math.round(i * ratio)];
-      int16[i] = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
-    }
-    const bytes = new Uint8Array(int16.buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    ws.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
-  };
-
-  source.connect(processor);
-  processor.connect(audioCtx.destination);
-}
-
-function stopMic() {
-  if (workletNode) { workletNode.disconnect(); workletNode = null; }
-  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+// ─── Text input ───
+function sendText(){
+  const t=textIn.value.trim();if(!t)return;textIn.value='';
+  if(voiceMode==='local'){processLocal(t);return;}
+  if(!sessionActive){startSession();const w=setInterval(()=>{if(ws&&ws.readyState===1){clearInterval(w);addMsg('user',t);ws.send(JSON.stringify({type:'text',text:t}));}},200);setTimeout(()=>clearInterval(w),10000);return;}
+  if(!ws||ws.readyState!==1)return;addMsg('user',t);ws.send(JSON.stringify({type:'text',text:t}));
 }
 
 // ═══════════════════════════════════════════════════════
-// Audio playback — PCM 24kHz from Gemini
+// Event Listeners
 // ═══════════════════════════════════════════════════════
-function ensurePlayCtx() {
-  if (!playCtx) {
-    playCtx = new AudioContext({ sampleRate: 24000 });
-  }
-  if (playCtx.state === 'suspended') playCtx.resume();
-}
+micBtn.onclick = toggleSession;
+$('vcWake').onclick = toggleWakeWord;
+$('wakeBtn').onclick = toggleWakeWord;
+$('vcCam').onclick = toggleCam;
+textIn.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendText();} });
+$('textSend').onclick = sendText;
+document.addEventListener('keydown', e => { if(e.key==='Escape'&&sessionActive){stopSession();addMsg('system','Session arretee.');} });
 
-function playAudioChunk(base64Pcm24k) {
-  ensurePlayCtx();
-
-  const raw = atob(base64Pcm24k);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  const int16 = new Int16Array(bytes.buffer);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
-
-  const buffer = playCtx.createBuffer(1, float32.length, 24000);
-  buffer.getChannelData(0).set(float32);
-
-  const source = playCtx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(playCtx.destination);
-
-  const now = playCtx.currentTime;
-  const startAt = Math.max(now + 0.01, nextPlayTime);
-  source.start(startAt);
-  nextPlayTime = startAt + buffer.duration;
-
-  playQueue.push(source);
-  source.onended = () => {
-    const idx = playQueue.indexOf(source);
-    if (idx >= 0) playQueue.splice(idx, 1);
-  };
-}
-
-function stopPlayback() {
-  playQueue.forEach(s => { try { s.stop(); } catch {} });
-  playQueue = [];
-  nextPlayTime = 0;
-}
-
-// ═══════════════════════════════════════════════════════
-// Webcam + Vision
-// ═══════════════════════════════════════════════════════
-async function toggleCam() {
-  if (webcamOn) {
-    camVideo.srcObject?.getTracks().forEach(t => t.stop());
-    camVideo.srcObject = null;
-    webcamOn = false;
-    camBox.classList.add('hidden');
-    document.getElementById('camBtn').classList.remove('on');
-    if (visionOn) toggleVision();
-  } else {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
-      });
-      camVideo.srcObject = stream;
-      webcamOn = true;
-      camBox.classList.remove('hidden');
-      document.getElementById('camBtn').classList.add('on');
-    } catch (e) {
-      addMsg('system', 'Webcam non disponible: ' + e.message);
-    }
-  }
-}
-
-function toggleVision() {
-  visionOn = !visionOn;
-  document.getElementById('visionBtn').classList.toggle('on', visionOn);
-  camBox.classList.toggle('vision', visionOn);
-  camTag.textContent = visionOn ? 'Vision active' : 'Webcam';
-
-  if (visionOn) {
-    if (!webcamOn) toggleCam();
-    visionInterval = setInterval(sendVisionFrame, 5000);
-    sendVisionFrame();
-  } else {
-    if (visionInterval) { clearInterval(visionInterval); visionInterval = null; }
-  }
-}
-
-function sendVisionFrame() {
-  if (!ws || ws.readyState !== WebSocket.OPEN || !webcamOn || !visionOn) return;
-  if (!camVideo.videoWidth) return;
-
-  camCanvas.width = Math.min(camVideo.videoWidth, 640);
-  camCanvas.height = Math.min(camVideo.videoHeight, 480);
-  camCanvas.getContext('2d').drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
-
-  const dataUrl = camCanvas.toDataURL('image/jpeg', 0.6);
-  ws.send(JSON.stringify({ type: 'image', data: dataUrl }));
-
-  camBox.style.borderColor = '#a78bfa';
-  setTimeout(() => { camBox.style.borderColor = ''; }, 300);
-}
-
-// ═══════════════════════════════════════════════════════
-// Session management — dispatches to local or cloud
-// ═══════════════════════════════════════════════════════
-function startSession() {
-  if (sessionActive) return;
-  if (voiceMode === 'local') {
-    startLocalSession();
-    return;
-  }
-  sessionActive = true;
-
-  // Stop wake word — Gemini takes over the mic
-  stopWakeWord();
-  connectWS();
-}
-
-function stopSession() {
-  if (voiceMode === 'local') {
-    stopLocalSession();
-    return;
-  }
-  sessionActive = false;
-  stopMic();
-  stopPlayback();
-  if (visionInterval) { clearInterval(visionInterval); visionInterval = null; }
-  if (ws) { ws.close(); ws = null; }
-  isSpeaking = false;
-  currentTranscriptEl = null;
-
-  // Resume wake word if enabled
-  if (wakeWordEnabled) {
-    setTimeout(() => {
-      if (!sessionActive) {
-        startWakeWord();
-        setStatus('wakeword', 'Dis "Computer"...');
-      }
-    }, 500);
-  } else {
-    setStatus('disconnected', 'Deconnecte');
-  }
-}
-
-function toggleSession() {
-  if (sessionActive) stopSession();
-  else startSession();
-}
-
-// ═══════════════════════════════════════════════════════
-// Text input — works in both modes
-// ═══════════════════════════════════════════════════════
-function sendText() {
-  const text = textIn.value.trim();
-  if (!text) return;
-  textIn.value = '';
-
-  if (voiceMode === 'local') {
-    // In local mode, send directly to Kingston API
-    processLocalUtterance(text);
-    return;
-  }
-
-  // Cloud mode — send via WebSocket
-  if (!sessionActive) {
-    startSession();
-    const waitAndSend = setInterval(() => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        clearInterval(waitAndSend);
-        addMsg('user', text);
-        ws.send(JSON.stringify({ type: 'text', text }));
-      }
-    }, 200);
-    setTimeout(() => clearInterval(waitAndSend), 10000);
-    return;
-  }
-
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  addMsg('user', text);
-  ws.send(JSON.stringify({ type: 'text', text }));
-}
-
-// ═══════════════════════════════════════════════════════
-// Event listeners
-// ═══════════════════════════════════════════════════════
-mainBtn.addEventListener('click', toggleSession);
-wakeBtn.addEventListener('click', toggleWakeWord);
-modeBtn.addEventListener('click', toggleMode);
-document.getElementById('camBtn').addEventListener('click', toggleCam);
-document.getElementById('visionBtn').addEventListener('click', toggleVision);
-
-textIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendText();
-  }
-});
-document.getElementById('textSend').addEventListener('click', sendText);
-
-// Escape = stop session (wake word resumes if enabled)
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && sessionActive) {
-    stopSession();
-    addMsg('system', 'Session arretee.');
-  }
-});
-
-// ── PWA: Service Worker ──
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}
-
-// ── PWA: Install prompt ──
-let deferredInstallPrompt = null;
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredInstallPrompt = e;
-  const installBtn = document.createElement('button');
-  installBtn.className = 'ctrl';
-  installBtn.innerHTML = '&#x1F4E5; Installer';
-  installBtn.title = 'Installer Kingston Voice comme application';
-  installBtn.addEventListener('click', async () => {
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt();
-    const result = await deferredInstallPrompt.userChoice;
-    if (result.outcome === 'accepted') {
-      addMsg('system', 'Kingston Voice installe! Tu peux fermer cet onglet.');
-      installBtn.remove();
-    }
-    deferredInstallPrompt = null;
-  });
-  document.querySelector('.btn-row').appendChild(installBtn);
-});
+// ── PWA ──
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+let deferredInstall=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;});
 
 // ── Init ──
-updateModeUI();
+updateMode();
+loadDashboard();
+setInterval(loadDashboard, 60000); // Refresh every minute
 
-// Auto-enable wake word if Web Speech API is available
-if (hasWebSpeech()) {
-  wakeWordEnabled = true;
-  wakeBtn.classList.add('on');
-  startWakeWord();
-} else {
-  setStatus('disconnected', 'Pret — appuie sur le micro pour commencer');
-}
+if(hasWebSpeech()){wakeWordEnabled=true;$('vcWake').classList.add('on');$('wakeBtn').classList.add('on');startWakeWord();}
+else setStatus('disconnected','Pret');
 </script>
 </body>
 </html>
