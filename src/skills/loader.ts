@@ -177,6 +177,7 @@ const TIER1_PREFIXES = [
   "trading.", "mood.", "soul.", "cron.", "mind.", "kg.", "episodic.", "rules.",
   "planner.", "revenue.", "client.", "selfimprove.", "content.",
   "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
+  "cohere.", "mistral.", "together.", "replicate.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -489,6 +490,10 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/serper.js");
   await import("./builtin/abstract-api.js");
   await import("./builtin/skill-create.js");
+  await import("./builtin/cohere.js");
+  await import("./builtin/mistral.js");
+  await import("./builtin/together.js");
+  await import("./builtin/replicate.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

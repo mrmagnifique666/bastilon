@@ -181,6 +181,10 @@ function buildConfig() {
     serperApiKey: optional("SERPER_API_KEY", ""),
     abstractEmailApiKey: optional("ABSTRACT_EMAIL_API_KEY", ""),
     abstractPhoneApiKey: optional("ABSTRACT_PHONE_API_KEY", ""),
+    cohereApiKey: optional("COHERE_API_KEY", ""),
+    mistralApiKey: optional("MISTRAL_API_KEY", ""),
+    togetherApiKey: optional("TOGETHER_API_KEY", ""),
+    replicateApiKey: optional("REPLICATE_API_KEY", ""),
 
     // Memory management
     memoryMaxItems: Number(optional("MEMORY_MAX_ITEMS", "10000")),
