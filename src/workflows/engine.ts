@@ -15,6 +15,7 @@ import path from "node:path";
 import { getDb } from "../storage/store.js";
 import { getSkill } from "../skills/loader.js";
 import { log } from "../utils/log.js";
+import { searchMemories } from "../memory/semantic.js";
 
 const WORKFLOWS_DIR = path.resolve("relay/workflows");
 
@@ -47,6 +48,10 @@ export interface WorkflowStep {
   wait_timeout?: number;
   /** Merge strategy for parallel results: "all" | "first" | "concat" */
   merge?: MergeStrategy;
+  /** RAG query: search semantic memory and inject results into variables */
+  rag_query?: string;
+  /** Number of RAG results to retrieve (default: 5) */
+  rag_limit?: number;
 }
 
 export interface WorkflowDefinition {
@@ -314,6 +319,20 @@ async function executeStep(
   // Check condition
   if (step.if && !evaluateCondition(step.if, vars)) {
     return { status: "skipped", result: "Condition not met", duration_ms: 0 };
+  }
+
+  // Handle RAG query
+  if (step.rag_query) {
+    const query = String(interpolate(step.rag_query, vars));
+    const limit = step.rag_limit || 5;
+    log.info(`[workflow] Step ${step.id}: RAG query "${query.slice(0, 60)}..." (limit=${limit})`);
+    try {
+      const results = await searchMemories(query, limit);
+      const context = results.map(r => `[${r.category}] (score: ${r.score.toFixed(2)}): ${r.content}`).join("\n");
+      return { status: "completed", result: context || "No relevant memories found.", duration_ms: Date.now() - startTime };
+    } catch (err) {
+      return { status: "error", result: err instanceof Error ? err.message : String(err), duration_ms: Date.now() - startTime };
+    }
   }
 
   // Handle sub-pipeline

@@ -46,15 +46,15 @@
 - [TODO] WhatsApp connector — via @whiskeysockets/baileys (QR auth, messages bi-directionnel)
 - [TODO] Discord connector — via discord.js (bot token, commandes slash, channels)
 
-## Priority 6 — Workflow Engine v2 (inspiré de N8N)
+## Priority 6 — Workflow Engine v2 (inspiré de N8N) — ALL DONE
 
-- [TODO] Sub-pipelines — un workflow peut appeler un autre workflow par référence
-- [TODO] Wait/Callback — pause pipeline en attendant webhook ou événement
-- [TODO] Merge/Join — combiner résultats de branches parallèles
-- [TODO] Error workflows — pipeline dédié qui se déclenche sur échec d'un autre
-- [TODO] Webhook triggers — endpoints HTTP qui déclenchent des pipelines
-- [TODO] Pipeline execution persistence — execution ID, état par étape, reprise après crash
-- [TODO] MCP SSE transport — ajouter SSE transport au MCP server (Claude Desktop compatible)
+- [DONE] Sub-pipelines — step.pipeline appelle un autre workflow par référence
+- [DONE] Wait/Callback — step.wait_callback pause + POST /api/callback/{runId}
+- [DONE] Merge/Join — step.merge combine résultats parallèles (all/first/concat)
+- [DONE] Error workflows — on_error_workflow se déclenche sur échec
+- [DONE] Webhook triggers — POST /api/webhook/{id} + workflow.webhook skill
+- [DONE] Pipeline execution persistence — état sauvé après chaque étape
+- [DONE] MCP SSE transport — GET /mcp/sse + POST /mcp/message (Claude Desktop compatible)
 
 ## Priority 7 — Social & External
 
@@ -71,6 +71,8 @@
 
 ## Completed (archive)
 
+- [DONE] Workflow Engine v2 — sub-pipelines, wait/callback, merge, error workflows, webhooks, MCP SSE — 2026-02-11
+- [DONE] Voice page fix — token prompt loop, uptime calculation, WS retry — 2026-02-11
 - [DONE] Wake word voice fix — fuzzy matching, TTS fallback, router guard for dashboard — 2026-02-11
 - [DONE] Memory cleanup + smart management — dedup, pruning, consolidation, trust-decay — 2026-02-11
 - [DONE] Agent profiles + Subordinate agents + Typed workflows + Content auto-publish — 2026-02-11
