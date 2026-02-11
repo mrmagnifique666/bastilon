@@ -24,6 +24,7 @@
     "dotenv": "^16.4.7",
     "googleapis": "^171.4.0",
     "grammy": "^1.30.0",
+    "msedge-tts": "^2.0.4",
     "puppeteer": "^24.37.2",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",

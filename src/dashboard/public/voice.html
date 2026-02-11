@@ -43,6 +43,8 @@
   .status-dot.ready { background: #4caf50; }
   .status-dot.listening { background: #ff9800; animation: blink 0.6s infinite; }
   .status-dot.speaking { background: #6c8cff; animation: blink 1.2s infinite; }
+  .status-dot.processing { background: #a78bfa; animation: blink 0.8s infinite; }
+  .status-dot.local-listening { background: #4caf50; animation: pulse 2s infinite; }
   @keyframes blink { 50% { opacity: 0.3; } }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
   #statusLabel { font-size: 13px; color: #888; }
@@ -117,7 +119,10 @@
   .big-btn.active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
   .big-btn.speaking { border-color: #6c8cff; background: #0a0a2a; }
   .big-btn.wakeword { border-color: #ff9800; background: #1a1408; }
+  .big-btn.local-active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
+  .big-btn.processing { border-color: #a78bfa; background: #1a0a2a; }
   @keyframes glow { 50% { box-shadow: 0 0 20px rgba(76,175,80,0.3); } }
+  .ctrl.mode-toggle { border-color: #a78bfa; color: #a78bfa; font-weight: 600; }
 
   .btn-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   .ctrl {
@@ -146,7 +151,7 @@
 <body>
 
 <div class="header">
-  <h1><span>Kingston</span> Voice <small style="font-size:11px;color:#555;margin-left:6px">Gemini Live</small></h1>
+  <h1><span>Kingston</span> Voice <small style="font-size:11px;color:#555;margin-left:6px" id="modeLabel">Local</small></h1>
   <div class="header-right">
     <span class="status-dot disconnected" id="dot"></span>
     <span id="statusLabel">Deconnecte</span>
@@ -171,6 +176,7 @@
 <div class="controls">
   <button class="big-btn" id="mainBtn" title="Demarrer / Arreter">&#x1F3A4;</button>
   <div class="btn-row">
+    <button class="ctrl mode-toggle" id="modeBtn">&#x1F504; Local</button>
     <button class="ctrl" id="wakeBtn">&#x1F514; Wake Word</button>
     <button class="ctrl" id="camBtn">&#x1F4F7; Webcam</button>
     <button class="ctrl" id="visionBtn">&#x1F441; Vision</button>
@@ -179,12 +185,12 @@
     <input id="textIn" placeholder="Ou tape ton message..." />
     <button id="textSend">Envoyer</button>
   </div>
-  <div class="hint">Gemini Live — conversation naturelle en temps reel &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; Dis "Kingston" pour activer</div>
+  <div class="hint" id="hintText">Local — Web Speech + Edge TTS &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; Dis "Kingston" pour activer</div>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════════
-// Kingston Voice — Gemini Live + Wake Word (Web Speech API)
+// Kingston Voice — Local + Gemini Live + Wake Word
 // ═══════════════════════════════════════════════════════
 
 const API_BASE = window.location.origin;
@@ -197,6 +203,9 @@ if (!AUTH_TOKEN) {
   const t = prompt('Token Bastilon (DASHBOARD_TOKEN):');
   if (t) { localStorage.setItem('bastilon_token', t); location.reload(); }
 }
+
+// ─── Modes: 'local' | 'cloud' ───
+let voiceMode = localStorage.getItem('kingston_voice_mode') || 'local';
 
 // ─── State ───
 let ws = null;
@@ -218,6 +227,14 @@ let wakeWordEnabled = false;
 let wakeRecognition = null;
 let wakeWordActive = false; // currently listening via Web Speech
 
+// Local mode state
+let localRecognition = null;
+let localListening = false;
+let localProcessing = false;
+let localAudio = null;       // current Audio element for TTS playback
+let localSilenceTimer = null;
+let localFinalText = '';     // accumulates final results for current utterance
+
 // ─── DOM ───
 const dot = document.getElementById('dot');
 const statusLabel = document.getElementById('statusLabel');
@@ -231,6 +248,9 @@ const camTag = document.getElementById('camTag');
 const wakeBar = document.getElementById('wakeBar');
 const wakeText = document.getElementById('wakeText');
 const wakeBtn = document.getElementById('wakeBtn');
+const modeBtn = document.getElementById('modeBtn');
+const modeLabel = document.getElementById('modeLabel');
+const hintText = document.getElementById('hintText');
 
 // ═══════════════════════════════════════════════════════
 // Status
@@ -238,12 +258,15 @@ const wakeBtn = document.getElementById('wakeBtn');
 function setStatus(state, label) {
   dot.className = 'status-dot ' + state;
   statusLabel.textContent = label;
-  if (state === 'ready' || state === 'listening') {
-    mainBtn.className = 'big-btn active';
+  if (state === 'ready' || state === 'listening' || state === 'local-listening') {
+    mainBtn.className = 'big-btn ' + (voiceMode === 'local' ? 'local-active' : 'active');
     mainBtn.innerHTML = '&#x1F534;';
   } else if (state === 'speaking') {
     mainBtn.className = 'big-btn speaking';
     mainBtn.innerHTML = '&#x1F50A;';
+  } else if (state === 'processing') {
+    mainBtn.className = 'big-btn processing';
+    mainBtn.innerHTML = '&#x23F3;';
   } else if (state === 'wakeword') {
     mainBtn.className = 'big-btn wakeword';
     mainBtn.innerHTML = '&#x1F514;';
@@ -271,7 +294,48 @@ function addMsg(role, text) {
 }
 
 // ═══════════════════════════════════════════════════════
-// Wake Word — Web Speech API (runs when Gemini is idle)
+// Mode switching
+// ═══════════════════════════════════════════════════════
+function updateModeUI() {
+  if (voiceMode === 'local') {
+    modeBtn.innerHTML = '&#x1F504; Local';
+    modeBtn.style.borderColor = '#4caf50';
+    modeBtn.style.color = '#4caf50';
+    modeLabel.textContent = 'Local';
+    hintText.textContent = 'Local — Web Speech + Edge TTS ($0)  |  Escape = stop  |  Dis "Kingston" pour activer';
+  } else {
+    modeBtn.innerHTML = '&#x1F504; Cloud';
+    modeBtn.style.borderColor = '#a78bfa';
+    modeBtn.style.color = '#a78bfa';
+    modeLabel.textContent = 'Gemini Live';
+    hintText.textContent = 'Gemini Live — conversation naturelle en temps reel  |  Escape = stop  |  Dis "Kingston" pour activer';
+  }
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+  if (isStandalone) {
+    hintText.textContent = 'Kingston Voice — application installee  |  ' + (voiceMode === 'local' ? 'Mode Local ($0)' : 'Mode Gemini Live');
+  }
+}
+
+function toggleMode() {
+  // Stop any active session first
+  if (sessionActive) {
+    if (voiceMode === 'local') stopLocalSession();
+    else stopSession();
+  }
+  voiceMode = voiceMode === 'local' ? 'cloud' : 'local';
+  localStorage.setItem('kingston_voice_mode', voiceMode);
+  updateModeUI();
+  addMsg('system', 'Mode: ' + (voiceMode === 'local' ? 'Local (Web Speech + Edge TTS)' : 'Cloud (Gemini Live)'));
+
+  // Restart wake word
+  if (wakeWordEnabled && !sessionActive) {
+    restartWakeWord();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Wake Word — Web Speech API (runs when idle in both modes)
 // ═══════════════════════════════════════════════════════
 function hasWebSpeech() {
   return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -341,7 +405,7 @@ function startWakeWord() {
 
   wakeRecognition.onend = () => {
     wakeWordActive = false;
-    // Auto-restart if still enabled and no Gemini session
+    // Auto-restart if still enabled and no session
     if (wakeWordEnabled && !sessionActive) {
       setTimeout(() => restartWakeWord(), 300);
     } else {
@@ -375,7 +439,6 @@ function restartWakeWord() {
 }
 
 function onWakeWordDetected() {
-  // Stop wake word listener, start Gemini Live session
   addMsg('system', '"Kingston" detecte — demarrage conversation...');
   playBeep(880, 120);
   wakeText.textContent = 'Kingston detecte!';
@@ -385,7 +448,8 @@ function onWakeWordDetected() {
 
   // Small delay to let speech recognition release the mic
   setTimeout(() => {
-    startSession();
+    if (voiceMode === 'local') startLocalSession();
+    else startSession();
   }, 400);
 }
 
@@ -425,7 +489,221 @@ function playBeep(freq, duration) {
 }
 
 // ═══════════════════════════════════════════════════════
-// WebSocket connection (Gemini Live)
+// LOCAL MODE — Web Speech STT → Kingston API → Edge TTS
+// ═══════════════════════════════════════════════════════
+
+function startLocalSession() {
+  if (sessionActive) return;
+  sessionActive = true;
+  localListening = false;
+  localProcessing = false;
+  localFinalText = '';
+
+  stopWakeWord();
+  addMsg('system', 'Mode local — parle, Kingston ecoute...');
+  startLocalListening();
+}
+
+function startLocalListening() {
+  if (!hasWebSpeech() || localProcessing) return;
+  if (localListening) return;
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  localRecognition = new SR();
+  localRecognition.continuous = true;
+  localRecognition.interimResults = true;
+  localRecognition.lang = 'fr-FR';
+  localRecognition.maxAlternatives = 1;
+
+  localRecognition.onstart = () => {
+    localListening = true;
+    localFinalText = '';
+    wakeBar.classList.add('active');
+    wakeText.textContent = 'Ecoute...';
+    wakeText.className = '';
+    setStatus('local-listening', 'Kingston ecoute...');
+  };
+
+  localRecognition.onresult = (event) => {
+    let interim = '';
+    let newFinal = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) newFinal += t;
+      else interim += t;
+    }
+
+    if (newFinal) {
+      localFinalText += (localFinalText ? ' ' : '') + newFinal.trim();
+    }
+
+    const display = (localFinalText + (interim ? ' ' + interim : '')).trim();
+    if (display) {
+      wakeText.textContent = display;
+    }
+
+    // Reset silence timer on any speech
+    clearTimeout(localSilenceTimer);
+    if (localFinalText) {
+      // After 1.5s of silence following final text, send to Kingston
+      localSilenceTimer = setTimeout(() => {
+        if (localFinalText && !localProcessing && sessionActive) {
+          processLocalUtterance(localFinalText.trim());
+        }
+      }, 1500);
+    }
+  };
+
+  localRecognition.onerror = (event) => {
+    if (event.error === 'no-speech' || event.error === 'aborted') return;
+    console.warn('Local speech error:', event.error);
+    if (event.error === 'not-allowed') {
+      addMsg('system', 'Microphone refuse.');
+      stopLocalSession();
+      return;
+    }
+    // Auto-restart on transient errors
+    if (sessionActive && !localProcessing) {
+      localListening = false;
+      setTimeout(() => {
+        if (sessionActive && !localProcessing) startLocalListening();
+      }, 300);
+    }
+  };
+
+  localRecognition.onend = () => {
+    localListening = false;
+    wakeBar.classList.remove('active');
+    // Auto-restart if session active and not processing
+    if (sessionActive && !localProcessing) {
+      setTimeout(() => {
+        if (sessionActive && !localProcessing) startLocalListening();
+      }, 200);
+    }
+  };
+
+  try {
+    localRecognition.start();
+  } catch (e) {
+    console.warn('Local listening start failed:', e);
+    localListening = false;
+  }
+}
+
+function stopLocalListening() {
+  localListening = false;
+  clearTimeout(localSilenceTimer);
+  try { if (localRecognition) localRecognition.stop(); } catch {}
+  localRecognition = null;
+  wakeBar.classList.remove('active');
+}
+
+async function processLocalUtterance(text) {
+  if (!text || localProcessing) return;
+  localProcessing = true;
+  localFinalText = '';
+
+  // Stop listening while processing + speaking
+  stopLocalListening();
+
+  addMsg('user', text);
+  setStatus('processing', 'Kingston reflechit...');
+  wakeBar.classList.add('active');
+  wakeText.textContent = 'Reflexion...';
+  wakeText.className = '';
+
+  try {
+    // 1. Send to Kingston API
+    const chatRes = await fetch(API_BASE + '/api/chat/kingston', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Auth-Token': AUTH_TOKEN,
+      },
+      body: JSON.stringify({ message: text }),
+    });
+
+    if (!chatRes.ok) throw new Error('Chat API error: ' + chatRes.status);
+    const chatData = await chatRes.json();
+    const response = chatData.response || 'Desole, je n\'ai pas pu repondre.';
+
+    addMsg('model', response);
+
+    // 2. Convert response to speech via Edge TTS
+    setStatus('speaking', 'Kingston parle...');
+    wakeText.textContent = 'Synthese vocale...';
+
+    const ttsRes = await fetch(API_BASE + '/api/tts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Auth-Token': AUTH_TOKEN,
+      },
+      body: JSON.stringify({ text: response.slice(0, 2000), voice: 'fr-male' }),
+    });
+
+    if (ttsRes.ok) {
+      const mp3Blob = await ttsRes.blob();
+      const audioUrl = URL.createObjectURL(mp3Blob);
+      localAudio = new Audio(audioUrl);
+
+      await new Promise((resolve) => {
+        localAudio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          localAudio = null;
+          resolve();
+        };
+        localAudio.onerror = () => {
+          URL.revokeObjectURL(audioUrl);
+          localAudio = null;
+          resolve();
+        };
+        localAudio.play().catch(() => resolve());
+      });
+    }
+
+  } catch (err) {
+    console.error('Local processing error:', err);
+    addMsg('system', 'Erreur: ' + (err.message || 'echec'));
+  }
+
+  // 3. Resume listening
+  localProcessing = false;
+  if (sessionActive) {
+    startLocalListening();
+  }
+}
+
+function stopLocalSession() {
+  sessionActive = false;
+  localProcessing = false;
+  localFinalText = '';
+  clearTimeout(localSilenceTimer);
+
+  // Stop local listening
+  stopLocalListening();
+
+  // Stop any playing audio
+  if (localAudio) {
+    try { localAudio.pause(); } catch {}
+    localAudio = null;
+  }
+
+  // Resume wake word if enabled
+  if (wakeWordEnabled) {
+    setTimeout(() => {
+      if (!sessionActive) {
+        startWakeWord();
+        setStatus('wakeword', 'Dis "Kingston"...');
+      }
+    }, 500);
+  } else {
+    setStatus('disconnected', 'Deconnecte');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// WebSocket connection (Gemini Live — Cloud mode)
 // ═══════════════════════════════════════════════════════
 function connectWS() {
   if (ws) return;
@@ -724,19 +1002,26 @@ function sendVisionFrame() {
 }
 
 // ═══════════════════════════════════════════════════════
-// Session management (Gemini Live)
+// Session management — dispatches to local or cloud
 // ═══════════════════════════════════════════════════════
 function startSession() {
   if (sessionActive) return;
+  if (voiceMode === 'local') {
+    startLocalSession();
+    return;
+  }
   sessionActive = true;
 
   // Stop wake word — Gemini takes over the mic
   stopWakeWord();
-
   connectWS();
 }
 
 function stopSession() {
+  if (voiceMode === 'local') {
+    stopLocalSession();
+    return;
+  }
   sessionActive = false;
   stopMic();
   stopPlayback();
@@ -764,30 +1049,22 @@ function toggleSession() {
 }
 
 // ═══════════════════════════════════════════════════════
-// Event listeners
+// Text input — works in both modes
 // ═══════════════════════════════════════════════════════
-mainBtn.addEventListener('click', toggleSession);
-wakeBtn.addEventListener('click', toggleWakeWord);
-document.getElementById('camBtn').addEventListener('click', toggleCam);
-document.getElementById('visionBtn').addEventListener('click', toggleVision);
-
-textIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendText();
-  }
-});
-document.getElementById('textSend').addEventListener('click', sendText);
-
 function sendText() {
   const text = textIn.value.trim();
   if (!text) return;
   textIn.value = '';
 
+  if (voiceMode === 'local') {
+    // In local mode, send directly to Kingston API
+    processLocalUtterance(text);
+    return;
+  }
+
+  // Cloud mode — send via WebSocket
   if (!sessionActive) {
-    // Auto-start session if text is sent while idle
     startSession();
-    // Wait for connection then send
     const waitAndSend = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         clearInterval(waitAndSend);
@@ -804,7 +1081,24 @@ function sendText() {
   ws.send(JSON.stringify({ type: 'text', text }));
 }
 
-// Escape = stop Gemini session (wake word resumes if enabled)
+// ═══════════════════════════════════════════════════════
+// Event listeners
+// ═══════════════════════════════════════════════════════
+mainBtn.addEventListener('click', toggleSession);
+wakeBtn.addEventListener('click', toggleWakeWord);
+modeBtn.addEventListener('click', toggleMode);
+document.getElementById('camBtn').addEventListener('click', toggleCam);
+document.getElementById('visionBtn').addEventListener('click', toggleVision);
+
+textIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendText();
+  }
+});
+document.getElementById('textSend').addEventListener('click', sendText);
+
+// Escape = stop session (wake word resumes if enabled)
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && sessionActive) {
     stopSession();
@@ -822,7 +1116,6 @@ let deferredInstallPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
-  // Show install button
   const installBtn = document.createElement('button');
   installBtn.className = 'ctrl';
   installBtn.innerHTML = '&#x1F4E5; Installer';
@@ -840,14 +1133,9 @@ window.addEventListener('beforeinstallprompt', (e) => {
   document.querySelector('.btn-row').appendChild(installBtn);
 });
 
-// Detect if running as installed PWA
-const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-  || window.navigator.standalone === true;
-if (isStandalone) {
-  document.querySelector('.hint').textContent = 'Kingston Voice — application installee | Dis "Kingston" pour activer';
-}
-
 // ── Init ──
+updateModeUI();
+
 // Auto-enable wake word if Web Speech API is available
 if (hasWebSpeech()) {
   wakeWordEnabled = true;

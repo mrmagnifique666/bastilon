@@ -682,13 +682,57 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       return json(res, { ok: true });
     }
 
-    // ── TTS proxy (ElevenLabs) — keeps API key server-side ──
+    // ── TTS: Edge TTS (free, unlimited, default) ──
+    if (pathname === "/api/tts/edge" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      const text = String(body.text || "").trim();
+      if (!text) return sendJson(res, 400, { ok: false, error: "text is required" });
+      try {
+        const { edgeTtsToMp3, resolveVoice } = await import("../voice/edgeTts.js");
+        const voice = resolveVoice(body.voice as string | undefined);
+        const mp3 = await edgeTtsToMp3(text.slice(0, 2000), voice);
+        res.writeHead(200, {
+          "Content-Type": "audio/mpeg",
+          "Content-Length": mp3.length,
+          "Access-Control-Allow-Origin": getCorsOrigin(),
+        });
+        res.end(mp3);
+      } catch (err) {
+        log.error(`[tts-edge] Error: ${err instanceof Error ? err.message : String(err)}`);
+        return sendJson(res, 500, { ok: false, error: "Edge TTS failed" });
+      }
+      return;
+    }
+    // ── TTS: unified endpoint (edge-tts default, ElevenLabs fallback) ──
     if (pathname === "/api/tts" && method === "POST") {
       if (!checkAuth(req, res)) return;
       const body = await parseBody(req);
       const text = String(body.text || "").trim();
       if (!text) return sendJson(res, 400, { ok: false, error: "text is required" });
-      if (!config.elevenlabsApiKey) return sendJson(res, 503, { ok: false, error: "ElevenLabs not configured" });
+      const provider = String(body.provider || "edge").toLowerCase();
+
+      // Edge TTS (default — free, unlimited)
+      if (provider !== "elevenlabs") {
+        try {
+          const { edgeTtsToMp3, resolveVoice } = await import("../voice/edgeTts.js");
+          const voice = resolveVoice(body.voice as string | undefined);
+          const mp3 = await edgeTtsToMp3(text.slice(0, 2000), voice);
+          res.writeHead(200, {
+            "Content-Type": "audio/mpeg",
+            "Content-Length": mp3.length,
+            "Access-Control-Allow-Origin": getCorsOrigin(),
+          });
+          res.end(mp3);
+          return;
+        } catch (err) {
+          log.warn(`[tts] Edge TTS failed, trying ElevenLabs: ${err instanceof Error ? err.message : String(err)}`);
+          // Fall through to ElevenLabs
+        }
+      }
+
+      // ElevenLabs fallback
+      if (!config.elevenlabsApiKey) return sendJson(res, 503, { ok: false, error: "No TTS available" });
       try {
         const voiceId = config.elevenlabsVoiceId || "onwK4e9ZLuTAKqWW03F9";
         const ttsResp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
