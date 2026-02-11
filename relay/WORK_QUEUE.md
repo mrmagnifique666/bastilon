@@ -41,12 +41,20 @@
 - [DONE] Agent profile folders — config/prompts/tools par agent (relay/agents/{id}/)
 - [DONE] Subordinate agents — agents.spawn/spawn_parallel + hierarchy delegation
 
-## Priority 5 — Multi-Channel (inspiré d'OpenClaw)
+## Priority 5 — Kingston Autonomy — ALL DONE
+
+- [DONE] Strategic trading cron — 9h open + 15h close, tied to KINGSTON_MIND.md strategy
+- [DONE] Moltbook maximum engagement — posts every 31min, comments every 5min (5-8 per batch)
+- [DONE] Enhanced morning briefing — 8h ET, weather+P&L+moltbook+business+health
+- [DONE] Rules auto-graduation — every 6h, auto-approve rules with 3+ successes / 0 failures
+- [DONE] Executor agent upgrade — agent_tasks queue, task type routing, direct execution
+
+## Priority 6 — Multi-Channel (inspiré d'OpenClaw)
 
 - [TODO] WhatsApp connector — via @whiskeysockets/baileys (QR auth, messages bi-directionnel)
 - [TODO] Discord connector — via discord.js (bot token, commandes slash, channels)
 
-## Priority 6 — Workflow Engine v2 (inspiré de N8N) — ALL DONE
+## Priority 7 — Workflow Engine v2 (inspiré de N8N) — ALL DONE
 
 - [DONE] Sub-pipelines — step.pipeline appelle un autre workflow par référence
 - [DONE] Wait/Callback — step.wait_callback pause + POST /api/callback/{runId}
@@ -56,21 +64,22 @@
 - [DONE] Pipeline execution persistence — état sauvé après chaque étape
 - [DONE] MCP SSE transport — GET /mcp/sse + POST /mcp/message (Claude Desktop compatible)
 
-## Priority 7 — Social & External
+## Priority 8 — Social & External
 
 - [BLOCKED] Reddit API — awaiting kingston_cdr dev account approval
 - [DONE] Moltbook presence automation — content auto-publisher in scheduler
 - [TODO] LinkedIn API — OAuth flow pour posting
 
-## Priority 8 — Infrastructure
+## Priority 9 — Infrastructure
 
 - [TODO] Dashboard enrichi — gestion skills, monitoring agents, visualisation KG
 - [TODO] AgentSkills standard — compatibilité format Anthropic (import/export skills OpenClaw)
 - [TODO] Sandbox execution — Docker containers pour tool execution
-- [TODO] RAG dans les pipelines — étape rag_query dans le workflow engine
+- [DONE] RAG dans les pipelines — step.rag_query + step.rag_limit dans le workflow engine
 
 ## Completed (archive)
 
+- [DONE] Kingston Autonomy — strategic trading, max moltbook, enhanced briefing, rules graduation, executor upgrade — 2026-02-11
 - [DONE] Workflow Engine v2 — sub-pipelines, wait/callback, merge, error workflows, webhooks, MCP SSE — 2026-02-11
 - [DONE] Voice page fix — token prompt loop, uptime calculation, WS retry — 2026-02-11
 - [DONE] Wake word voice fix — fuzzy matching, TTS fallback, router guard for dashboard — 2026-02-11

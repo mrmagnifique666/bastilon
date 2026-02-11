@@ -30,8 +30,26 @@ const EVENTS: ScheduledEvent[] = [
   {
     key: "morning_briefing",
     type: "daily",
-    hour: 7,
+    hour: 8,
     prompt: null, // dynamic — built at fire time with overnight agent data
+  },
+  {
+    key: "trading_strategy_open",
+    type: "daily",
+    hour: 9, // 9h ET — market open + 30min for stability
+    prompt: null, // dynamic — built from Kingston Mind strategy
+  },
+  {
+    key: "trading_strategy_close",
+    type: "daily",
+    hour: 15, // 15h ET — 1h before market close, review positions
+    prompt: null, // dynamic — built from Kingston Mind strategy
+  },
+  {
+    key: "rules_auto_graduate",
+    type: "interval",
+    intervalMin: 360, // every 6 hours
+    prompt: null, // dynamic — auto-graduate proven rules
   },
   {
     key: "evening_checkin",
@@ -67,13 +85,13 @@ const EVENTS: ScheduledEvent[] = [
   {
     key: "moltbook_post",
     type: "interval",
-    intervalMin: 35, // respect 30-min rate limit with buffer
+    intervalMin: 31, // tight to 30-min API rate limit — maximum posting
     prompt: null, // dynamic — built at fire time
   },
   {
     key: "moltbook_comment",
     type: "interval",
-    intervalMin: 15, // comment batch every 15 min (was 5 — too aggressive)
+    intervalMin: 5, // aggressive commenting — 50 comments/day max enforced by API
     prompt: null, // dynamic — built at fire time
   },
 ];
@@ -169,14 +187,25 @@ function buildMorningBriefingPrompt(): string {
   }
 
   return (
-    `[SCHEDULER] Briefing matinal (7h). Donne un résumé de la journée à Nicolas :\n` +
-    `1. Rappels en attente (utilise scheduler.list)\n` +
-    `2. Notes récentes (utilise notes.list)\n` +
-    `3. Rapport des agents de la nuit ci-dessous\n` +
-    `4. Un mot d'encouragement\n` +
+    `[SCHEDULER] Briefing matinal complet (8h). Compile un rapport concis pour Nicolas.\n\n` +
+    `DONNÉES À COLLECTER (appelle CHAQUE outil):\n` +
+    `1. MÉTÉO: web.search("météo Gatineau aujourd'hui") ou web.fetch("https://wttr.in/Gatineau?format=3")\n` +
+    `2. TRADING P&L: trading.positions() + trading.account() — résumé portfolio\n` +
+    `3. MOLTBOOK: moltbook.feed(sort=hot, limit=3) — tendances du jour\n` +
+    `4. BUSINESS: client.list() — leads actifs et follow-ups dus\n` +
+    `5. SYSTÈME: Rapport agents ci-dessous\n` +
+    `6. RAPPELS: scheduler.list — rappels en attente\n` +
     `${agentSummary}\n\n` +
-    `Compile tout ça en un message concis et envoie via telegram.send. ` +
-    `Mentionne les succès et problèmes des agents. Sois positif mais honnête.`
+    `FORMAT DU MESSAGE (telegram.send):\n` +
+    `"☀️ Bon matin Nicolas!\n\n` +
+    `🌤 Météo: [temp/conditions]\n` +
+    `📈 Trading: P&L [montant], [nb] positions actives\n` +
+    `🦞 Moltbook: [résumé activité]\n` +
+    `🏢 Business: [nb leads], [follow-ups dus]\n` +
+    `⚙️ Système: [nb agents actifs], [erreurs overnight]\n` +
+    `📋 Rappels: [nb en attente]\n\n` +
+    `Bonne journée! 💪"\n\n` +
+    `RÈGLES: Utilise les VRAIES données des tools. Pas de placeholders. Si un tool échoue, mets "N/A".`
   );
 }
 
@@ -231,23 +260,123 @@ function buildMoltbookPostPrompt(): string {
  */
 function buildMoltbookCommentPrompt(): string {
   return (
-    `[SCHEDULER:MOLTBOOK_COMMENT] Engage sur Moltbook avec des commentaires.\n\n` +
+    `[SCHEDULER:MOLTBOOK_COMMENT] ENGAGEMENT MAXIMUM sur Moltbook.\n\n` +
+    `OBJECTIF: Poster le MAXIMUM de commentaires de qualité. Budget: 50 commentaires/jour.\n\n` +
     `Instructions:\n` +
-    `1. Utilise moltbook.feed(sort=hot, limit=10) pour trouver des posts populaires.\n` +
-    `2. Utilise moltbook.my_comments(limit=10) pour éviter de commenter deux fois le même post.\n` +
-    `3. Choisis 2-3 posts sur lesquels tu n'as PAS encore commenté.\n` +
-    `4. Pour chaque post, écris un commentaire AUTHENTIQUE qui:\n` +
-    `   - Ajoute de la valeur (partage une expérience, pose une question technique, propose une solution)\n` +
-    `   - Se base sur ton expérience RÉELLE (trading, mémoire, sécurité, voice, tools)\n` +
-    `   - N'est PAS générique ("great post!", "I agree") — soit spécifique et technique\n` +
+    `1. Utilise moltbook.feed(sort=hot, limit=15) pour trouver des posts populaires.\n` +
+    `2. Utilise moltbook.feed(sort=new, limit=10) pour aussi commenter les posts récents.\n` +
+    `3. Utilise moltbook.my_comments(limit=20) pour éviter les doublons.\n` +
+    `4. Commente 5-8 posts différents sur lesquels tu n'as PAS encore commenté.\n` +
+    `5. Pour chaque post, écris un commentaire AUTHENTIQUE qui:\n` +
+    `   - Ajoute de la valeur (partage une expérience, pose une question, propose une solution)\n` +
+    `   - Se base sur ton expérience RÉELLE (trading, mémoire, sécurité, voice, 395+ tools)\n` +
+    `   - N'est PAS générique ("great post!", "I agree") — sois spécifique et technique\n` +
     `   - Fait 2-4 phrases max\n` +
-    `5. Attends 25+ secondes entre chaque commentaire (rate limit nouveau compte).\n` +
-    `6. Upvote chaque post sur lequel tu commentes.\n` +
-    `7. OBLIGATOIRE: Après TOUS les commentaires, envoie UNE notification à Nicolas via telegram.send:\n` +
-    `   "💬 [Moltbook Auto] X commentaires postés sur: [titres des posts]"\n` +
-    `8. Si rate-limité ou si la limite quotidienne (50) est atteinte, arrête et notifie Nicolas.\n` +
-    `9. Suis les agents intéressants que tu découvres (mais sois sélectif — max 2 par cycle).`
+    `6. Attends 21 secondes entre chaque commentaire (API rate limit: 20s).\n` +
+    `7. Upvote CHAQUE post sur lequel tu commentes + upvote 5 autres posts intéressants.\n` +
+    `8. Suis 2-3 agents intéressants que tu découvres.\n` +
+    `9. OBLIGATOIRE: Après TOUS les commentaires, envoie UNE notification à Nicolas via telegram.send:\n` +
+    `   "💬 [Moltbook] X commentaires, Y upvotes, Z follows"\n` +
+    `10. Si rate-limité ou limite quotidienne (50) atteinte, arrête proprement.`
   );
+}
+
+/**
+ * Build trading strategy prompt — reads KINGSTON_MIND.md for strategy direction.
+ * Morning: Market open — execute strategy, scan opportunities.
+ * Afternoon: Pre-close — review positions, protect gains, cut losers.
+ */
+function buildTradingStrategyPrompt(phase: "open" | "close"): string {
+  let mindStrategy = "";
+  try {
+    const mindFile = path.join(process.cwd(), "relay", "KINGSTON_MIND.md");
+    if (fs.existsSync(mindFile)) {
+      mindStrategy = fs.readFileSync(mindFile, "utf-8");
+    }
+  } catch { /* ignore */ }
+
+  const strategyBlock = mindStrategy
+    ? `--- STRATÉGIE KINGSTON MIND ---\n${mindStrategy.slice(0, 2000)}\n--- FIN STRATÉGIE ---\n\n`
+    : "(Pas de fichier KINGSTON_MIND.md — utilise ton jugement)\n\n";
+
+  if (phase === "open") {
+    return (
+      `[SCHEDULER:TRADING_STRATEGY] Exécution trading — OUVERTURE MARCHÉ\n\n` +
+      strategyBlock +
+      `Tu es Kingston, le cerveau trading autonome. Le marché vient d'ouvrir.\n\n` +
+      `PROCESSUS OBLIGATOIRE:\n` +
+      `1. Lis la stratégie ci-dessus — quels secteurs, quels critères, quel budget?\n` +
+      `2. trading.account() — vérifie le buying power disponible\n` +
+      `3. trading.positions() — état actuel du portfolio et P&L\n` +
+      `4. trading.autoscan(universe="momentum") — scanner des opportunités\n` +
+      `5. DÉCISION STRATÉGIQUE basée sur KINGSTON_MIND.md:\n` +
+      `   - La stratégie dit quoi acheter? Quels critères? Quel risque max?\n` +
+      `   - Si score >= 50 ET aligné avec la stratégie → trading.buy\n` +
+      `   - Si pas aligné → skip et log pourquoi via mind.decide\n` +
+      `6. mind.decide(category="trading", action="morning_strategy_execution", reasoning="...")\n` +
+      `7. telegram.send — résumé des actions prises à Nicolas\n\n` +
+      `RÈGLES:\n` +
+      `- JAMAIS plus de $500 par position sans mind.ask à Nicolas\n` +
+      `- TOUJOURS vérifier le stop-loss avant d'acheter\n` +
+      `- Log CHAQUE décision (achat, skip, wait) via mind.decide\n` +
+      `- Sois DISCIPLINÉ — pas de FOMO, suis la stratégie\n`
+    );
+  }
+
+  // phase === "close"
+  return (
+    `[SCHEDULER:TRADING_STRATEGY] Révision trading — PRÉ-FERMETURE MARCHÉ\n\n` +
+    strategyBlock +
+    `Tu es Kingston, le cerveau trading autonome. Le marché ferme dans 1h.\n\n` +
+    `PROCESSUS OBLIGATOIRE:\n` +
+    `1. trading.positions() — revue complète de TOUTES les positions\n` +
+    `2. Pour chaque position:\n` +
+    `   - P&L positif > 3%? → considère prendre des profits partiels\n` +
+    `   - P&L négatif > -5%? → VENDRE pour couper les pertes (stop-loss)\n` +
+    `   - P&L entre -5% et +3%? → garder, mais vérifier la thèse\n` +
+    `3. trading.account() — bilan de la journée\n` +
+    `4. Mets à jour la stratégie si nécessaire via files.write_anywhere(path="relay/KINGSTON_MIND.md")\n` +
+    `5. mind.decide(category="trading", action="eod_portfolio_review", reasoning="...")\n` +
+    `6. telegram.send — rapport de fin de journée trading à Nicolas:\n` +
+    `   "📊 [Trading EOD] P&L jour: $X | Positions: Y | Actions: Z"\n\n` +
+    `RÈGLES:\n` +
+    `- Coupe les pertes > -5% SANS hésiter\n` +
+    `- Ne fais PAS de nouveaux achats en fin de journée\n` +
+    `- Log chaque décision via mind.decide\n`
+  );
+}
+
+/**
+ * Auto-graduate proven rules — approves rules with 3+ successes and 0 failures.
+ */
+function runRulesAutoGraduation(): string | null {
+  try {
+    const db = getDb();
+    const pending = db.prepare(
+      `SELECT id, rule_name, success_count, fail_count FROM behavioral_rules
+       WHERE approved = 0 AND enabled = 1
+         AND success_count >= 3 AND fail_count = 0`
+    ).all() as Array<{ id: number; rule_name: string; success_count: number; fail_count: number }>;
+
+    if (pending.length === 0) return null;
+
+    for (const rule of pending) {
+      db.prepare("UPDATE behavioral_rules SET approved = 1, updated_at = unixepoch() WHERE id = ?").run(rule.id);
+      log.info(`[rules] Auto-graduated rule #${rule.id} "${rule.rule_name}" (${rule.success_count} successes, 0 failures)`);
+    }
+
+    const names = pending.map(r => `"${r.rule_name}" (#${r.id})`).join(", ");
+    return (
+      `[SCHEDULER:RULES] Auto-graduation: ${pending.length} règle(s) promue(s) automatiquement.\n\n` +
+      `Règles graduées: ${names}\n\n` +
+      `Ces règles avaient 3+ succès et 0 échecs. Elles sont maintenant actives.\n` +
+      `Envoie une notification brève à Nicolas via telegram.send:\n` +
+      `"🎓 [Rules] ${pending.length} règle(s) auto-approuvée(s): ${names}"`
+    );
+  } catch (err) {
+    log.error(`[scheduler] Rules auto-graduation error: ${err}`);
+    return null;
+  }
 }
 
 /**
@@ -444,6 +573,41 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
       await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
     } catch (err) {
       log.error(`[scheduler] Morning briefing error: ${err}`);
+    }
+    return;
+  }
+
+  // Trading strategy — market open / pre-close
+  if (event.key === "trading_strategy_open" || event.key === "trading_strategy_close") {
+    const phase = event.key === "trading_strategy_open" ? "open" : "close";
+    // Weekdays only
+    const dayOfWeek = new Date().getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      log.debug(`[scheduler] Trading strategy skipped — weekend`);
+      return;
+    }
+    log.info(`[scheduler] Firing trading strategy (${phase})`);
+    try {
+      const prompt = buildTradingStrategyPrompt(phase);
+      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+    } catch (err) {
+      log.error(`[scheduler] Trading strategy error: ${err}`);
+    }
+    return;
+  }
+
+  // Rules auto-graduation (every 6h)
+  if (event.key === "rules_auto_graduate") {
+    log.debug(`[scheduler] Running rules auto-graduation`);
+    try {
+      const prompt = runRulesAutoGraduation();
+      if (prompt) {
+        await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      } else {
+        log.debug(`[scheduler] No rules to graduate`);
+      }
+    } catch (err) {
+      log.error(`[scheduler] Rules auto-graduation error: ${err}`);
     }
     return;
   }
