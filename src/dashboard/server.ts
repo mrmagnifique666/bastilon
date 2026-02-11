@@ -672,6 +672,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       });
       return json(res, { ok: true, prompt });
     }
+    // ── Wake Word browser state ──
+    if (pathname === "/api/wakeword/state" && method === "POST") {
+      const body = await parseBody(req);
+      try {
+        const { updateBrowserState } = await import("../voice/wakeword.js");
+        updateBrowserState(!!body.active, body.wake_word as string | undefined);
+      } catch {}
+      return json(res, { ok: true });
+    }
+
     // ── TTS proxy (ElevenLabs) — keeps API key server-side ──
     if (pathname === "/api/tts" && method === "POST") {
       if (!checkAuth(req, res)) return;

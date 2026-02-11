@@ -3,7 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kingston Voice — Gemini Live</title>
+<title>Kingston Voice</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#6c8cff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kingston">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -32,11 +38,13 @@
     display: inline-block; transition: background 0.3s;
   }
   .status-dot.disconnected { background: #666; }
+  .status-dot.wakeword { background: #ff9800; animation: pulse 2.5s infinite; }
   .status-dot.connecting { background: #ff9800; animation: blink 1s infinite; }
   .status-dot.ready { background: #4caf50; }
   .status-dot.listening { background: #ff9800; animation: blink 0.6s infinite; }
   .status-dot.speaking { background: #6c8cff; animation: blink 1.2s infinite; }
   @keyframes blink { 50% { opacity: 0.3; } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
   #statusLabel { font-size: 13px; color: #888; }
 
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -78,6 +86,21 @@
     text-transform: uppercase; font-weight: 600;
   }
 
+  /* Wake word live text */
+  .wake-bar {
+    padding: 6px 20px;
+    background: #0d0d15;
+    border-top: 1px solid #1a1a24;
+    min-height: 28px;
+    display: none;
+  }
+  .wake-bar.active { display: block; }
+  #wakeText {
+    font-size: 12px; color: #555; font-style: italic;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  #wakeText.heard { color: #ff9800; }
+
   /* Controls */
   .controls {
     padding: 14px 20px 22px;
@@ -93,6 +116,7 @@
   .big-btn:hover { border-color: #6c8cff; }
   .big-btn.active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
   .big-btn.speaking { border-color: #6c8cff; background: #0a0a2a; }
+  .big-btn.wakeword { border-color: #ff9800; background: #1a1408; }
   @keyframes glow { 50% { box-shadow: 0 0 20px rgba(76,175,80,0.3); } }
 
   .btn-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
@@ -125,7 +149,7 @@
   <h1><span>Kingston</span> Voice <small style="font-size:11px;color:#555;margin-left:6px">Gemini Live</small></h1>
   <div class="header-right">
     <span class="status-dot disconnected" id="dot"></span>
-    <span id="statusLabel">Déconnecté</span>
+    <span id="statusLabel">Deconnecte</span>
   </div>
 </div>
 
@@ -136,31 +160,37 @@
     <div class="webcam-tag" id="camTag">Webcam</div>
   </div>
   <div class="transcript" id="transcript">
-    <div class="msg system">Appuie sur le bouton pour démarrer la conversation. Kingston te parle en temps réel via Gemini Live.</div>
+    <div class="msg system">Dis "Kingston" pour demarrer la conversation, ou appuie sur le bouton.</div>
   </div>
 </div>
 
+<div class="wake-bar" id="wakeBar">
+  <div id="wakeText">...</div>
+</div>
+
 <div class="controls">
-  <button class="big-btn" id="mainBtn" title="Démarrer / Arrêter">🎤</button>
+  <button class="big-btn" id="mainBtn" title="Demarrer / Arreter">&#x1F3A4;</button>
   <div class="btn-row">
-    <button class="ctrl" id="camBtn">📷 Webcam</button>
-    <button class="ctrl" id="visionBtn">👁 Vision</button>
+    <button class="ctrl" id="wakeBtn">&#x1F514; Wake Word</button>
+    <button class="ctrl" id="camBtn">&#x1F4F7; Webcam</button>
+    <button class="ctrl" id="visionBtn">&#x1F441; Vision</button>
   </div>
   <div class="text-row">
     <input id="textIn" placeholder="Ou tape ton message..." />
     <button id="textSend">Envoyer</button>
   </div>
-  <div class="hint">Gemini Live — conversation naturelle en temps réel &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; La voix c'est mieux!</div>
+  <div class="hint">Gemini Live — conversation naturelle en temps reel &nbsp;|&nbsp; Escape = stop &nbsp;|&nbsp; Dis "Kingston" pour activer</div>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════════
-// Kingston Voice — Gemini Live (WebSocket + PCM audio)
+// Kingston Voice — Gemini Live + Wake Word (Web Speech API)
 // ═══════════════════════════════════════════════════════
 
 const API_BASE = window.location.origin;
 const WS_URL = API_BASE.replace(/^http/, 'ws') + '/ws/voice';
 const AUTH_TOKEN = localStorage.getItem('bastilon_token') || '';
+const WAKE_WORD = 'kingston';
 
 // Auth prompt
 if (!AUTH_TOKEN) {
@@ -174,14 +204,19 @@ let sessionActive = false;
 let micStream = null;
 let audioCtx = null;
 let workletNode = null;
-let playCtx = null;          // separate context for playback
-let nextPlayTime = 0;        // scheduler for gapless playback
-let playQueue = [];           // queued AudioBufferSourceNodes
+let playCtx = null;
+let nextPlayTime = 0;
+let playQueue = [];
 let webcamOn = false;
 let visionOn = false;
 let visionInterval = null;
-let currentTranscriptEl = null;  // for streaming model text
+let currentTranscriptEl = null;
 let isSpeaking = false;
+
+// Wake word state
+let wakeWordEnabled = false;
+let wakeRecognition = null;
+let wakeWordActive = false; // currently listening via Web Speech
 
 // ─── DOM ───
 const dot = document.getElementById('dot');
@@ -193,6 +228,9 @@ const camVideo = document.getElementById('camVideo');
 const camCanvas = document.getElementById('camCanvas');
 const camBox = document.getElementById('camBox');
 const camTag = document.getElementById('camTag');
+const wakeBar = document.getElementById('wakeBar');
+const wakeText = document.getElementById('wakeText');
+const wakeBtn = document.getElementById('wakeBtn');
 
 // ═══════════════════════════════════════════════════════
 // Status
@@ -202,13 +240,16 @@ function setStatus(state, label) {
   statusLabel.textContent = label;
   if (state === 'ready' || state === 'listening') {
     mainBtn.className = 'big-btn active';
-    mainBtn.textContent = '🔴';
+    mainBtn.innerHTML = '&#x1F534;';
   } else if (state === 'speaking') {
     mainBtn.className = 'big-btn speaking';
-    mainBtn.textContent = '🔊';
+    mainBtn.innerHTML = '&#x1F50A;';
+  } else if (state === 'wakeword') {
+    mainBtn.className = 'big-btn wakeword';
+    mainBtn.innerHTML = '&#x1F514;';
   } else {
     mainBtn.className = 'big-btn';
-    mainBtn.textContent = '🎤';
+    mainBtn.innerHTML = '&#x1F3A4;';
   }
 }
 
@@ -230,7 +271,161 @@ function addMsg(role, text) {
 }
 
 // ═══════════════════════════════════════════════════════
-// WebSocket connection
+// Wake Word — Web Speech API (runs when Gemini is idle)
+// ═══════════════════════════════════════════════════════
+function hasWebSpeech() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function startWakeWord() {
+  if (!hasWebSpeech()) {
+    addMsg('system', 'Web Speech API non supportee. Utilise Chrome ou Edge.');
+    return;
+  }
+  if (wakeWordActive || sessionActive) return;
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  wakeRecognition = new SR();
+  wakeRecognition.continuous = true;
+  wakeRecognition.interimResults = true;
+  wakeRecognition.lang = 'fr-FR';
+  wakeRecognition.maxAlternatives = 1;
+
+  wakeRecognition.onstart = () => {
+    wakeWordActive = true;
+    wakeBar.classList.add('active');
+    wakeText.textContent = 'En ecoute...';
+    wakeText.className = '';
+    if (!sessionActive) {
+      setStatus('wakeword', 'Dis "Kingston"...');
+    }
+  };
+
+  wakeRecognition.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) final += t;
+      else interim += t;
+    }
+
+    const display = (final || interim).trim();
+    if (display) {
+      wakeText.textContent = display;
+    }
+
+    // Check for wake word in any text
+    const check = (final || interim).toLowerCase();
+    if (check.includes(WAKE_WORD)) {
+      onWakeWordDetected();
+    }
+  };
+
+  wakeRecognition.onerror = (event) => {
+    if (event.error === 'no-speech' || event.error === 'aborted') return;
+    console.warn('Wake word speech error:', event.error);
+    if (event.error === 'not-allowed') {
+      addMsg('system', 'Microphone refuse — autorise l\'acces au micro.');
+      wakeWordActive = false;
+      wakeWordEnabled = false;
+      wakeBtn.classList.remove('on');
+      wakeBar.classList.remove('active');
+      return;
+    }
+    // Auto-restart on transient errors
+    if (wakeWordEnabled && !sessionActive) {
+      setTimeout(() => restartWakeWord(), 500);
+    }
+  };
+
+  wakeRecognition.onend = () => {
+    wakeWordActive = false;
+    // Auto-restart if still enabled and no Gemini session
+    if (wakeWordEnabled && !sessionActive) {
+      setTimeout(() => restartWakeWord(), 300);
+    } else {
+      wakeBar.classList.remove('active');
+      if (!sessionActive) {
+        setStatus('disconnected', 'Deconnecte');
+      }
+    }
+  };
+
+  try {
+    wakeRecognition.start();
+  } catch (e) {
+    console.warn('Wake word start failed:', e);
+  }
+}
+
+function stopWakeWord() {
+  wakeWordActive = false;
+  try { if (wakeRecognition) wakeRecognition.stop(); } catch {}
+  wakeRecognition = null;
+  wakeBar.classList.remove('active');
+}
+
+function restartWakeWord() {
+  if (!wakeWordEnabled || sessionActive || wakeWordActive) return;
+  stopWakeWord();
+  setTimeout(() => {
+    if (wakeWordEnabled && !sessionActive) startWakeWord();
+  }, 200);
+}
+
+function onWakeWordDetected() {
+  // Stop wake word listener, start Gemini Live session
+  addMsg('system', '"Kingston" detecte — demarrage conversation...');
+  playBeep(880, 120);
+  wakeText.textContent = 'Kingston detecte!';
+  wakeText.className = 'heard';
+
+  stopWakeWord();
+
+  // Small delay to let speech recognition release the mic
+  setTimeout(() => {
+    startSession();
+  }, 400);
+}
+
+function toggleWakeWord() {
+  wakeWordEnabled = !wakeWordEnabled;
+  wakeBtn.classList.toggle('on', wakeWordEnabled);
+
+  if (wakeWordEnabled) {
+    if (!sessionActive) {
+      startWakeWord();
+      addMsg('system', 'Wake word active — dis "Kingston" pour demarrer.');
+    }
+  } else {
+    stopWakeWord();
+    if (!sessionActive) {
+      setStatus('disconnected', 'Deconnecte');
+    }
+    addMsg('system', 'Wake word desactive.');
+  }
+}
+
+function playBeep(freq, duration) {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    osc.type = 'sine';
+    gain.gain.value = 0.15;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
+    osc.stop(ctx.currentTime + duration / 1000 + 0.05);
+    setTimeout(() => ctx.close(), duration + 200);
+  } catch {}
+}
+
+// ═══════════════════════════════════════════════════════
+// WebSocket connection (Gemini Live)
 // ═══════════════════════════════════════════════════════
 function connectWS() {
   if (ws) return;
@@ -239,7 +434,6 @@ function connectWS() {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    // Send auth + config
     ws.send(JSON.stringify({
       type: 'auth',
       token: AUTH_TOKEN,
@@ -262,18 +456,17 @@ function connectWS() {
   ws.onclose = () => {
     ws = null;
     if (sessionActive) {
-      addMsg('system', 'Connexion perdue. Appuie sur le bouton pour reconnecter.');
+      addMsg('system', 'Connexion perdue.');
       stopSession();
     }
-    setStatus('disconnected', 'Déconnecté');
   };
 }
 
 function handleServerMessage(msg) {
   switch (msg.type) {
     case 'ready':
-      setStatus('ready', 'Kingston écoute...');
-      addMsg('system', 'Connecté! Parle naturellement — Kingston t\'entend en temps réel.');
+      setStatus('ready', 'Kingston ecoute...');
+      addMsg('system', 'Connecte! Parle naturellement — Kingston t\'entend en temps reel.');
       startMic();
       break;
 
@@ -287,7 +480,6 @@ function handleServerMessage(msg) {
 
     case 'transcript':
       if (msg.role === 'model') {
-        // Append to current model message or create new
         if (!currentTranscriptEl || currentTranscriptEl.dataset.role !== 'model') {
           currentTranscriptEl = addMsg('model', msg.text);
           currentTranscriptEl.dataset.role = 'model';
@@ -305,26 +497,26 @@ function handleServerMessage(msg) {
     case 'interrupted':
       stopPlayback();
       isSpeaking = false;
-      setStatus('ready', 'Kingston écoute...');
+      setStatus('ready', 'Kingston ecoute...');
       currentTranscriptEl = null;
       break;
 
     case 'turn_complete':
       isSpeaking = false;
-      setStatus('ready', 'Kingston écoute...');
+      setStatus('ready', 'Kingston ecoute...');
       currentTranscriptEl = null;
       break;
 
     case 'tool':
       if (msg.status === 'calling') {
-        addMsg('tool', `🔧 ${msg.name}...`);
+        addMsg('tool', '> ' + msg.name + '...');
       } else if (msg.status === 'done') {
-        addMsg('tool', `✓ ${msg.name}: ${(msg.result || '').slice(0, 200)}`);
+        addMsg('tool', '< ' + msg.name + ': ' + (msg.result || '').slice(0, 200));
       }
       break;
 
     case 'session_closed':
-      addMsg('system', 'Session Gemini expirée — reconnexion...');
+      addMsg('system', 'Session Gemini expiree — reconnexion...');
       break;
 
     case 'error':
@@ -339,14 +531,12 @@ function handleServerMessage(msg) {
 async function startMic() {
   try {
     audioCtx = new AudioContext({ sampleRate: 16000 });
-    // Resume if suspended (Chrome autoplay policy)
     if (audioCtx.state === 'suspended') await audioCtx.resume();
 
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
     });
 
-    // AudioWorklet for low-latency capture
     const workletCode = `
       class PCMSender extends AudioWorkletProcessor {
         constructor() {
@@ -356,7 +546,6 @@ async function startMic() {
         process(inputs) {
           const ch = inputs[0]?.[0];
           if (!ch) return true;
-          // Accumulate ~100ms of audio at 16kHz = 1600 samples
           for (let i = 0; i < ch.length; i++) this.buffer.push(ch[i]);
           if (this.buffer.length >= 1600) {
             const f32 = new Float32Array(this.buffer.splice(0, 1600));
@@ -378,23 +567,19 @@ async function startMic() {
     workletNode.port.onmessage = (e) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       const float32 = e.data;
-      // Float32 → Int16
       const int16 = new Int16Array(float32.length);
       for (let i = 0; i < float32.length; i++) {
         int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
       }
-      // Int16 → base64
       const bytes = new Uint8Array(int16.buffer);
       let binary = '';
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      const b64 = btoa(binary);
-      ws.send(JSON.stringify({ type: 'audio', data: b64 }));
+      ws.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
     };
 
     source.connect(workletNode);
-    workletNode.connect(audioCtx.destination); // needed to keep the worklet alive
+    workletNode.connect(audioCtx.destination);
   } catch (err) {
-    // Fallback: ScriptProcessorNode (deprecated but wider support)
     console.warn('AudioWorklet failed, using ScriptProcessor fallback:', err);
     await startMicFallback();
   }
@@ -415,7 +600,6 @@ async function startMicFallback() {
   processor.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const input = e.inputBuffer.getChannelData(0);
-    // Downsample
     const len = Math.floor(input.length / ratio);
     const int16 = new Int16Array(len);
     for (let i = 0; i < len; i++) {
@@ -451,7 +635,6 @@ function ensurePlayCtx() {
 function playAudioChunk(base64Pcm24k) {
   ensurePlayCtx();
 
-  // Base64 → Uint8Array → Int16Array → Float32Array
   const raw = atob(base64Pcm24k);
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
@@ -459,7 +642,6 @@ function playAudioChunk(base64Pcm24k) {
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
 
-  // Create buffer and schedule for gapless playback
   const buffer = playCtx.createBuffer(1, float32.length, 24000);
   buffer.getChannelData(0).set(float32);
 
@@ -473,7 +655,6 @@ function playAudioChunk(base64Pcm24k) {
   nextPlayTime = startAt + buffer.duration;
 
   playQueue.push(source);
-  // Clean up old refs
   source.onended = () => {
     const idx = playQueue.indexOf(source);
     if (idx >= 0) playQueue.splice(idx, 1);
@@ -520,9 +701,8 @@ function toggleVision() {
 
   if (visionOn) {
     if (!webcamOn) toggleCam();
-    // Send a frame every 5 seconds
     visionInterval = setInterval(sendVisionFrame, 5000);
-    sendVisionFrame(); // send one immediately
+    sendVisionFrame();
   } else {
     if (visionInterval) { clearInterval(visionInterval); visionInterval = null; }
   }
@@ -539,17 +719,20 @@ function sendVisionFrame() {
   const dataUrl = camCanvas.toDataURL('image/jpeg', 0.6);
   ws.send(JSON.stringify({ type: 'image', data: dataUrl }));
 
-  // Flash border
   camBox.style.borderColor = '#a78bfa';
   setTimeout(() => { camBox.style.borderColor = ''; }, 300);
 }
 
 // ═══════════════════════════════════════════════════════
-// Session management
+// Session management (Gemini Live)
 // ═══════════════════════════════════════════════════════
 function startSession() {
   if (sessionActive) return;
   sessionActive = true;
+
+  // Stop wake word — Gemini takes over the mic
+  stopWakeWord();
+
   connectWS();
 }
 
@@ -561,7 +744,18 @@ function stopSession() {
   if (ws) { ws.close(); ws = null; }
   isSpeaking = false;
   currentTranscriptEl = null;
-  setStatus('disconnected', 'Déconnecté');
+
+  // Resume wake word if enabled
+  if (wakeWordEnabled) {
+    setTimeout(() => {
+      if (!sessionActive) {
+        startWakeWord();
+        setStatus('wakeword', 'Dis "Kingston"...');
+      }
+    }, 500);
+  } else {
+    setStatus('disconnected', 'Deconnecte');
+  }
 }
 
 function toggleSession() {
@@ -573,6 +767,7 @@ function toggleSession() {
 // Event listeners
 // ═══════════════════════════════════════════════════════
 mainBtn.addEventListener('click', toggleSession);
+wakeBtn.addEventListener('click', toggleWakeWord);
 document.getElementById('camBtn').addEventListener('click', toggleCam);
 document.getElementById('visionBtn').addEventListener('click', toggleVision);
 
@@ -586,22 +781,81 @@ document.getElementById('textSend').addEventListener('click', sendText);
 
 function sendText() {
   const text = textIn.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!text) return;
   textIn.value = '';
+
+  if (!sessionActive) {
+    // Auto-start session if text is sent while idle
+    startSession();
+    // Wait for connection then send
+    const waitAndSend = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        clearInterval(waitAndSend);
+        addMsg('user', text);
+        ws.send(JSON.stringify({ type: 'text', text }));
+      }
+    }, 200);
+    setTimeout(() => clearInterval(waitAndSend), 10000);
+    return;
+  }
+
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   addMsg('user', text);
   ws.send(JSON.stringify({ type: 'text', text }));
 }
 
-// Escape = stop everything
+// Escape = stop Gemini session (wake word resumes if enabled)
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && sessionActive) {
     stopSession();
-    addMsg('system', 'Session arrêtée.');
+    addMsg('system', 'Session arretee.');
   }
 });
 
-// Init
-setStatus('disconnected', 'Prêt — appuie sur le micro pour commencer');
+// ── PWA: Service Worker ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ── PWA: Install prompt ──
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  // Show install button
+  const installBtn = document.createElement('button');
+  installBtn.className = 'ctrl';
+  installBtn.innerHTML = '&#x1F4E5; Installer';
+  installBtn.title = 'Installer Kingston Voice comme application';
+  installBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const result = await deferredInstallPrompt.userChoice;
+    if (result.outcome === 'accepted') {
+      addMsg('system', 'Kingston Voice installe! Tu peux fermer cet onglet.');
+      installBtn.remove();
+    }
+    deferredInstallPrompt = null;
+  });
+  document.querySelector('.btn-row').appendChild(installBtn);
+});
+
+// Detect if running as installed PWA
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+  || window.navigator.standalone === true;
+if (isStandalone) {
+  document.querySelector('.hint').textContent = 'Kingston Voice — application installee | Dis "Kingston" pour activer';
+}
+
+// ── Init ──
+// Auto-enable wake word if Web Speech API is available
+if (hasWebSpeech()) {
+  wakeWordEnabled = true;
+  wakeBtn.classList.add('on');
+  startWakeWord();
+} else {
+  setStatus('disconnected', 'Pret — appuie sur le micro pour commencer');
+}
 </script>
 </body>
 </html>

@@ -1,6 +1,8 @@
 /**
- * Built-in skills: printful.store, printful.products, printful.product,
- * printful.orders, printful.order, printful.create_order, printful.shipping_rates
+ * Built-in skills: printful.store, printful.stores, printful.products, printful.product,
+ * printful.delete_product, printful.create_product,
+ * printful.orders, printful.order, printful.create_order, printful.shipping_rates,
+ * printful.catalog
  * Uses Printful REST API via fetch (no SDK dependency).
  */
 import { registerSkill } from "../loader.js";
@@ -313,4 +315,92 @@ registerSkill({
   },
 });
 
-log.debug("Registered 8 printful.* skills");
+// --- New skills: stores, delete_product, create_product ---
+
+registerSkill({
+  name: "printful.stores",
+  description: "List all Printful stores accessible with the current API token",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    const err = checkConfig();
+    if (err) return err;
+    try {
+      const stores = await printfulFetch("GET", "/stores");
+      if (!stores?.length) return "No stores found.";
+      const lines = stores.map((s: any) =>
+        `[${s.id}] ${s.name} — type: ${s.type}`
+      );
+      return `Stores (${stores.length}):\n${lines.join("\n")}`;
+    } catch (e) {
+      return `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  },
+});
+
+registerSkill({
+  name: "printful.delete_product",
+  description: "Delete a sync product from the store by ID",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      id: { type: "number", description: "Sync product ID to delete" },
+    },
+    required: ["id"],
+  },
+  async execute(args): Promise<string> {
+    const err = checkConfig();
+    if (err) return err;
+    try {
+      await printfulFetch("DELETE", `/store/products/${args.id}`);
+      return `Product ${args.id} deleted successfully.`;
+    } catch (e) {
+      return `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  },
+});
+
+registerSkill({
+  name: "printful.create_product",
+  description: "Create a new sync product with variants. Requires a public image URL.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Product name" },
+      image_url: { type: "string", description: "Public URL of the design image (PNG/JPG)" },
+      variant_ids: { type: "string", description: "Comma-separated catalog variant IDs (default: 4016,4017,4018,4019 for Bella+Canvas 3001 S-XL)" },
+      price: { type: "string", description: "Retail price per variant (default: 29.99)" },
+    },
+    required: ["name", "image_url"],
+  },
+  async execute(args): Promise<string> {
+    const err = checkConfig();
+    if (err) return err;
+    try {
+      const name = String(args.name);
+      const imageUrl = String(args.image_url);
+      const price = String(args.price || "29.99");
+      const variantIds = args.variant_ids
+        ? String(args.variant_ids).split(",").map(Number)
+        : [4016, 4017, 4018, 4019]; // Bella+Canvas 3001 Black S-XL
+
+      const productData = {
+        sync_product: { name, thumbnail: imageUrl },
+        sync_variants: variantIds.map((vid: number) => ({
+          variant_id: vid,
+          retail_price: price,
+          files: [{ url: imageUrl, type: "front" }],
+        })),
+      };
+
+      const result = await printfulFetch("POST", "/store/products", productData);
+      return `Product created: id=${result.id} name="${name}" variants=${variantIds.length}`;
+    } catch (e) {
+      return `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  },
+});
+
+log.debug("Registered 11 printful.* skills");

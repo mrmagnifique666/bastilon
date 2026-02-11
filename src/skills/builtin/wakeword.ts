@@ -1,6 +1,7 @@
 /**
  * Built-in skills: wakeword.start, wakeword.stop, wakeword.status
- * Wake Word Listener — "Computer" activates Kingston via local microphone.
+ * Wake Word Listener — Browser-based via Web Speech API.
+ * Opens http://localhost:3200/listen.html — says "Kingston" to activate.
  */
 import { registerSkill } from "../loader.js";
 import {
@@ -12,7 +13,7 @@ import {
 registerSkill({
   name: "wakeword.start",
   description:
-    'Start listening for wake word ("Computer" by default). Requires PICOVOICE_ACCESS_KEY in .env (free at picovoice.ai).',
+    'Open the wake word listener page in the browser. Uses Web Speech API (Chrome/Edge) — no API key needed. Say "Kingston" to talk.',
   adminOnly: true,
   argsSchema: {
     type: "object",
@@ -21,20 +22,21 @@ registerSkill({
   async execute(): Promise<string> {
     const status = getWakeWordStatus();
     if (status.listening) {
-      return `Deja en ecoute pour "${status.keyword}".`;
+      return `Deja actif! Page: ${status.url}`;
     }
 
     const ok = await startWakeWord();
     if (ok) {
-      return `🎙️ Wake word active! Dis "${getWakeWordStatus().keyword}" pour parler a Kingston.`;
+      const s = getWakeWordStatus();
+      return `Wake word active! Ouvre ${s.url} dans Chrome/Edge.\nDis "${s.keyword}" suivi de ta commande.`;
     }
-    return "Echec — verifie que PICOVOICE_ACCESS_KEY est dans .env (gratuit sur picovoice.ai).";
+    return "Echec de l'activation.";
   },
 });
 
 registerSkill({
   name: "wakeword.stop",
-  description: "Stop listening for wake word.",
+  description: "Deactivate the wake word listener.",
   adminOnly: true,
   argsSchema: {
     type: "object",
@@ -42,7 +44,7 @@ registerSkill({
   },
   async execute(): Promise<string> {
     stopWakeWord();
-    return "🔇 Wake word desactive.";
+    return "Wake word desactive. Ferme l'onglet listen.html pour arreter completement.";
   },
 });
 
@@ -57,12 +59,13 @@ registerSkill({
   async execute(): Promise<string> {
     const status = getWakeWordStatus();
     return (
-      `**Wake Word:**\n` +
-      `- Ecoute: ${status.listening ? "✅ OUI" : "❌ NON"}\n` +
+      `**Wake Word (Browser):**\n` +
+      `- Actif: ${status.listening ? "OUI" : "NON"}\n` +
       `- Mot-cle: "${status.keyword}"\n` +
-      `- En traitement: ${status.processing ? "oui" : "non"}\n\n` +
-      `Mots disponibles: COMPUTER, JARVIS, TERMINATOR, ALEXA, PICOVOICE\n` +
-      `Config: WAKEWORD_KEYWORD dans .env`
+      `- Mode: ${status.mode}\n` +
+      `- URL: ${status.url}\n\n` +
+      `Utilise Chrome ou Edge pour la meilleure compatibilite.\n` +
+      `Web Speech API — gratuit, aucune cle requise.`
     );
   },
 });

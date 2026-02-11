@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kingston — Wake Word Listener</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #111118;
+    border-bottom: 1px solid #222;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header h1 span { color: #6c8cff; }
+  .header-right { display: flex; gap: 10px; align-items: center; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block; transition: background 0.3s;
+  }
+  .status-dot.off { background: #666; }
+  .status-dot.listening { background: #4caf50; animation: pulse 2s infinite; }
+  .status-dot.wake { background: #ff9800; animation: blink 0.5s infinite; }
+  .status-dot.processing { background: #6c8cff; animation: blink 1s infinite; }
+  .status-dot.speaking { background: #a78bfa; animation: blink 1.2s infinite; }
+  .status-dot.error { background: #f44336; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes blink { 50% { opacity: 0.3; } }
+  #statusLabel { font-size: 13px; color: #888; }
+
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .transcript {
+    flex: 1; overflow-y: auto; padding: 20px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .msg {
+    max-width: 85%; padding: 10px 14px; border-radius: 12px;
+    font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .msg.user { align-self: flex-end; background: #1a3a6a; border-bottom-right-radius: 4px; }
+  .msg.kingston { align-self: flex-start; background: #1e1e2a; border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; color: #666; font-size: 12px; font-style: italic; }
+  .msg .lbl {
+    font-size: 10px; color: #666; margin-bottom: 3px;
+    text-transform: uppercase; font-weight: 600;
+  }
+
+  .live-box {
+    padding: 10px 20px;
+    background: #0d0d15;
+    border-top: 1px solid #1a1a24;
+    min-height: 40px;
+  }
+  #liveText {
+    font-size: 13px; color: #555; font-style: italic;
+    max-height: 40px; overflow: hidden;
+  }
+  #liveText.active { color: #ff9800; }
+
+  .controls {
+    padding: 14px 20px 22px;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    background: #111118; border-top: 1px solid #222;
+  }
+  .big-btn {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 3px solid #333; background: #1a1a24;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 32px; transition: all 0.2s;
+  }
+  .big-btn:hover { border-color: #6c8cff; }
+  .big-btn.active { border-color: #4caf50; background: #0a2a0a; animation: glow 2s infinite; }
+  @keyframes glow { 50% { box-shadow: 0 0 20px rgba(76,175,80,0.3); } }
+
+  .settings {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center;
+  }
+  .settings label { font-size: 12px; color: #777; }
+  .settings select, .settings input[type=text] {
+    padding: 4px 8px; border-radius: 4px; border: 1px solid #333;
+    background: #1a1a24; color: #ccc; font-size: 12px;
+  }
+  .hint { color: #444; font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>Kingston</span> Wake Word <small style="font-size:11px;color:#555;margin-left:6px">Web Speech API</small></h1>
+  <div class="header-right">
+    <span class="status-dot off" id="dot"></span>
+    <span id="statusLabel">Inactif</span>
+  </div>
+</div>
+
+<div class="main">
+  <div class="transcript" id="transcript">
+    <div class="msg system">Appuie sur le bouton pour activer l'ecoute. Dis "Kingston" suivi de ta commande.</div>
+  </div>
+</div>
+
+<div class="live-box">
+  <div id="liveText">...</div>
+</div>
+
+<div class="controls">
+  <button class="big-btn" id="mainBtn" title="Activer / Desactiver">&#x1F399;</button>
+  <div class="settings">
+    <label>Mot-cle:</label>
+    <input type="text" id="wakeWord" value="kingston" style="width:100px" />
+    <label>Langue:</label>
+    <select id="lang">
+      <option value="fr-FR" selected>Francais</option>
+      <option value="en-US">English</option>
+      <option value="es-ES">Espanol</option>
+    </select>
+  </div>
+  <div class="hint">
+    Chrome/Edge recommande — Web Speech API (gratuit, aucune cle requise)<br>
+    Dis "<span id="wakeWordDisplay">Kingston</span>" pour activer, puis parle naturellement.
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Kingston Wake Word Listener — Web Speech API
+// ============================================================
+
+const API_BASE = window.location.origin;
+
+// ── State ──
+let isListening = false;
+let recognition = null;
+let wakeDetected = false;
+let commandBuffer = '';
+let commandTimeout = null;
+let isProcessing = false;
+let audioEl = null;
+
+// ── DOM ──
+const dot = document.getElementById('dot');
+const statusLabel = document.getElementById('statusLabel');
+const transcript = document.getElementById('transcript');
+const mainBtn = document.getElementById('mainBtn');
+const liveText = document.getElementById('liveText');
+const wakeWordInput = document.getElementById('wakeWord');
+const langSelect = document.getElementById('lang');
+const wakeWordDisplay = document.getElementById('wakeWordDisplay');
+
+// Sync display
+wakeWordInput.addEventListener('input', () => {
+  wakeWordDisplay.textContent = wakeWordInput.value || 'Kingston';
+});
+
+// ── Status ──
+function setStatus(state, label) {
+  dot.className = 'status-dot ' + state;
+  statusLabel.textContent = label;
+  if (state === 'listening') {
+    mainBtn.className = 'big-btn active';
+    mainBtn.innerHTML = '&#x1F534;';
+  } else {
+    mainBtn.className = 'big-btn';
+    mainBtn.innerHTML = '&#x1F399;';
+  }
+}
+
+function addMsg(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (role === 'user' || role === 'kingston') {
+    const lbl = document.createElement('div');
+    lbl.className = 'lbl';
+    lbl.textContent = role === 'user' ? 'Toi' : 'Kingston';
+    div.appendChild(lbl);
+  }
+  const span = document.createElement('span');
+  span.textContent = text;
+  div.appendChild(span);
+  transcript.appendChild(div);
+  transcript.scrollTop = transcript.scrollHeight;
+  return div;
+}
+
+// ── Web Speech API ──
+function checkSupport() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    addMsg('system', 'Web Speech API non supportee. Utilise Chrome ou Edge.');
+    return null;
+  }
+  return SR;
+}
+
+function startListening() {
+  const SR = checkSupport();
+  if (!SR) return;
+  if (isListening) return;
+
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = langSelect.value;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    isListening = true;
+    setStatus('listening', 'En ecoute... dis "' + getWakeWord() + '"');
+    addMsg('system', 'Ecoute activee. Dis "' + getWakeWord() + '" suivi de ta commande.');
+  };
+
+  recognition.onresult = (event) => {
+    // Process results
+    let interimText = '';
+    let finalText = '';
+
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const text = result[0].transcript;
+      if (result.isFinal) {
+        finalText += text;
+      } else {
+        interimText += text;
+      }
+    }
+
+    // Show live transcription
+    const display = (finalText || interimText).trim();
+    if (display) {
+      liveText.textContent = display;
+      liveText.className = wakeDetected ? 'active' : '';
+    }
+
+    // Process final text
+    if (finalText.trim()) {
+      handleTranscript(finalText.trim());
+    }
+
+    // Also check interim for wake word (faster response)
+    if (!wakeDetected && !isProcessing && interimText.trim()) {
+      const lower = interimText.trim().toLowerCase();
+      const wake = getWakeWord().toLowerCase();
+      if (lower.includes(wake)) {
+        onWakeDetected();
+      }
+    }
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === 'no-speech') {
+      // Normal — just keep listening
+      return;
+    }
+    if (event.error === 'aborted') return;
+    console.warn('Speech error:', event.error);
+    if (event.error === 'not-allowed') {
+      addMsg('system', 'Microphone refuse. Autorise l\'acces au micro dans les parametres du navigateur.');
+      setStatus('error', 'Micro refuse');
+      isListening = false;
+      return;
+    }
+    // Auto-restart on other errors
+    if (isListening) {
+      setTimeout(() => {
+        if (isListening) restartRecognition();
+      }, 500);
+    }
+  };
+
+  recognition.onend = () => {
+    // Auto-restart if we're still supposed to be listening
+    if (isListening) {
+      setTimeout(() => {
+        if (isListening) restartRecognition();
+      }, 200);
+    }
+  };
+
+  recognition.start();
+}
+
+function restartRecognition() {
+  try { if (recognition) recognition.stop(); } catch {}
+  recognition = null;
+  // Brief pause then restart
+  setTimeout(() => {
+    if (isListening) startListening();
+  }, 300);
+}
+
+function stopListening() {
+  isListening = false;
+  wakeDetected = false;
+  commandBuffer = '';
+  if (commandTimeout) { clearTimeout(commandTimeout); commandTimeout = null; }
+  try { if (recognition) recognition.stop(); } catch {}
+  recognition = null;
+  setStatus('off', 'Inactif');
+  liveText.textContent = '...';
+  liveText.className = '';
+}
+
+function getWakeWord() {
+  return (wakeWordInput.value || 'kingston').trim();
+}
+
+// ── Wake word detection + command capture ──
+function onWakeDetected() {
+  if (wakeDetected || isProcessing) return;
+  wakeDetected = true;
+  commandBuffer = '';
+  setStatus('wake', '"' + getWakeWord() + '" detecte! Parle...');
+  liveText.className = 'active';
+
+  // Play a subtle notification sound
+  playBeep(880, 100);
+
+  // Timeout: if no command within 8 seconds, reset
+  commandTimeout = setTimeout(() => {
+    if (wakeDetected && !isProcessing) {
+      addMsg('system', 'Pas de commande detectee — retour en ecoute.');
+      resetWake();
+    }
+  }, 8000);
+}
+
+function handleTranscript(text) {
+  const lower = text.toLowerCase();
+  const wake = getWakeWord().toLowerCase();
+
+  if (!wakeDetected && !isProcessing) {
+    // Check if wake word is in this transcript
+    const idx = lower.indexOf(wake);
+    if (idx >= 0) {
+      onWakeDetected();
+      // Extract command part after wake word
+      const after = text.substring(idx + wake.length).trim();
+      if (after.length > 2) {
+        // Command came in same utterance as wake word
+        processCommand(after);
+      }
+      // else: wait for next transcript with the command
+    }
+    return;
+  }
+
+  if (wakeDetected && !isProcessing) {
+    // We're capturing the command
+    const cleanText = text.trim();
+    if (cleanText.length > 0) {
+      // Remove wake word if it appears at the start (sometimes repeated)
+      let cmd = cleanText;
+      if (cmd.toLowerCase().startsWith(wake)) {
+        cmd = cmd.substring(wake.length).trim();
+      }
+      if (cmd.length > 2) {
+        processCommand(cmd);
+      }
+    }
+  }
+}
+
+async function processCommand(command) {
+  if (isProcessing) return;
+  isProcessing = true;
+  wakeDetected = false;
+  if (commandTimeout) { clearTimeout(commandTimeout); commandTimeout = null; }
+
+  setStatus('processing', 'Traitement...');
+  addMsg('user', command);
+
+  try {
+    // Send to Kingston via dashboard API
+    const resp = await fetch(API_BASE + '/api/chat/kingston', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: '[Wake Word] ' + command }),
+    });
+
+    if (!resp.ok) {
+      throw new Error('API error: ' + resp.status);
+    }
+
+    const data = await resp.json();
+    const response = data.response || 'Pas de reponse.';
+
+    addMsg('kingston', response);
+
+    // TTS — play the response
+    setStatus('speaking', 'Kingston parle...');
+    await speakResponse(response);
+
+  } catch (err) {
+    addMsg('system', 'Erreur: ' + err.message);
+    console.error('Command error:', err);
+  } finally {
+    isProcessing = false;
+    if (isListening) {
+      setStatus('listening', 'En ecoute... dis "' + getWakeWord() + '"');
+    }
+    liveText.textContent = '...';
+    liveText.className = '';
+  }
+}
+
+function resetWake() {
+  wakeDetected = false;
+  commandBuffer = '';
+  if (commandTimeout) { clearTimeout(commandTimeout); commandTimeout = null; }
+  liveText.className = '';
+  if (isListening) {
+    setStatus('listening', 'En ecoute... dis "' + getWakeWord() + '"');
+  }
+}
+
+// ── TTS playback via server-side ElevenLabs ──
+async function speakResponse(text) {
+  // Limit TTS to first 500 chars
+  const ttsText = text.slice(0, 500);
+
+  try {
+    const resp = await fetch(API_BASE + '/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: ttsText }),
+    });
+
+    if (!resp.ok) {
+      console.warn('TTS error:', resp.status);
+      return;
+    }
+
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+
+    // Stop any current audio
+    if (audioEl) {
+      audioEl.pause();
+      audioEl = null;
+    }
+
+    audioEl = new Audio(url);
+    audioEl.onended = () => {
+      URL.revokeObjectURL(url);
+      audioEl = null;
+    };
+    audioEl.onerror = () => {
+      URL.revokeObjectURL(url);
+      audioEl = null;
+    };
+    await audioEl.play();
+
+    // Wait for audio to finish
+    await new Promise(resolve => {
+      if (!audioEl) return resolve();
+      audioEl.onended = () => {
+        URL.revokeObjectURL(url);
+        audioEl = null;
+        resolve();
+      };
+      audioEl.onerror = () => {
+        URL.revokeObjectURL(url);
+        audioEl = null;
+        resolve();
+      };
+    });
+  } catch (err) {
+    console.warn('TTS playback error:', err);
+  }
+}
+
+// ── Beep notification ──
+function playBeep(freq, duration) {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    osc.type = 'sine';
+    gain.gain.value = 0.15;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
+    osc.stop(ctx.currentTime + duration / 1000 + 0.05);
+    setTimeout(() => ctx.close(), duration + 200);
+  } catch {}
+}
+
+// ── Toggle ──
+function toggle() {
+  if (isListening) {
+    stopListening();
+    addMsg('system', 'Ecoute desactivee.');
+  } else {
+    startListening();
+  }
+}
+
+// ── Events ──
+mainBtn.addEventListener('click', toggle);
+
+// Escape = stop
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (isProcessing) return;
+    if (wakeDetected) {
+      resetWake();
+      addMsg('system', 'Annule.');
+    } else if (isListening) {
+      stopListening();
+      addMsg('system', 'Ecoute desactivee.');
+    }
+  }
+  // Space = toggle (when not focused on input)
+  if (e.key === ' ' && document.activeElement !== wakeWordInput) {
+    e.preventDefault();
+    toggle();
+  }
+});
+
+// Language change → restart if active
+langSelect.addEventListener('change', () => {
+  if (isListening) {
+    stopListening();
+    setTimeout(startListening, 300);
+  }
+});
+
+// Notify server of listener state (for wakeword.status skill)
+function notifyServer(active) {
+  try {
+    navigator.sendBeacon(API_BASE + '/api/wakeword/state', JSON.stringify({ active, wake_word: getWakeWord() }));
+  } catch {}
+}
+
+// Init
+setStatus('off', 'Pret — appuie sur le bouton ou Espace');
+</script>
+</body>
+</html>
