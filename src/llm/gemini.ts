@@ -413,8 +413,8 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
           continue;
         }
 
-        // Hard block: agents (100-106) cannot use browser.*
-        if (chatId >= 100 && chatId <= 106 && toolName.startsWith("browser.")) {
+        // Hard block: agents/cron (internal chatIds) cannot use browser.*
+        if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
           log.warn(`[gemini] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
           contents.push({
             role: "user",
@@ -434,10 +434,10 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
         // Normalize args
         const safeArgs = normalizeArgs(toolName, rawArgs || {}, chatId, skill);
 
-        // Agent chatId fix: rewrite fake agent chatIds (100-106) to real admin chatId for telegram.*
-        if (chatId >= 100 && chatId <= 106 && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+        // Agent/cron chatId fix: rewrite internal chatIds to real admin chatId for telegram.*
+        if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
           safeArgs.chatId = String(config.adminChatId);
-          log.debug(`[gemini] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
+          log.debug(`[gemini] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
         }
 
         // Validate args
@@ -451,8 +451,8 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
           continue;
         }
 
-        // Block placeholder hallucinations in outbound messages (agents)
-        if (chatId >= 100 && chatId <= 106) {
+        // Block placeholder hallucinations in outbound messages (agents and cron)
+        if (chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) {
           const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
           if (outboundTools.includes(toolName)) {
             const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");

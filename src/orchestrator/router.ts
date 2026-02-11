@@ -22,6 +22,14 @@ import { isProviderCoolingDown, markProviderCooldown, clearProviderCooldown, pro
 import { emitHook } from "../hooks/hooks.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
+/**
+ * Check if a chatId belongs to an automated/internal session (agents or cron jobs).
+ * Agent chatIds: 100-106, Cron chatIds: 200-249 (config.cronChatIdBase + 0..49)
+ */
+export function isInternalChatId(chatId: number): boolean {
+  return (chatId >= 100 && chatId <= 106) || (chatId >= 200 && chatId <= 249);
+}
+
 const GROQ_SYSTEM_PROMPT = [
   "Tu es Kingston, un assistant IA personnel pour Nicolas.",
   "Tu es concis, amical et tu réponds en français par défaut.",
@@ -82,8 +90,8 @@ async function safeProgress(chatId: number, message: string): Promise<void> {
 function shouldUseGemini(chatId: number): boolean {
   // Must be enabled and have API key
   if (!config.geminiOrchestratorEnabled || !config.geminiApiKey) return false;
-  // Agents (chatId 100-106) always use Ollama-first path to preserve Gemini rate limit for user
-  if (chatId >= 100 && chatId <= 106) return false;
+  // Agents (chatId 100-106) and cron jobs (200-249) always use Ollama-first path to preserve Gemini rate limit for user
+  if (isInternalChatId(chatId)) return false;
   return true;
 }
 
@@ -238,8 +246,8 @@ async function handleMessageInner(
   // --- Ollama path ---
   if (tier === "ollama") {
     // Agents (chatId 100-106) and scheduler tasks that need tools get full tool chain
-    const isAgent = chatId >= 100 && chatId <= 106;
-    const needsTools = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:");
+    const isAgent = isInternalChatId(chatId);
+    const needsTools = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:") || userMessage.startsWith("[CRON:");
 
     if (isAgent || needsTools) {
       try {
@@ -436,11 +444,11 @@ async function handleMessageInner(
       log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
     }
 
-    // Agent chatId fix: agents use fake chatIds (100-106) for session isolation.
+    // Agent/cron chatId fix: agents (100-106) and cron jobs (200-249) use fake chatIds for session isolation.
     // When they call telegram.send/voice, replace with the real admin chatId.
-    if (chatId >= 100 && chatId <= 106 && tool.startsWith("telegram.") && config.adminChatId > 0) {
+    if (isInternalChatId(chatId) && tool.startsWith("telegram.") && config.adminChatId > 0) {
       safeArgs.chatId = String(config.adminChatId);
-      log.debug(`[router] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
+      log.debug(`[router] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
     // Dashboard chatIds (2, 3) should NOT send Telegram messages — return text for voice/TTS instead
@@ -451,8 +459,8 @@ async function handleMessageInner(
       return textContent;
     }
 
-    // Hard block: agents (chatId 100-106) cannot use browser.* tools — they open visible windows
-    if (chatId >= 100 && chatId <= 106 && tool.startsWith("browser.")) {
+    // Hard block: agents/cron (internal chatIds) cannot use browser.* tools — they open visible windows
+    if (isInternalChatId(chatId) && tool.startsWith("browser.")) {
       const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
       log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
@@ -532,8 +540,8 @@ async function handleMessageInner(
       continue;
     }
 
-    // Block placeholder hallucinations in outbound messages (agents only)
-    if (chatId >= 100 && chatId <= 106) {
+    // Block placeholder hallucinations in outbound messages (agents and cron jobs)
+    if (isInternalChatId(chatId)) {
       const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
       if (outboundTools.includes(tool)) {
         const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
@@ -685,8 +693,8 @@ async function handleMessageStreamingInner(
   // --- Ollama path ---
   if (tier === "ollama") {
     // Agents and scheduler tasks get full tool chain
-    const isAgentStream = chatId >= 100 && chatId <= 106;
-    const needsToolsStream = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:");
+    const isAgentStream = isInternalChatId(chatId);
+    const needsToolsStream = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:") || userMessage.startsWith("[CRON:");
 
     if (isAgentStream || needsToolsStream) {
       try {
@@ -927,14 +935,14 @@ async function handleMessageStreamingInner(
       safeArgs.chatId = String(chatId);
     }
 
-    // Agent chatId fix: rewrite fake agent chatIds (100-106) to real admin chatId for telegram.*
-    if (chatId >= 100 && chatId <= 106 && tool.startsWith("telegram.") && config.adminChatId > 0) {
+    // Agent/cron chatId fix: rewrite internal chatIds to real admin chatId for telegram.*
+    if (isInternalChatId(chatId) && tool.startsWith("telegram.") && config.adminChatId > 0) {
       safeArgs.chatId = String(config.adminChatId);
-      log.debug(`[router-stream] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
+      log.debug(`[router-stream] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
-    // Hard block: agents (chatId 100-106) cannot use browser.* tools
-    if (chatId >= 100 && chatId <= 106 && tool.startsWith("browser.")) {
+    // Hard block: agents/cron cannot use browser.* tools
+    if (isInternalChatId(chatId) && tool.startsWith("browser.")) {
       const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
       log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
@@ -1003,8 +1011,8 @@ async function handleMessageStreamingInner(
       continue;
     }
 
-    // Block placeholder hallucinations in outbound messages (agents — streaming path)
-    if (chatId >= 100 && chatId <= 106) {
+    // Block placeholder hallucinations in outbound messages (agents and cron — streaming path)
+    if (isInternalChatId(chatId)) {
       const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
       if (outboundTools.includes(tool)) {
         const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
