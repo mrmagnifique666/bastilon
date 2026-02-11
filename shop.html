@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bastilon Merch — Dev Humor Collection</title>
+  <meta name="description" content="Geek out with Bastilon merch. T-shirts, stickers, and more featuring developer humor and AI agent vibes.">
+  <link rel="icon" href="assets/logo.png" type="image/png">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #12121a;
+      --bg3: #1a1a2e;
+      --text: #e0e0e8;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --gold: #f4c542;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        linear-gradient(rgba(108,92,231,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(108,92,231,0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Header */
+    header {
+      padding: 2rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.2);
+      margin-bottom: 3rem;
+    }
+
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      text-decoration: none;
+      color: var(--text);
+    }
+
+    .logo img {
+      width: 40px;
+      height: 40px;
+    }
+
+    .logo-text {
+      font-family: var(--mono);
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    nav a {
+      color: var(--text2);
+      text-decoration: none;
+      margin-left: 2rem;
+      transition: color 0.2s;
+    }
+
+    nav a:hover { color: var(--accent); }
+
+    /* Hero */
+    .hero {
+      text-align: center;
+      padding: 4rem 0;
+    }
+
+    .hero h1 {
+      font-size: 3.5rem;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 1rem;
+    }
+
+    .hero p {
+      font-size: 1.3rem;
+      color: var(--text2);
+      max-width: 600px;
+      margin: 0 auto 3rem;
+    }
+
+    /* Product Grid */
+    .products {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 2rem;
+      padding: 2rem 0 4rem;
+    }
+
+    .product {
+      background: var(--bg2);
+      border: 1px solid rgba(108,92,231,0.2);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: transform 0.3s, border-color 0.3s;
+      cursor: pointer;
+    }
+
+    .product:hover {
+      transform: translateY(-5px);
+      border-color: var(--accent);
+    }
+
+    .product-image {
+      width: 100%;
+      height: 280px;
+      object-fit: contain;
+      background: linear-gradient(135deg, #1a1a2e 0%, #0a0a0f 100%);
+      padding: 2rem;
+    }
+
+    .product-info {
+      padding: 1.5rem;
+    }
+
+    .product-name {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .product-variants {
+      color: var(--text2);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+
+    .product-cta {
+      display: inline-block;
+      background: var(--accent);
+      color: white;
+      padding: 0.7rem 1.5rem;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+
+    .product-cta:hover {
+      background: var(--accent2);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid rgba(108,92,231,0.2);
+      padding: 3rem 0;
+      text-align: center;
+      color: var(--text2);
+      margin-top: 4rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="header-content">
+        <a href="index.html" class="logo">
+          <img src="assets/logo.png" alt="Bastilon Logo">
+          <span class="logo-text">BASTILON</span>
+        </a>
+        <nav>
+          <a href="index.html">Home</a>
+          <a href="shop.html">Shop</a>
+          <a href="https://github.com/nicolasleveille/bastilon" target="_blank">GitHub</a>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>Bastilon Merch</h1>
+      <p>Developer humor meets AI agent vibes. Rock your geek pride with these designs.</p>
+    </section>
+
+    <section class="products" id="products">
+      <!-- Products loaded dynamically -->
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>Powered by <a href="https://printful.com" target="_blank">Printful</a> • All designs © 2026 Bastilon</p>
+      <p style="margin-top: 1rem;"><a href="index.html">← Back to Homepage</a></p>
+    </div>
+  </footer>
+
+  <script>
+    const products = [
+      {
+        id: 418767321,
+        name: "AI Glasses",
+        thumbnail: "designs/design-08-ai-glasses-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/ai-glasses"
+      },
+      {
+        id: 418767320,
+        name: "Deploy on Friday",
+        thumbnail: "designs/design-07-deploy-friday-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/deploy-friday"
+      },
+      {
+        id: 418767318,
+        name: "Stack Overflow Certified",
+        thumbnail: "designs/design-06-stack-overflow-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/stack-overflow"
+      },
+      {
+        id: 418767315,
+        name: "git blame",
+        thumbnail: "designs/design-05-git-blame-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/git-blame"
+      },
+      {
+        id: 418767301,
+        name: "Totally Not a Bot",
+        thumbnail: "designs/design-04-not-a-bot-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/not-a-bot"
+      },
+      {
+        id: 418767295,
+        name: "Coding at 3AM",
+        thumbnail: "designs/design-03-coding-3am-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/coding-3am"
+      },
+      {
+        id: 418767293,
+        name: "sudo rm -rf ocean",
+        thumbnail: "designs/design-02-sudo-ocean-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/sudo-ocean"
+      },
+      {
+        id: 418767291,
+        name: "404 Shell Not Found",
+        thumbnail: "designs/design-01-404-shell-transparent.png",
+        variants: 4,
+        url: "https://bastilon.org/product/404-shell"
+      }
+    ];
+
+    const productsContainer = document.getElementById('products');
+
+    products.forEach(product => {
+      const card = document.createElement('div');
+      card.className = 'product';
+      card.innerHTML = `
+        <img src="${product.thumbnail}" alt="${product.name}" class="product-image" loading="lazy">
+        <div class="product-info">
+          <div class="product-name">${product.name}</div>
+          <div class="product-variants">${product.variants} variants • T-shirts, Stickers</div>
+          <a href="${product.url}" class="product-cta">View Product</a>
+        </div>
+      `;
+      productsContainer.appendChild(card);
+    });
+  </script>
+</body>
+</html>
