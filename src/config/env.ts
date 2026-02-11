@@ -99,6 +99,9 @@ function buildConfig() {
     // Brave Search
     braveSearchApiKey: optional("BRAVE_SEARCH_API_KEY", ""),
 
+    // Printful
+    printfulApiToken: optional("PRINTFUL_API_TOKEN", ""),
+
     // Dashboard
     dashboardToken: optional("DASHBOARD_TOKEN", ""),
 
