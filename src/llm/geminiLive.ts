@@ -21,8 +21,8 @@ import {
 } from "../skills/loader.js";
 import { normalizeArgs } from "./gemini.js";
 import { isToolPermitted } from "../security/policy.js";
-import { buildSemanticContext } from "../memory/semantic.js";
-import { getTurns, getDb } from "../storage/store.js";
+import { buildSemanticContext, extractAndStoreMemories } from "../memory/semantic.js";
+import { getTurns, getDb, addTurn } from "../storage/store.js";
 
 const MODEL = "gemini-2.5-flash-native-audio-latest";
 const SESSION_TIMEOUT_MS = 14 * 60 * 1000;
@@ -199,6 +199,10 @@ export class GeminiLiveSession {
   private cachedMemoryContext = "";
   private conversationLog: string[] = [];
 
+  // Track current turn for memory extraction
+  private currentUserText = "";
+  private currentModelText = "";
+
   // Dynamic tools — built once at construction, rebuilt on reconnect
   private toolDecls: LiveToolDecl[] = [];
   private toolNameMap = new Map<string, string>();
@@ -300,6 +304,7 @@ export class GeminiLiveSession {
   /** Send a text message (for typed input). */
   sendText(text: string): void {
     if (!this.connected || !this.ws) return;
+    this.currentUserText += (this.currentUserText ? " " : "") + text;
     this.conversationLog.push(`[Nicolas] ${text}`);
     this.ws.send(
       JSON.stringify({
@@ -418,6 +423,42 @@ export class GeminiLiveSession {
     const ctx = parts.join("\n");
     log.info(`[gemini-live] Rich context: ${ctx.length} chars (mem+telegram+episodic+notes)`);
     return ctx;
+  }
+
+  /** Save current turn to DB and extract memories (fire-and-forget). */
+  private saveTurnAndExtract(): void {
+    const userText = this.currentUserText.trim();
+    const modelText = this.currentModelText.trim();
+
+    // Reset for next turn
+    this.currentUserText = "";
+    this.currentModelText = "";
+
+    if (!userText && !modelText) return;
+
+    const chatId = this.opts.chatId;
+
+    // Save turns to DB (same as Telegram flow)
+    if (userText) {
+      addTurn(chatId, { role: "user", content: `[voice] ${userText}` });
+    }
+    if (modelText) {
+      addTurn(chatId, { role: "assistant", content: modelText });
+    }
+
+    // Extract memories (fire-and-forget, no latency impact)
+    if (userText && modelText) {
+      extractAndStoreMemories(
+        chatId,
+        `User (voice): ${userText}\nAssistant: ${modelText}`,
+      )
+        .then((count) => {
+          if (count > 0) log.debug(`[gemini-live] Extracted ${count} memories from voice turn`);
+        })
+        .catch((err) => {
+          log.debug(`[gemini-live] Memory extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }
   }
 
   /** Save conversation log as a note so Kingston remembers next session. */
@@ -557,6 +598,16 @@ export class GeminiLiveSession {
     if (msg.serverContent) {
       const sc = msg.serverContent;
 
+      // User speech transcript (Gemini sends back what it heard)
+      if (sc.inputTranscript) {
+        const userText = sc.inputTranscript.trim();
+        if (userText) {
+          this.currentUserText += (this.currentUserText ? " " : "") + userText;
+          this.opts.callbacks.onText(userText, "user");
+          this.conversationLog.push(`[Nicolas] ${userText.slice(0, 200)}`);
+        }
+      }
+
       if (sc.modelTurn?.parts) {
         for (const part of sc.modelTurn.parts) {
           if (part.inlineData?.data) {
@@ -564,6 +615,7 @@ export class GeminiLiveSession {
           }
           if (part.text) {
             this.opts.callbacks.onText(part.text, "model");
+            this.currentModelText += part.text;
             this.conversationLog.push(
               `[Kingston] ${part.text.slice(0, 200)}`,
             );
@@ -577,6 +629,8 @@ export class GeminiLiveSession {
 
       if (sc.turnComplete) {
         this.opts.callbacks.onTurnComplete();
+        // Save turn + extract memories
+        this.saveTurnAndExtract();
       }
 
       return;
