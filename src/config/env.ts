@@ -171,6 +171,10 @@ function buildConfig() {
     agentMindEnabled: optional("AGENT_MIND_ENABLED", "true") === "true",
     agentMindHeartbeatMs: Number(optional("AGENT_MIND_HEARTBEAT_MS", "1200000")), // 20min
 
+    // XTTS Voice Cloning
+    xttsPort: Number(optional("XTTS_PORT", "3300")),
+    xttsEnabled: optional("XTTS_ENABLED", "true") === "true",
+
     // Memory management
     memoryMaxItems: Number(optional("MEMORY_MAX_ITEMS", "10000")),
     memoryPruneTarget: Number(optional("MEMORY_PRUNE_TARGET", "8000")),

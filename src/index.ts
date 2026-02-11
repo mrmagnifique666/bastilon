@@ -13,6 +13,7 @@ import { migrateNotesToMemories } from "./memory/semantic.js";
 import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import { startVoiceServer } from "./voice/server.js";
+import { startXttsServer } from "./voice/xttsLauncher.js";
 import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
 import { startAgents, shutdownAgents } from "./agents/startup.js";
 import { cleanupDatabase } from "./storage/store.js";
@@ -204,6 +205,12 @@ async function main() {
     startVoiceServer();
   } catch (err) {
     log.warn(`[voice] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    startXttsServer();
+  } catch (err) {
+    log.warn(`[xtts] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   try {

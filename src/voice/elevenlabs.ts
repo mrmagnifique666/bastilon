@@ -1,12 +1,13 @@
 /**
- * TTS provider — Edge TTS (free, unlimited).
- * Replaces ElevenLabs (credit-limited). Same API surface for callers.
+ * TTS provider — XTTS v2 (cloned voices) → Edge TTS (fallback, free).
+ * Priority: XTTS v2 custom voice → Edge TTS (free, unlimited).
  *
- * - textToSpeechMp3() → MP3 via Edge TTS (dashboard, Telegram voice messages)
- * - textToSpeechUlaw() → mulaw 8kHz via Edge TTS + PCM conversion (Twilio pipeline)
+ * - textToSpeechMp3() → MP3 (XTTS if available, else Edge TTS)
+ * - textToSpeechUlaw() → mulaw 8kHz for Twilio phone pipeline
  */
 import { log } from "../utils/log.js";
 import { edgeTtsToMp3 } from "./edgeTts.js";
+import { xttsGenerate, wavToMp3, xttsHealthCheck } from "./xttsClient.js";
 
 const DEFAULT_VOICE = "fr-FR-HenriNeural";
 
@@ -78,8 +79,22 @@ export async function textToSpeechUlaw(text: string): Promise<Buffer> {
   }
 }
 
-/** TTS returning MP3 — for dashboard, Telegram voice messages, wake word. */
+/** TTS returning MP3 — for dashboard, Telegram voice messages, wake word.
+ *  Priority: XTTS v2 (cloned voice) → Edge TTS (fallback). */
 export async function textToSpeechMp3(text: string): Promise<Buffer> {
+  // Try XTTS first (cloned voice)
+  try {
+    const wav = await xttsGenerate(text);
+    if (wav) {
+      const mp3 = await wavToMp3(wav);
+      log.info(`[tts] MP3 via XTTS v2: ${mp3.length} bytes`);
+      return mp3;
+    }
+  } catch (err) {
+    log.warn(`[tts] XTTS failed, falling back to Edge TTS: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Fallback: Edge TTS
   log.info(`[tts] MP3 request via Edge TTS: "${text.slice(0, 80)}..."`);
   const mp3 = await edgeTtsToMp3(text, DEFAULT_VOICE);
   log.info(`[tts] Got ${mp3.length} bytes of MP3 audio`);

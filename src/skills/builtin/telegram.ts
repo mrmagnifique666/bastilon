@@ -33,6 +33,10 @@ export function getBotSendFn(): SendFn | null {
   return botSend;
 }
 
+export function getBotVoiceFn(): VoiceFn | null {
+  return botVoice;
+}
+
 export function getBotPhotoFn(): PhotoFn | null {
   return botPhoto;
 }

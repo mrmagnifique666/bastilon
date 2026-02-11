@@ -480,6 +480,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/content.js");
   await import("./builtin/youtube.js");
   await import("./builtin/printful.js");
+  await import("./builtin/voice-clone.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

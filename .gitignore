@@ -1,5 +1,9 @@
 node_modules/
 dist/
+.venv/
+__pycache__/
+relay/xtts_model/
+relay/xtts_output/
 .env
 sandbox/
 *.db
