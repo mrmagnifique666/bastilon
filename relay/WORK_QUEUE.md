@@ -51,6 +51,8 @@
 
 ## Completed (archive)
 
+- [DONE] Wake word voice fix — fuzzy matching, TTS fallback, router guard for dashboard — 2026-02-11
+- [DONE] Memory cleanup + smart management — dedup, pruning, consolidation, trust-decay — 2026-02-11
 - [DONE] Agent profiles + Subordinate agents + Typed workflows + Content auto-publish — 2026-02-11
 - [DONE] Cohere + Mistral + Together + Replicate + Gateway + MCP — 2026-02-11
 - [DONE] Serper.dev + Abstract API + SKILL.md dynamic skills — 2026-02-11
