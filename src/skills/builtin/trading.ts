@@ -547,7 +547,7 @@ registerSkill({
       // Show last 7 data points
       const show = Math.min(equity.length, 7);
       for (let i = equity.length - show; i < equity.length; i++) {
-        const date = new Date(timestamps[i] * 1000).toLocaleDateString("fr-CA");
+        const date = new Date(timestamps[i] * 1000).toLocaleDateString("fr-CA", { timeZone: "America/Toronto" });
         const dayPL = pl[i] || 0;
         const emoji = dayPL >= 0 ? "🟢" : "🔴";
         lines.push(`${emoji} ${date}: $${equity[i].toFixed(2)} (${dayPL >= 0 ? "+" : ""}$${dayPL.toFixed(2)})`);
@@ -958,7 +958,7 @@ registerSkill({
     if (watchlist.length === 0) return "**Watchlist vide.** Utilise action=add pour ajouter des tickers.";
     const listLines = [`**Watchlist** (${watchlist.length} tickers)\n`];
     for (const w of watchlist) {
-      const date = new Date(w.addedAt).toLocaleDateString("fr-CA");
+      const date = new Date(w.addedAt).toLocaleDateString("fr-CA", { timeZone: "America/Toronto" });
       listLines.push(`- **${w.symbol}** (ajouté ${date})${w.reason ? ` — ${w.reason}` : ""}`);
     }
     return listLines.join("\n");

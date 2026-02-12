@@ -10,7 +10,7 @@ import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
 import { runOllama, runOllamaChat, isOllamaAvailable } from "../llm/ollamaClient.js";
-import { runGroq, isGroqAvailable } from "../llm/groqClient.js";
+import { runGroq, runGroqChat, isGroqAvailable } from "../llm/groqClient.js";
 import { addTurn, logError, getTurns, clearSession } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
@@ -164,19 +164,27 @@ async function fallbackWithoutClaude(
     log.debug(`[router] Skipping Ollama (cooldown ${providerCooldownSeconds("ollama")}s remaining)`);
   }
 
-  // --- Try Groq (text-only, llama-3.3-70b, $0) ---
-  if (!isProviderCoolingDown("groq")) {
-    const groqFallback = await tryGroqFallback(chatId, userMessage, "Claude+Gemini+Ollama down");
-    if (groqFallback) {
-      await safeProgress(chatId, `⚡ Mode Groq (services principaux indisponibles ~${remainingMinutes}min)`);
-      addTurn(chatId, { role: "assistant", content: groqFallback });
-      backgroundExtract(chatId, userMessage, groqFallback);
+  // --- Try Groq with tools (llama-3.3-70b, $0) ---
+  if (isGroqAvailable() && !isProviderCoolingDown("groq")) {
+    try {
+      log.info(`[router] ⚡ Groq-chat fallback (Claude+Gemini+Ollama down): ${userMessage.slice(0, 100)}...`);
+      await safeProgress(chatId, `⚡ Mode Groq avec outils (services principaux indisponibles ~${remainingMinutes}min)`);
+      const groqResult = await runGroqChat({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
+      addTurn(chatId, { role: "assistant", content: groqResult });
+      backgroundExtract(chatId, userMessage, groqResult);
       clearProviderCooldown("groq");
-      return groqFallback;
-    } else {
-      markProviderCooldown("groq", "fallback returned null");
+      return groqResult;
+    } catch (err) {
+      markProviderCooldown("groq", err instanceof Error ? err.message : "unknown error");
+      log.warn(`[router] Groq-chat fallback failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } else {
+  } else if (isProviderCoolingDown("groq")) {
     log.debug(`[router] Skipping Groq (cooldown ${providerCooldownSeconds("groq")}s remaining)`);
   }
 
@@ -321,27 +329,34 @@ async function handleMessageInner(
     }
   }
 
-  // --- Groq path (text-only, greetings/heartbeats when Ollama disabled) ---
+  // --- Groq path (fast, free, with tool calling via OpenAI-compatible API) ---
   if (tier === "groq") {
-    const groqResult = await tryGroqFallback(chatId, userMessage, "groq-tier");
-    if (groqResult) {
+    try {
+      log.info(`[router] ⚡ Groq-chat for user (chatId=${chatId}): ${userMessage.slice(0, 100)}...`);
+      const groqResult = await runGroqChat({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
       addTurn(chatId, { role: "assistant", content: groqResult });
       backgroundExtract(chatId, userMessage, groqResult);
       return groqResult;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.warn(`[router] Groq-chat failed: ${errMsg} — falling back to Ollama → Claude`);
+      // Try Ollama-chat as second option
+      if (config.ollamaEnabled) {
+        try {
+          const ollamaResult = await runOllamaChat({ chatId, userMessage, isAdmin: userIsAdmin, userId });
+          addTurn(chatId, { role: "assistant", content: ollamaResult });
+          backgroundExtract(chatId, userMessage, ollamaResult);
+          return ollamaResult;
+        } catch { /* Ollama also failed */ }
+      }
+      // Last resort: Claude (streaming path will be tried below)
     }
-    // Groq failed — fall through to Haiku via Claude CLI
-    log.warn(`[router] Groq tier failed, falling back to Haiku`);
-    const haikuModel = getModelId("haiku");
-    const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
-    if (haikuResult.type === "message") {
-      const text = haikuResult.text?.trim() || "Désolé, je n'ai pas pu répondre.";
-      addTurn(chatId, { role: "assistant", content: text });
-      backgroundExtract(chatId, userMessage, text);
-      return text;
-    }
-    const text = "Salut! Comment je peux t'aider?";
-    addTurn(chatId, { role: "assistant", content: text });
-    return text;
   }
 
   // --- Proactive bypass: if Claude is known rate-limited, skip to fallbacks ---
@@ -780,30 +795,36 @@ async function handleMessageStreamingInner(
     }
   }
 
-  // --- Groq path (text-only, greetings/heartbeats when Ollama disabled) ---
+  // --- Groq path (fast, free, with tool calling) ---
   if (tier === "groq") {
-    const groqResult = await tryGroqFallback(chatId, userMessage, "stream-groq-tier");
-    if (groqResult) {
-      await draft.update(groqResult);
-      await draft.finalize();
+    try {
+      log.info(`[router-stream] ⚡ Groq-chat for user (chatId=${chatId}): ${userMessage.slice(0, 100)}...`);
+      await draft.cancel(); // Groq doesn't stream — cancel draft, send final message
+      const groqResult = await runGroqChat({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
       addTurn(chatId, { role: "assistant", content: groqResult });
       backgroundExtract(chatId, userMessage, groqResult);
       return groqResult;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.warn(`[router-stream] Groq-chat failed: ${errMsg} — falling back`);
+      await draft.cancel();
+      // Try Ollama, then fall through to Claude streaming
+      if (config.ollamaEnabled) {
+        try {
+          const ollamaResult = await runOllamaChat({ chatId, userMessage, isAdmin: userIsAdmin, userId });
+          addTurn(chatId, { role: "assistant", content: ollamaResult });
+          backgroundExtract(chatId, userMessage, ollamaResult);
+          return ollamaResult;
+        } catch { /* Ollama also failed */ }
+      }
+      // Fall through to Claude streaming below
     }
-    // Groq failed — fall through to Haiku
-    await draft.cancel();
-    log.warn(`[router-stream] Groq tier failed, falling back to Haiku`);
-    const haikuModel = getModelId("haiku");
-    const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
-    if (haikuResult.type === "message") {
-      const text = haikuResult.text?.trim() || "Désolé, je n'ai pas pu répondre.";
-      addTurn(chatId, { role: "assistant", content: text });
-      backgroundExtract(chatId, userMessage, text);
-      return text;
-    }
-    const text = "Salut! Comment je peux t'aider?";
-    addTurn(chatId, { role: "assistant", content: text });
-    return text;
   }
 
   // --- Proactive bypass: if Claude is known rate-limited, use Gemini/Ollama ---
@@ -833,11 +854,19 @@ async function handleMessageStreamingInner(
     );
     streamResult = await Promise.race([streamPromise, safetyTimeout]);
   } catch (streamErr) {
-    // Streaming failed (empty response, timeout, process crash) — fall back to batch mode
-    log.warn(`[router-stream] Stream failed: ${streamErr instanceof Error ? streamErr.message : String(streamErr)} — clearing session and falling back to batch`);
+    const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+    const isStallOrTimeout = errMsg.includes("stalled") || errMsg.includes("timeout") || errMsg.includes("safety timeout");
     await draft.cancel();
-    // Clear potentially corrupt session before retry
     clearSession(chatId);
+
+    if (isStallOrTimeout) {
+      // Claude CLI stalled/timed out — likely rate-limited. Use Gemini/Ollama/Groq instead of retrying Claude.
+      log.warn(`[router-stream] Stream stalled/timed out: ${errMsg} — falling back to non-Claude chain`);
+      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, 5);
+    }
+
+    // Other errors (spawn failure, etc.) — try batch Claude once
+    log.warn(`[router-stream] Stream failed: ${errMsg} — falling back to batch`);
     const batchResponse = await runClaude(chatId, userMessage, userIsAdmin, model);
     if (batchResponse.type === "message") {
       const text = batchResponse.text && batchResponse.text.trim() ? batchResponse.text : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";

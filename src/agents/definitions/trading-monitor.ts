@@ -614,7 +614,7 @@ let dailyPnL = 0;
 let lastTradeDate = "";
 
 function resetDailyCounters(): void {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
   if (today !== lastTradeDate) {
     dailyTradeCount = 0;
     dailyPnL = 0;

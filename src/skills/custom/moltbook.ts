@@ -325,7 +325,7 @@ registerSkill({
         const upvotes = p.upvotes !== undefined ? ` [${p.upvotes} upvotes]` : "";
         const comments = p.comment_count !== undefined ? ` (${p.comment_count} comments)` : "";
         const sub = typeof p.submolt === "object" ? p.submolt?.name : p.submolt;
-        const date = p.created_at ? new Date(p.created_at).toLocaleDateString("fr-CA") : "";
+        const date = p.created_at ? new Date(p.created_at).toLocaleDateString("fr-CA", { timeZone: "America/Toronto" }) : "";
         return `${i + 1}. ${p.title}${upvotes}${comments}\n   s/${sub || "?"} — ${date} — ID: ${p.id}`;
       })
       .join("\n\n");
@@ -364,7 +364,7 @@ registerSkill({
       .map((c: any, i: number) => {
         const score = c.score !== undefined ? ` [${c.score}↑]` : "";
         const preview = c.content?.length > 100 ? c.content.slice(0, 100) + "..." : c.content;
-        const date = c.created_at ? new Date(c.created_at).toLocaleDateString("fr-CA") : "";
+        const date = c.created_at ? new Date(c.created_at).toLocaleDateString("fr-CA", { timeZone: "America/Toronto" }) : "";
         return `${i + 1}. ${preview}${score}\n   post: ${c.post_id || "?"} — ${date} — ID: ${c.id}`;
       })
       .join("\n\n");

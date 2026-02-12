@@ -655,23 +655,34 @@ function rowToItem(row: MemoryRow): MemoryItem {
 
 // --- Auto-Pruning ---
 
+let pruningInProgress = false;
+
 function pruneIfOverCeiling(): void {
+  if (pruningInProgress) return; // Guard against concurrent prunes corrupting FTS5
   const db = getDb();
   const count = (db.prepare("SELECT COUNT(*) as c FROM memory_items").get() as { c: number }).c;
   if (count <= config.memoryMaxItems) return;
 
-  log.info(`[semantic] Memory ceiling hit (${count}/${config.memoryMaxItems}), pruning to ${config.memoryPruneTarget}...`);
+  pruningInProgress = true;
+  try {
+    log.info(`[semantic] Memory ceiling hit (${count}/${config.memoryMaxItems}), pruning to ${config.memoryPruneTarget}...`);
 
-  // Score all memories, delete the lowest-scored ones
-  const rows = db.prepare("SELECT * FROM memory_items").all() as MemoryRow[];
-  const scored = rows.map(r => ({ id: r.id, score: calculateSalience(r) }));
-  scored.sort((a, b) => a.score - b.score); // ascending — worst first
+    // Score all memories, delete the lowest-scored ones
+    const rows = db.prepare("SELECT * FROM memory_items").all() as MemoryRow[];
+    const scored = rows.map(r => ({ id: r.id, score: calculateSalience(r) }));
+    scored.sort((a, b) => a.score - b.score); // ascending — worst first
 
-  const toDelete = scored.slice(0, count - config.memoryPruneTarget).map(s => s.id);
-  if (toDelete.length === 0) return;
+    const toDelete = scored.slice(0, count - config.memoryPruneTarget).map(s => s.id);
+    if (toDelete.length === 0) return;
 
-  db.prepare(`DELETE FROM memory_items WHERE id IN (${toDelete.join(",")})`).run();
-  log.info(`[semantic] Pruned ${toDelete.length} low-salience memories (${count} → ${count - toDelete.length})`);
+    // Use transaction to prevent FTS5 corruption
+    db.transaction(() => {
+      db.prepare(`DELETE FROM memory_items WHERE id IN (${toDelete.join(",")})`).run();
+    })();
+    log.info(`[semantic] Pruned ${toDelete.length} low-salience memories (${count} → ${count - toDelete.length})`);
+  } finally {
+    pruningInProgress = false;
+  }
 }
 
 // --- Cleanup & Consolidation ---

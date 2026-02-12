@@ -78,7 +78,7 @@ export function annotateWithTrust(
     .map((item) => {
       const trust = calculateTrust(item.created_at, kind);
       const indicator = trustIndicator(trust);
-      const date = new Date(item.created_at * 1000).toLocaleDateString("fr-CA");
+      const date = new Date(item.created_at * 1000).toLocaleDateString("fr-CA", { timeZone: "America/Toronto" });
       const staleWarning = trust < STALE_THRESHOLD ? " ⚠️ STALE — may be outdated" : "";
       return `#${item.id} [${indicator} ${Math.round(trust * 100)}%] (${date})${staleWarning}\n  ${item.text}`;
     })
