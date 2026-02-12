@@ -51,8 +51,9 @@ export async function processCodeRequests(): Promise<void> {
     console.log("\nKINGSTON'S CODE REQUEST:\n");
     console.log(`Task: ${request.task}`);
     console.log(`Priority: ${request.priority}`);
-    if (request.files.length > 0) {
-      console.log(`Files: ${request.files.join(", ")}`);
+    const files = Array.isArray(request.files) ? request.files : typeof request.files === 'string' ? request.files.split(',').map((f: string) => f.trim()) : [];
+    if (files.length > 0) {
+      console.log(`Files: ${files.join(", ")}`);
     }
     console.log(`\n${sep}\n`);
 
