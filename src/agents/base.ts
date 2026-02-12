@@ -10,6 +10,7 @@
  * - Audit trail: every run logged to agent_runs table
  */
 import { handleMessage } from "../orchestrator/router.js";
+import { enqueueAdminAsync } from "../bot/chatLock.js";
 import { getDb } from "../storage/store.js";
 import { clearTurns, clearSession } from "../storage/store.js";
 import { log } from "../utils/log.js";
@@ -326,7 +327,7 @@ export class Agent {
         `- Si tu n'es pas sûr → notes.add. Le doute = pas de notification.\n\n` +
         prompt;
 
-      const result = await handleMessage(this.chatId, agentPrompt, this.userId, "scheduler");
+      const result = await enqueueAdminAsync(() => handleMessage(this.chatId, agentPrompt, this.userId, "scheduler"));
 
       // Check if Claude returned a rate limit message
       if (detectAndSetRateLimit(result)) {
@@ -375,7 +376,7 @@ export class Agent {
             `Dernière erreur: ${msg}\n` +
             `Utilise agents.start(id="${this.id}") pour le redémarrer après investigation.\n` +
             `Envoie cette alerte à Nicolas via telegram.send.`;
-          await handleMessage(this.chatId, alertPrompt, this.userId, "scheduler");
+          await enqueueAdminAsync(() => handleMessage(this.chatId, alertPrompt, this.userId, "scheduler"));
         } catch {
           // Best effort — don't fail on notification failure
         }

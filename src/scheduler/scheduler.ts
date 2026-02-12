@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDb } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
+import { enqueueAdminAsync } from "../bot/chatLock.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { cronTick, drainMainSessionQueue, seedDefaultCronJobs } from "./cron.js";
@@ -387,7 +388,7 @@ function buildTradingStrategyPrompt(phase: "open" | "close"): string {
       `   "🟢 Achat: Xqty SYMBOL @ $prix (total: $montant)" ou\n` +
       `   "🔴 Vente: Xqty SYMBOL @ $prix (P&L: +/-$montant / +/-X%)"\n\n` +
       `RÈGLES:\n` +
-      `- JAMAIS plus de $500 par position sans mind.ask à Nicolas\n` +
+      `- Max $5000 par position, $10000 total toutes positions combinées (90% cash minimum)\n` +
       `- TOUJOURS vérifier le stop-loss avant d'acheter\n` +
       `- Log CHAQUE décision (achat, skip, wait) via mind.decide\n` +
       `- Sois DISCIPLINÉ — pas de FOMO, suis la stratégie\n` +
@@ -644,7 +645,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     log.info(`[scheduler] Firing morning briefing with overnight agent report`);
     try {
       const prompt = buildMorningBriefingPrompt();
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Morning briefing error: ${err}`);
     }
@@ -663,7 +664,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     log.info(`[scheduler] Firing trading strategy (${phase})`);
     try {
       const prompt = buildTradingStrategyPrompt(phase);
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Trading strategy error: ${err}`);
     }
@@ -676,7 +677,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     try {
       const prompt = runRulesAutoGraduation();
       if (prompt) {
-        await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+        await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
       } else {
         log.debug(`[scheduler] No rules to graduate`);
       }
@@ -691,7 +692,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     log.info(`[scheduler] Firing Moltbook daily digest`);
     try {
       const prompt = buildMoltbookDigestPrompt();
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Moltbook digest error: ${err}`);
     }
@@ -708,7 +709,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     log.info(`[scheduler] Firing Moltbook auto-post`);
     try {
       const prompt = buildMoltbookPostPrompt();
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Moltbook auto-post error: ${err}`);
     }
@@ -725,7 +726,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     log.info(`[scheduler] Firing Moltbook auto-comment`);
     try {
       const prompt = buildMoltbookCommentPrompt();
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Moltbook auto-comment error: ${err}`);
     }
@@ -742,7 +743,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     log.info(`[scheduler] Firing Moltbook performance check`);
     try {
       const prompt = buildMoltbookPerformancePrompt();
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Moltbook performance error: ${err}`);
     }
@@ -758,7 +759,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     }
     log.info(`[scheduler] Firing code digest: ${event.key}`);
     try {
-      await handleMessage(schedulerChatId, digestPrompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, digestPrompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Error firing ${event.key}: ${err}`);
     }
@@ -774,7 +775,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
       if (councilSkill) {
         const result = await councilSkill.execute({});
         const prompt = `[SCHEDULER] Voici le rapport du conseil nocturne de Kingston. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
-        await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+        await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
       } else {
         log.debug(`[scheduler] analytics.council skill not found`);
       }
@@ -794,7 +795,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
         const result = await digestSkill.execute({ period: "daily" });
         if (result && !result.includes("Aucune notification")) {
           const prompt = `[SCHEDULER] Digest de notifications du jour. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
-          await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+          await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
         } else {
           log.debug(`[scheduler] No notifications to digest`);
         }
@@ -815,7 +816,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
         const result = await priceSkill.execute({});
         if (result && result.includes("ALERTE")) {
           const prompt = `[SCHEDULER] Alertes prix détectées! Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
-          await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+          await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
         }
       }
     } catch (err) {
@@ -838,7 +839,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
       if (reviewSkill) {
         const result = await reviewSkill.execute({});
         const prompt = `[SCHEDULER] Revue hebdomadaire des objectifs. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
-        await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+        await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
       }
     } catch (err) {
       log.error(`[scheduler] Goals review error: ${err}`);
@@ -856,7 +857,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
         consecutiveSilentHeartbeats = 0;
         silenceStreakNotified = false;
         log.info(`[scheduler] Heartbeat found alerts — notifying`);
-        await handleMessage(schedulerChatId, heartbeatPrompt, schedulerUserId, "scheduler");
+        await enqueueAdminAsync(() => handleMessage(schedulerChatId, heartbeatPrompt, schedulerUserId, "scheduler"));
       } else {
         // Nothing to report — increment silence streak
         consecutiveSilentHeartbeats++;
@@ -870,7 +871,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
             `[SCHEDULER] Stability report: tout est stable depuis ~${hours}h. ` +
             `${consecutiveSilentHeartbeats} heartbeats consécutifs sans alertes. ` +
             `Envoie un bref message de stabilité à Nicolas via telegram.send — pas d'urgence, juste un signal de confiance.`;
-          await handleMessage(schedulerChatId, stabilityMsg, schedulerUserId, "scheduler");
+          await enqueueAdminAsync(() => handleMessage(schedulerChatId, stabilityMsg, schedulerUserId, "scheduler"));
         }
       }
     } catch (err) {
@@ -882,7 +883,7 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
   if (event.prompt) {
     log.info(`[scheduler] Firing ${event.type} event: ${event.key}`);
     try {
-      await handleMessage(schedulerChatId, event.prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, event.prompt!, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Error firing ${event.key}: ${err}`);
     }
@@ -947,7 +948,7 @@ async function tick(): Promise<void> {
     );
     try {
       const prompt = `[SCHEDULER] Rappel: ${rem.message}`;
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Error firing reminder #${rem.id}: ${err}`);
     }

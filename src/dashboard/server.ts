@@ -523,6 +523,101 @@ function buildUltimatePrompt(payload: {
   ].filter(Boolean).join("\n");
 }
 
+// ── XP API ──
+
+function apiXp(): unknown {
+  const db = getDb();
+
+  // Ensure table exists (no-op if already created by xp.ts)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kingston_xp (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      points INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      source TEXT DEFAULT 'system',
+      created_at INTEGER DEFAULT (strftime('%s','now'))
+    );
+  `);
+
+  // Total XP
+  const totalRow = db.prepare("SELECT COALESCE(SUM(points), 0) AS total FROM kingston_xp").get() as { total: number };
+  const totalXp = totalRow.total;
+
+  // Level calculation (mirrors src/skills/builtin/xp.ts)
+  const LEVELS = [
+    { threshold: 10001, name: "Architecte" },
+    { threshold: 2501, name: "Autonome" },
+    { threshold: 500, name: "Operateur" },
+    { threshold: 0, name: "Apprenti" },
+  ];
+
+  let level = "Apprenti";
+  for (const l of LEVELS) {
+    if (totalXp >= l.threshold) { level = l.name; break; }
+  }
+
+  let nextLevel: { name: string; threshold: number; remaining: number } | null = null;
+  for (let i = 0; i < LEVELS.length; i++) {
+    if (totalXp >= LEVELS[i].threshold) {
+      if (i > 0) {
+        const next = LEVELS[i - 1];
+        nextLevel = { name: next.name, threshold: next.threshold, remaining: next.threshold - totalXp };
+      }
+      break;
+    }
+  }
+  // If below all thresholds, next is Apprenti -> Operateur
+  if (nextLevel === null && totalXp < LEVELS[LEVELS.length - 1].threshold) {
+    const next = LEVELS[LEVELS.length - 1];
+    nextLevel = { name: next.name, threshold: next.threshold, remaining: next.threshold - totalXp };
+  }
+
+  // Today's XP
+  const todayStart = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
+  const todayRow = db.prepare("SELECT COALESCE(SUM(points), 0) AS total FROM kingston_xp WHERE created_at >= ?").get(todayStart) as { total: number };
+  const todayXp = todayRow.total;
+
+  // 7-day daily breakdown
+  const daily = db.prepare(`
+    SELECT date(created_at, 'unixepoch') AS day, SUM(points) AS total_points, COUNT(*) AS event_count
+    FROM kingston_xp
+    WHERE created_at >= strftime('%s', 'now', '-7 days')
+    GROUP BY day ORDER BY day DESC
+  `).all() as Array<{ day: string; total_points: number; event_count: number }>;
+
+  // Leaderboard by event type
+  const leaderboard = db.prepare(`
+    SELECT event_type, SUM(points) AS total_points, COUNT(*) AS event_count
+    FROM kingston_xp
+    GROUP BY event_type
+    ORDER BY total_points DESC
+  `).all() as Array<{ event_type: string; total_points: number; event_count: number }>;
+
+  // Recent history (last 20)
+  const history = db.prepare(
+    "SELECT id, event_type, points, reason, source, created_at FROM kingston_xp ORDER BY created_at DESC, id DESC LIMIT 20"
+  ).all() as Array<{ id: number; event_type: string; points: number; reason: string; source: string; created_at: number }>;
+
+  // Total event count
+  const countRow = db.prepare("SELECT COUNT(*) AS count FROM kingston_xp").get() as { count: number };
+
+  return {
+    totalXp,
+    level,
+    nextLevel,
+    todayXp,
+    totalEvents: countRow.count,
+    daily,
+    leaderboard,
+    history: history.map(h => ({
+      ...h,
+      created_at_iso: new Date(h.created_at * 1000).toISOString(),
+    })),
+    levels: LEVELS,
+  };
+}
+
 // ── Engagement analytics (Phase 2B) ──
 
 async function apiAnalyticsEngagement(): Promise<unknown> {
@@ -803,6 +898,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     if (pathname === "/api/analytics/engagement" && method === "GET") {
       if (!checkAuth(req, res)) return;
       return json(res, await apiAnalyticsEngagement());
+    }
+    if (pathname === "/api/xp" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      return json(res, apiXp());
     }
     // ── Dungeon Master API ──
     if (pathname === "/api/dungeon/sessions" && method === "GET") {

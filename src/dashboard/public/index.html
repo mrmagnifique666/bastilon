@@ -119,6 +119,42 @@
       font-weight: 600;
     }
 
+    /* ── XP Badge (sidebar) ───────────────────── */
+    .xp-badge {
+      margin: 4px 12px 8px;
+      padding: 8px 10px;
+      background: linear-gradient(135deg, rgba(88,166,255,.12), rgba(188,140,255,.12));
+      border: 1px solid rgba(88,166,255,.25);
+      border-radius: 8px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .xp-badge:hover { border-color: var(--accent); }
+    .xp-badge .xp-level {
+      font-weight: 700;
+      font-size: 11px;
+      color: var(--purple);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .xp-badge .xp-points {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--accent);
+      margin-left: auto;
+    }
+    .xp-badge .xp-label {
+      font-size: 10px;
+      color: var(--text2);
+    }
+    .sidebar.collapsed .xp-badge .xp-level,
+    .sidebar.collapsed .xp-badge .xp-label,
+    .sidebar.collapsed .xp-badge .xp-points-suffix { display: none; }
+    .sidebar.collapsed .xp-badge { justify-content: center; padding: 6px; }
+
     /* ── Main Content ───────────────────────────── */
     .main-content {
       flex: 1;
@@ -157,6 +193,8 @@
     .card .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 8px; }
     .card .card-value { font-size: 24px; font-weight: 700; color: var(--accent); }
     .card .card-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+    .xp-progress-bar { background: var(--border); border-radius: 4px; height: 8px; margin-top: 8px; overflow: hidden; }
+    .xp-progress-bar .xp-fill { background: var(--accent); height: 100%; border-radius: 4px; transition: width 0.3s; }
 
     /* ── Table ───────────────────────────────────── */
     .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -626,6 +664,94 @@
       padding: 60px 20px;
     }
 
+    /* ── Chat Sidebar (right panel) ─────────────── */
+    .chat-sidebar {
+      width: 380px;
+      background: var(--bg2);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: width 0.3s ease, min-width 0.3s ease;
+      overflow: hidden;
+      position: relative;
+    }
+    .chat-sidebar.collapsed {
+      width: 48px;
+      min-width: 48px;
+    }
+    .chat-sidebar.collapsed .chat-sidebar-body { display: none; }
+    .chat-sidebar.collapsed .chat-sidebar-header { display: none; }
+    .chat-sidebar-header {
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .chat-sidebar-header .cs-title {
+      font-weight: 600; font-size: 14px;
+    }
+    .chat-sidebar-toggle-btn {
+      background: none; border: none;
+      color: var(--text2); cursor: pointer;
+      font-size: 16px; padding: 4px 8px;
+    }
+    .chat-sidebar-toggle-btn:hover { color: var(--text); }
+    .chat-sidebar-collapsed-icon {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 16px 0;
+      cursor: pointer;
+    }
+    .chat-sidebar.collapsed .chat-sidebar-collapsed-icon { display: flex; }
+    .chat-sidebar-body {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+    .chat-sidebar .msg { max-width: 95%; }
+    .chat-sidebar .chat-input-area {
+      grid-template-columns: 1fr auto;
+    }
+    .cs-badge {
+      background: var(--accent);
+      color: #fff; font-size: 10px; font-weight: 700;
+      min-width: 18px; height: 18px;
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0 4px;
+    }
+    .cs-badge:empty { display: none; }
+    /* Chat media viewer (center panel when chat view is active) */
+    .chat-media-grid {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      align-content: start;
+    }
+    .chat-media-grid img {
+      width: 200px; height: 200px; object-fit: cover;
+      border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--border);
+      transition: transform 0.2s;
+    }
+    .chat-media-grid img:hover { transform: scale(1.05); }
+    .chat-media-placeholder {
+      color: var(--text2); font-size: 14px;
+      text-align: center; padding: 40px 20px;
+    }
+    /* Clickable images in chat sidebar */
+    .chat-sidebar .msg img {
+      cursor: pointer;
+      max-width: 100%; max-height: 200px;
+      border-radius: 6px;
+      transition: opacity 0.2s;
+    }
+    .chat-sidebar .msg img:hover { opacity: 0.8; }
+
     /* ── Scrollbar ───────────────────────────────── */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -635,6 +761,7 @@
     /* ── Responsive ──────────────────────────────── */
     @media (max-width: 1200px) {
       .voice-sidebar { width: 0; opacity: 0; border-left: none; }
+      .chat-sidebar { width: 0; min-width: 0; opacity: 0; border-left: none; }
       .voice-float-toggle { display: flex; }
     }
     @media (max-width: 900px) {
@@ -774,6 +901,13 @@
       <span class="dot dot-green" id="dot-health"></span>
       <span id="health-text">Online</span>
     </div>
+    <div class="xp-badge" id="xp-badge" onclick="navigate('overview')" title="Kingston XP">
+      <div>
+        <div class="xp-level" id="xp-level">--</div>
+        <div class="xp-label">Kingston XP</div>
+      </div>
+      <div class="xp-points" id="xp-points">--</div>
+    </div>
 
     <div class="nav-group-title">Chat</div>
     <a class="nav-item active" data-view="chat" onclick="navigate('chat')">
@@ -858,40 +992,18 @@
       Rate limit actif — agents en pause jusqu'a <span id="rate-reset-time">--</span>
     </div>
 
-    <!-- ═══ VIEW: Chat (center) ═══ -->
+    <!-- ═══ VIEW: Chat Media (center — chat itself is in right sidebar) ═══ -->
     <div class="view active" id="view-chat">
-      <div class="chat-tabs">
-        <div class="chat-tab active" data-tab="kingston" onclick="switchTab('kingston')">Kingston</div>
-        <div class="chat-tab emile" data-tab="emile" onclick="switchTab('emile')">Emile</div>
-        <div class="chat-tab" data-tab="aster" onclick="switchTab('aster')">Aster</div>
-        <div class="chat-tab" data-tab="conseil" onclick="switchTab('conseil')"
-          style="background:linear-gradient(135deg,rgba(88,166,255,.05),rgba(188,140,255,.05));">
-          Conseil
-        </div>
+      <div class="view-header">
+        Chat
+        <button class="btn btn-sm btn-secondary" onclick="toggleChatSidebar()">&#9776; Toggle Chat</button>
       </div>
-      <div class="chat-messages" id="chat-messages"></div>
-      <div class="continue-bar" id="continue-bar" style="display:none;">
-        <button class="continue-kingston" onclick="continueDialogue('kingston')" id="cont-kingston">Kingston repond</button>
-        <button class="continue-emile" onclick="continueDialogue('emile')" id="cont-emile">Emile repond</button>
-        <button class="continue-both" onclick="continueDialogue('both')" id="cont-both">Relancer le dialogue</button>
-        <button onclick="stopConseil()" id="cont-stop" style="display:none;border-color:var(--red);color:var(--red);">Stop</button>
-        <span style="font-size:11px;color:var(--text2);align-self:center;" id="rounds-label"></span>
-      </div>
-      <div class="chat-input-area">
-        <div class="chat-controls">
-          <select id="direct-target" onchange="updateDirectTargetUi()">
-            <option value="active">Onglet actif</option>
-            <option value="kingston">Kingston</option>
-            <option value="emile">Emile</option>
-            <option value="both">Kingston + Emile</option>
-          </select>
-          <input id="auth-token" type="password" placeholder="Token (optionnel)">
-          <button class="secondary" onclick="saveAuthToken()">Token</button>
-          <button class="secondary" onclick="resetSessions()">Reset</button>
+      <div class="view-body" id="chat-media-body">
+        <div class="chat-media-placeholder" id="chat-media-placeholder">
+          Images et medias des conversations apparaitront ici.<br>
+          Clique sur une image dans le chat pour l'agrandir.
         </div>
-        <textarea id="chat-input" rows="1" placeholder="Parle a Kingston..."
-          onkeydown="handleKeyDown(event)"></textarea>
-        <button id="send-btn" onclick="sendMessage()">Envoyer</button>
+        <div class="chat-media-grid" id="chat-media-grid"></div>
       </div>
     </div>
 
@@ -1079,6 +1191,53 @@
 
   </div>
 
+  <!-- Chat Sidebar (always visible on all views) -->
+  <aside class="chat-sidebar" id="chat-sidebar">
+    <div class="chat-sidebar-collapsed-icon" onclick="toggleChatSidebar()" title="Ouvrir le chat">
+      &#128172;
+      <span class="cs-badge" id="cs-unread-badge"></span>
+    </div>
+    <div class="chat-sidebar-header">
+      <span class="cs-title">Chat</span>
+      <button class="chat-sidebar-toggle-btn" onclick="toggleChatSidebar()" title="Reduire">&#9666;</button>
+    </div>
+    <div class="chat-sidebar-body">
+      <div class="chat-tabs">
+        <div class="chat-tab active" data-tab="kingston" onclick="switchTab('kingston')">Kingston</div>
+        <div class="chat-tab emile" data-tab="emile" onclick="switchTab('emile')">Emile</div>
+        <div class="chat-tab" data-tab="aster" onclick="switchTab('aster')">Aster</div>
+        <div class="chat-tab" data-tab="conseil" onclick="switchTab('conseil')"
+          style="background:linear-gradient(135deg,rgba(88,166,255,.05),rgba(188,140,255,.05));">
+          Conseil
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="continue-bar" id="continue-bar" style="display:none;">
+        <button class="continue-kingston" onclick="continueDialogue('kingston')" id="cont-kingston">Kingston repond</button>
+        <button class="continue-emile" onclick="continueDialogue('emile')" id="cont-emile">Emile repond</button>
+        <button class="continue-both" onclick="continueDialogue('both')" id="cont-both">Relancer le dialogue</button>
+        <button onclick="stopConseil()" id="cont-stop" style="display:none;border-color:var(--red);color:var(--red);">Stop</button>
+        <span style="font-size:11px;color:var(--text2);align-self:center;" id="rounds-label"></span>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-controls">
+          <select id="direct-target" onchange="updateDirectTargetUi()">
+            <option value="active">Onglet actif</option>
+            <option value="kingston">Kingston</option>
+            <option value="emile">Emile</option>
+            <option value="both">Kingston + Emile</option>
+          </select>
+          <input id="auth-token" type="password" placeholder="Token (optionnel)">
+          <button class="secondary" onclick="saveAuthToken()">Token</button>
+          <button class="secondary" onclick="resetSessions()">Reset</button>
+        </div>
+        <textarea id="chat-input" rows="1" placeholder="Parle a Kingston..."
+          onkeydown="handleKeyDown(event)"></textarea>
+        <button id="send-btn" onclick="sendMessage()">Envoyer</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- Image preview overlay -->
   <div class="gallery-preview-overlay" id="gallery-preview-overlay" onclick="closeGalleryPreview()">
     <div class="gallery-preview-content" onclick="event.stopPropagation()">
@@ -1151,6 +1310,7 @@ function navigate(view) {
 
 function loadView(view) {
   switch(view) {
+    case 'chat': refreshChatMedia(); break;
     case 'overview': loadOverview(); break;
     case 'sessions': loadSessions(); break;
     case 'scheduler': loadScheduler(); break;
@@ -1170,6 +1330,56 @@ function loadView(view) {
 
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+function toggleChatSidebar() {
+  const cs = document.getElementById('chat-sidebar');
+  cs.classList.toggle('collapsed');
+  localStorage.setItem('chat_sidebar_collapsed', cs.classList.contains('collapsed'));
+}
+
+// Show an image from chat in the center media viewer
+function showInMediaViewer(src) {
+  navigate('chat');
+  const grid = document.getElementById('chat-media-grid');
+  const placeholder = document.getElementById('chat-media-placeholder');
+  if (placeholder) placeholder.style.display = 'none';
+  // Check if already shown
+  const existing = grid.querySelector(`img[src="${src}"]`);
+  if (!existing) {
+    const img = document.createElement('img');
+    img.src = src;
+    img.onclick = () => openGalleryPreview(src);
+    grid.appendChild(img);
+  }
+}
+
+// Collect all images from chat history into the media grid
+function refreshChatMedia() {
+  const grid = document.getElementById('chat-media-grid');
+  const placeholder = document.getElementById('chat-media-placeholder');
+  if (!grid) return;
+  grid.innerHTML = '';
+  let hasImages = false;
+  for (const tab of Object.values(chatHistory)) {
+    for (const msg of tab) {
+      if (!msg.content) continue;
+      const imgRegex = /(?:!\[[^\]]*\]\(([^)]+)\)|(?:https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s]*)?)|((?:uploads|images)\/[^\s"']+\.(?:png|jpg|jpeg|gif|webp)))/gi;
+      let match;
+      while ((match = imgRegex.exec(msg.content)) !== null) {
+        const src = match[1] || match[0];
+        if (src) {
+          hasImages = true;
+          const img = document.createElement('img');
+          img.src = src.startsWith('http') ? src : '/' + src;
+          img.onclick = () => openGalleryPreview(img.src, 'Chat Image', '');
+          img.loading = 'lazy';
+          grid.appendChild(img);
+        }
+      }
+    }
+  }
+  if (placeholder) placeholder.style.display = hasImages ? 'none' : 'block';
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1309,8 +1519,9 @@ async function postChatStream(message, onProgress) {
 // ══════════════════════════════════════════════════════════════
 async function loadOverview() {
   try {
-    const [stats, agents, memStats] = await Promise.all([
-      api('stats'), api('agents'), api('memory/stats').catch(() => ({ total: 0 }))
+    const [stats, agents, memStats, xp] = await Promise.all([
+      api('stats'), api('agents'), api('memory/stats').catch(() => ({ total: 0 })),
+      api('xp').catch(() => ({ totalXp: 0, level: 'Apprenti', nextLevel: null }))
     ]);
     const el = document.getElementById('overview-body');
     document.getElementById('overview-uptime').textContent = 'Uptime: ' + formatDuration(stats.uptime);
@@ -1328,8 +1539,36 @@ async function loadOverview() {
     const totalErrors = (stats.agentStats || []).reduce((s, a) => s + a.errors, 0);
     const activeAgents = (agents.agents || []).filter(a => a.status === 'idle' || a.status === 'running').length;
 
+    // Update sidebar XP badge
+    updateXpBadge(xp);
+
+    // XP calculations
+    const xpTotal = xp.totalXp || 0;
+    const xpLevel = xp.level || 'Apprenti';
+    const xpToday = xp.todayXp || 0;
+    const xpNext = xp.nextLevel;
+    const xpProgressPct = xpNext ? Math.min(100, Math.round((xpTotal / xpNext.threshold) * 100)) : 100;
+    const xpLevelColor = xpLevel === 'Architecte' ? 'var(--orange)' : xpLevel === 'Autonome' ? 'var(--purple)' : xpLevel === 'Operateur' ? 'var(--accent)' : 'var(--text2)';
+
+    // Recent XP history rows
+    const xpHistoryHtml = (xp.history || []).slice(0, 8).map(h => {
+      const sign = h.points > 0 ? '+' : '';
+      const color = h.points > 0 ? 'var(--green)' : 'var(--red)';
+      const time = new Date(h.created_at * 1000).toLocaleDateString('fr-CA', { month: 'short', day: 'numeric' });
+      return '<tr><td style="color:' + color + ';font-weight:600;">' + sign + h.points + '</td><td>' + escapeHtml(h.event_type.replace(/_/g, ' ')) + '</td><td style="color:var(--text2);font-size:12px;">' + escapeHtml((h.reason || '').slice(0, 60)) + '</td><td style="color:var(--text2);font-size:11px;">' + time + '</td></tr>';
+    }).join('');
+
     el.innerHTML = `
       <div class="cards-grid">
+        <div class="card" style="border:1px solid ${xpLevelColor};background:linear-gradient(135deg, var(--bg3), rgba(88,166,255,.06));">
+          <div class="card-title" style="color:${xpLevelColor};font-weight:700;">Kingston XP</div>
+          <div class="card-value" style="color:${xpLevelColor};font-size:32px;">${xpTotal}</div>
+          <div style="margin:6px 0 4px;background:var(--bg);border-radius:4px;height:6px;overflow:hidden;">
+            <div style="height:100%;width:${xpProgressPct}%;background:${xpLevelColor};border-radius:4px;transition:width 0.3s;"></div>
+          </div>
+          <div class="card-sub" style="color:${xpLevelColor};">${xpLevel}${xpNext ? ' &rarr; ' + escapeHtml(xpNext.name) + ' (' + xpNext.remaining + ' restants)' : ' (MAX)'}</div>
+          <div class="card-sub">Aujourd'hui: ${xpToday > 0 ? '+' : ''}${xpToday} | ${xp.totalEvents || 0} events</div>
+        </div>
         <div class="card">
           <div class="card-title">Agents actifs</div>
           <div class="card-value">${activeAgents}</div>
@@ -1365,6 +1604,7 @@ async function loadOverview() {
           <div class="card-value" id="overview-skills">--</div>
         </div>
       </div>
+      ${xpHistoryHtml ? '<h3 style="margin:16px 0 8px;font-size:14px;">XP Recent</h3><table class="data-table"><tr><th>XP</th><th>Event</th><th>Raison</th><th>Date</th></tr>' + xpHistoryHtml + '</table>' : ''}
       <h3 style="margin-bottom:12px;font-size:14px;">Agents</h3>
       <table class="data-table">
         <tr><th>Agent</th><th>Status</th><th>Cycle</th><th>Runs</th><th>Errors</th><th>Dernier</th></tr>
@@ -2100,13 +2340,13 @@ function renderMsgContent(text) {
   // Inline code
   safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
   // Images: markdown syntax
-  safe = safe.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;" loading="lazy" onerror="this.style.display=\'none\'">');
+  safe = safe.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;cursor:pointer;" loading="lazy" onclick="showInMediaViewer(this.src)" onerror="this.style.display=\'none\'">');
   // Images: bare URLs
   safe = safe.replace(/(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s]*)?)/gi,
-    '<img src="$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;" loading="lazy" onerror="this.style.display=\'none\'">');
+    '<img src="$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;cursor:pointer;" loading="lazy" onclick="showInMediaViewer(this.src)" onerror="this.style.display=\'none\'">');
   // Images: upload paths
   safe = safe.replace(/((?:uploads|images)\/[^\s"']+\.(?:png|jpg|jpeg|gif|webp))/gi,
-    '<img src="/$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;" loading="lazy" onerror="this.style.display=\'none\'">');
+    '<img src="/$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;cursor:pointer;" loading="lazy" onclick="showInMediaViewer(this.src)" onerror="this.style.display=\'none\'">');
   // Links
   safe = safe.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   // Bold
@@ -2390,6 +2630,17 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+
+// ── XP sidebar badge updater ──
+function updateXpBadge(xp) {
+  const levelEl = document.getElementById('xp-level');
+  const pointsEl = document.getElementById('xp-points');
+  if (levelEl) levelEl.textContent = xp.level || 'Apprenti';
+  if (pointsEl) pointsEl.textContent = (xp.totalXp || 0) + ' XP';
+}
+
+// Load XP badge on page init (runs once)
+api('xp').then(xp => updateXpBadge(xp)).catch(() => {});
 
 // ══════════════════════════════════════════════════════════════
 // VIEW: Voice — Wake Word + Local/Cloud Mode
@@ -3534,6 +3785,11 @@ async function init() {
 
   // Init voice system immediately (available on all views)
   loadVoice();
+
+  // Restore chat sidebar state
+  if (localStorage.getItem('chat_sidebar_collapsed') === 'true') {
+    document.getElementById('chat-sidebar').classList.add('collapsed');
+  }
 
   // Route from hash
   const hash = location.hash.replace('#', '') || 'chat';

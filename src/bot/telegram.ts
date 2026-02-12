@@ -14,7 +14,7 @@ import { clearTurns, clearSession, getTurns, getSession, logError } from "../sto
 import { setBotSendFn, setBotVoiceFn, setBotPhotoFn } from "../skills/builtin/telegram.js";
 import { log } from "../utils/log.js";
 import { debounce } from "./debouncer.js";
-import { enqueue } from "./chatLock.js";
+import { enqueueAdmin } from "./chatLock.js";
 import { sendFormatted } from "./formatting.js";
 import { createDraftController } from "./draftMessage.js";
 import { compactContext } from "../orchestrator/compaction.js";
@@ -318,8 +318,8 @@ export function createBot(): Bot {
       return; // Another message will carry the combined payload
     }
 
-    // Enqueue via chat lock for sequential processing
-    enqueue(chatId, async () => {
+    // Enqueue via global admin lock — serializes user messages, scheduler, agents
+    enqueueAdmin(async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
       await reaction.ack();
 
@@ -453,7 +453,7 @@ export function createBot(): Bot {
     const photos = ctx.message.photo;
     const largest = photos[photos.length - 1];
 
-    enqueue(chatId, async () => {
+    enqueueAdmin(async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
       await reaction.ack();
       try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
@@ -512,7 +512,7 @@ export function createBot(): Bot {
     const rawName = doc.file_name || `file_${Date.now()}`;
     const originalName = path.basename(rawName).replace(/[\\/:*?"<>|]/g, "_");
 
-    enqueue(chatId, async () => {
+    enqueueAdmin(async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
       await reaction.ack();
       try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }

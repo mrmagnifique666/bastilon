@@ -8,6 +8,7 @@ import { Cron } from "croner";
 import { getDb } from "../storage/store.js";
 import { clearTurns, clearSession } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
+import { enqueueAdminAsync } from "../bot/chatLock.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
@@ -222,7 +223,7 @@ async function executeIsolatedJob(job: CronJob, userId: number): Promise<void> {
 
   log.info(`[cron] Executing job "${job.name}" (${job.id}) in chatId=${jobChatId}`);
 
-  await handleMessage(jobChatId, prompt, userId, "scheduler");
+  await enqueueAdminAsync(() => handleMessage(jobChatId, prompt, userId, "scheduler"));
 
   log.info(`[cron] Job "${job.name}" (${job.id}) completed`);
 }

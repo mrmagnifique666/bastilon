@@ -600,11 +600,13 @@ function logTrade(entry: TradeEntry): void {
 // ── Risk management ──
 
 const RISK_RULES = {
-  maxPositionPct: 0.01,     // 1% of portfolio per trade
-  maxDailyLossPct: 0.03,    // 3% max daily loss
-  minRewardRisk: 2.0,       // 2:1 reward/risk minimum
-  maxOpenPositions: 10,     // max simultaneous positions
-  maxTradesPerDay: 20,      // avoid overtrading
+  maxPositionPct: 0.01,       // 1% of portfolio risk per trade
+  maxDailyLossPct: 0.03,     // 3% max daily loss
+  minRewardRisk: 2.0,        // 2:1 reward/risk minimum
+  maxOpenPositions: 5,       // max simultaneous positions (was 10)
+  maxTradesPerDay: 15,       // avoid overtrading (was 20)
+  maxTotalExposure: 10_000,  // $10K max total across ALL positions
+  maxPerPosition: 5_000,     // $5K max per single position
 };
 
 let dailyTradeCount = 0;
@@ -639,6 +641,13 @@ async function canTrade(): Promise<{ allowed: boolean; reason: string }> {
     if (positions.length >= RISK_RULES.maxOpenPositions) {
       return { allowed: false, reason: `Max ${RISK_RULES.maxOpenPositions} positions ouvertes` };
     }
+
+    // Check total exposure cap ($10K across all positions)
+    const totalExposure = positions.reduce((sum: number, p: any) =>
+      sum + Math.abs(Number(p.market_value)), 0);
+    if (totalExposure >= RISK_RULES.maxTotalExposure) {
+      return { allowed: false, reason: `Exposition totale $${totalExposure.toFixed(0)} >= cap $${RISK_RULES.maxTotalExposure}` };
+    }
   } catch { /* allow if API fails — don't block on transient errors */ }
 
   return { allowed: true, reason: "OK" };
@@ -646,10 +655,13 @@ async function canTrade(): Promise<{ allowed: boolean; reason: string }> {
 
 function calculatePositionSize(price: number, stopLoss: number): number {
   // Risk 1% of portfolio (~$1000 on $100K)
-  const riskAmount = 1000; // simplified — would fetch from account
+  const riskAmount = 1000;
   const riskPerShare = Math.abs(price - stopLoss);
   if (riskPerShare <= 0) return 1;
-  return Math.max(1, Math.floor(riskAmount / riskPerShare));
+  const riskQty = Math.floor(riskAmount / riskPerShare);
+  // Hard cap: never exceed $5K per position
+  const maxQtyByCap = Math.floor(RISK_RULES.maxPerPosition / price);
+  return Math.max(1, Math.min(riskQty, maxQtyByCap));
 }
 
 // ── Clean summary formatting for Nicolas ──
