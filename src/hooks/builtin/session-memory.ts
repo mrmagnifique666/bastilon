@@ -60,5 +60,9 @@ async function onSessionNew(_event: HookEvent, context: HookContext): Promise<vo
 }
 
 // Register the hook
-registerHook("session:new", onSessionNew);
+registerHook("session:new", onSessionNew, {
+  namespace: "session-memory",
+  priority: "normal",
+  description: "Auto-save session summary to semantic memory on /new",
+});
 log.info("[session-memory] Hook registered");

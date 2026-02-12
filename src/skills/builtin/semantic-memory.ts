@@ -5,6 +5,8 @@
 import { registerSkill } from "../loader.js";
 import {
   searchMemories,
+  searchMemoriesFTS,
+  searchMemoriesHybrid,
   addMemory,
   forgetMemory,
   getMemoryStats,
@@ -158,5 +160,65 @@ registerSkill({
       return `[Dry run] Found ${result.clusters} clusters (${result.removed} memories would be consolidated).`;
     }
     return `Consolidation complete: ${result.clusters} clusters found, ${result.consolidated} consolidated, ${result.removed} removed.`;
+  },
+});
+
+// --- Tiered search: quick (FTS5 only) and deep (hybrid BM25 + vector + RRF) ---
+
+registerSkill({
+  name: "memory.quick",
+  description: "Fast keyword search on memories using FTS5 BM25 — instant, no embeddings needed",
+  argsSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Search keywords" },
+      category: { type: "string", description: "Filter by category (optional)" },
+      limit: { type: "number", description: "Max results (default 10)" },
+    },
+    required: ["query"],
+  },
+  async execute(args) {
+    const query = args.query as string;
+    const limit = (args.limit as number) || 10;
+    const category = args.category as string | undefined;
+    const validCat = category && VALID_CATEGORIES.has(category) ? category : undefined;
+
+    const results = searchMemoriesFTS(query, limit, validCat);
+
+    if (results.length === 0) return "No memories found (FTS5 keyword search).";
+    const lines = results.map((r) =>
+      `#${r.id} [${r.category}] (score: ${r.score.toFixed(2)}): ${r.content}`
+    );
+    return `Found ${results.length} memories (FTS5 BM25):\n${lines.join("\n")}`;
+  },
+});
+
+registerSkill({
+  name: "memory.deep",
+  description: "Deep hybrid search — BM25 + semantic vector + RRF fusion + query expansion via Ollama. Best quality, slower.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Search query (natural language)" },
+      category: { type: "string", description: "Filter by category (optional)" },
+      limit: { type: "number", description: "Max results (default 10)" },
+      expand: { type: "boolean", description: "Enable query expansion via Ollama/Groq (default true)" },
+    },
+    required: ["query"],
+  },
+  async execute(args) {
+    const query = args.query as string;
+    const limit = (args.limit as number) || 10;
+    const category = args.category as string | undefined;
+    const validCat = category && VALID_CATEGORIES.has(category) ? category : undefined;
+    const expand = args.expand !== false; // default true
+
+    const results = await searchMemoriesHybrid(query, limit, validCat, expand);
+
+    if (results.length === 0) return "No memories found (hybrid search).";
+    const lines = results.map((r) =>
+      `#${r.id} [${r.category}] (score: ${r.score.toFixed(2)}, accesses: ${r.access_count}): ${r.content}`
+    );
+    return `Found ${results.length} memories (hybrid BM25+vector+RRF${expand ? "+expansion" : ""}):\n${lines.join("\n")}`;
   },
 });

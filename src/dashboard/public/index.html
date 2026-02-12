@@ -19,6 +19,7 @@
       --purple: #bc8cff;
       --orange: #f0883e;
       --sidebar-w: 240px;
+      --voice-sidebar-w: 380px;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -352,6 +353,19 @@
       0%, 80%, 100% { transform: scale(0); }
       40% { transform: scale(1); }
     }
+    .typing-progress {
+      font-size: 12px; color: var(--accent); font-style: italic;
+    }
+    .msg pre { background: var(--bg); padding: 8px 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; border: 1px solid var(--border); }
+    .msg pre code { background: none; padding: 0; color: var(--text); }
+    .msg code { background: var(--bg3); padding: 2px 5px; border-radius: 3px; font-size: 13px; }
+    .msg ul, .msg ol { margin: 4px 0; padding-left: 20px; }
+    .msg li { margin: 2px 0; }
+    .msg a { color: var(--accent); text-decoration: underline; }
+    .msg h3 { font-size: 15px; margin: 8px 0 4px; color: var(--text); font-weight: 600; }
+    .msg strong { color: var(--text); font-weight: 600; }
+    .msg em { font-style: italic; color: var(--text2); }
+    .msg blockquote { border-left: 3px solid var(--accent); padding-left: 8px; margin: 4px 0; color: var(--text2); font-style: italic; }
 
     /* ── Rate limit banner ──────────────────────── */
     .rate-limit-banner {
@@ -396,6 +410,222 @@
     .mem-cat-skill { background: rgba(240,136,62,.15); color: var(--orange); }
     .mem-cat-project { background: rgba(248,81,73,.15); color: var(--red); }
 
+    /* ── Voice Sidebar (right) ────────────────────── */
+    .voice-sidebar {
+      width: var(--voice-sidebar-w);
+      background: var(--bg2);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: width 0.3s, opacity 0.3s;
+      overflow: hidden;
+      position: relative;
+    }
+    .voice-sidebar.collapsed {
+      width: 0;
+      opacity: 0;
+      border-left: none;
+    }
+    .voice-sidebar-toggle {
+      position: absolute;
+      left: -32px;
+      top: 12px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text2);
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      transition: all 0.2s;
+    }
+    .voice-sidebar-toggle:hover { color: var(--text); border-color: var(--accent); }
+    .voice-sidebar.collapsed .voice-sidebar-toggle { left: -40px; }
+    .voice-sidebar .voice-transcript { flex: 1; }
+    .voice-sidebar .voice-controls-bar { flex-shrink: 0; }
+    .voice-sidebar .voice-wake-bar { flex-shrink: 0; }
+    .voice-sidebar .voice-msg { max-width: 95%; font-size: 13px; }
+
+    /* Kingston Avatar Indicator */
+    .kingston-avatar {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 12px 12px;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .kingston-orb {
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      background: var(--bg3);
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      transition: all 0.4s ease;
+      position: relative;
+    }
+    .kingston-orb[data-state="wake"] {
+      border-color: var(--yellow);
+      box-shadow: 0 0 12px rgba(210,153,34,.3);
+      animation: orb-breathe 2.5s ease-in-out infinite;
+    }
+    .kingston-orb[data-state="listen"] {
+      border-color: var(--green);
+      box-shadow: 0 0 16px rgba(63,185,80,.4);
+      animation: orb-breathe 2s ease-in-out infinite;
+    }
+    .kingston-orb[data-state="think"] {
+      border-color: var(--purple);
+      box-shadow: 0 0 20px rgba(188,140,255,.5);
+      animation: orb-spin 1.2s linear infinite;
+    }
+    .kingston-orb[data-state="speak"] {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(88,166,255,.5);
+      animation: orb-pulse 0.8s ease-in-out infinite;
+    }
+    @keyframes orb-breathe {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.06); }
+    }
+    @keyframes orb-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    @keyframes orb-pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 20px rgba(88,166,255,.5); }
+      50% { transform: scale(1.08); box-shadow: 0 0 28px rgba(88,166,255,.7); }
+    }
+    .kingston-avatar-label {
+      font-size: 11px;
+      color: var(--text2);
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .kingston-avatar-status {
+      font-size: 12px;
+      color: var(--text2);
+    }
+
+    /* Floating voice toggle when sidebar is collapsed */
+    .voice-float-toggle {
+      position: fixed;
+      right: 12px;
+      top: 12px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 18px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+      z-index: 100;
+      transition: transform 0.2s;
+    }
+    .voice-float-toggle:hover { transform: scale(1.1); }
+    .voice-float-toggle.visible { display: flex; }
+
+    /* ── Gallery ──────────────────────────────────── */
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .gallery-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .gallery-item:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .gallery-item img {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      display: block;
+    }
+    .gallery-item-info {
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text2);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+    }
+    .gallery-item-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 70%;
+    }
+    .gallery-preview-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,.88);
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
+    }
+    .gallery-preview-overlay.visible { display: flex; }
+    .gallery-preview-content {
+      position: relative;
+      max-width: 90vw;
+      max-height: 90vh;
+    }
+    .gallery-preview-content img {
+      max-width: 90vw;
+      max-height: 85vh;
+      border-radius: 8px;
+      display: block;
+    }
+    .gallery-preview-info {
+      text-align: center;
+      padding: 8px;
+      color: var(--text2);
+      font-size: 12px;
+    }
+    .gallery-preview-close {
+      position: absolute;
+      top: -12px; right: -12px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .gallery-preview-close:hover { background: var(--red); color: #fff; }
+    .gallery-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+    }
+
     /* ── Scrollbar ───────────────────────────────── */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -403,6 +633,10 @@
     ::-webkit-scrollbar-thumb:hover { background: var(--border); }
 
     /* ── Responsive ──────────────────────────────── */
+    @media (max-width: 1200px) {
+      .voice-sidebar { width: 0; opacity: 0; border-left: none; }
+      .voice-float-toggle { display: flex; }
+    }
     @media (max-width: 900px) {
       .sidebar { width: 48px; }
       .sidebar .nav-label, .sidebar .sidebar-header span,
@@ -433,6 +667,99 @@
     }
     .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .filter-btn:hover { border-color: var(--accent); }
+
+    /* ── Voice ────────────────────────────────────── */
+    .voice-transcript {
+      flex: 1; overflow-y: auto; padding: 16px 20px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .voice-msg {
+      max-width: 80%; padding: 10px 14px;
+      border-radius: 12px; font-size: 14px; line-height: 1.5;
+      word-wrap: break-word; white-space: pre-wrap;
+    }
+    .voice-msg-user {
+      align-self: flex-end;
+      background: var(--accent); color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .voice-msg-kingston {
+      align-self: flex-start;
+      background: var(--bg3); color: var(--text);
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .voice-msg-system {
+      align-self: center;
+      color: var(--text2); font-size: 12px; font-style: italic;
+    }
+    .voice-msg-label {
+      font-size: 11px; font-weight: 700; margin-bottom: 4px;
+      letter-spacing: 0.3px;
+    }
+    .voice-msg-label.lbl-user { color: #fff; }
+    .voice-msg-label.lbl-kingston { color: var(--accent); }
+
+    .voice-wake-bar {
+      padding: 8px 20px;
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      font-size: 12px; color: var(--text2);
+      font-style: italic;
+      min-height: 32px;
+      display: none;
+    }
+    .voice-wake-bar.visible { display: block; }
+    .voice-wake-bar .heard { color: var(--yellow); font-weight: 600; }
+
+    .voice-controls-bar {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+      display: flex; gap: 8px; align-items: center;
+    }
+    .voice-ctrl-btn {
+      background: var(--bg3); color: var(--text2);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 14px; font-size: 12px; cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .voice-ctrl-btn:hover { border-color: var(--accent); color: var(--text); }
+    .voice-ctrl-btn.on {
+      background: rgba(88,166,255,.1); color: var(--accent);
+      border-color: var(--accent);
+    }
+    .voice-mic-btn {
+      width: 42px; height: 42px; border-radius: 50%;
+      border: 2px solid var(--border); background: var(--bg3);
+      cursor: pointer; font-size: 18px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s; flex-shrink: 0;
+    }
+    .voice-mic-btn:hover { border-color: var(--accent); }
+    .voice-mic-btn.active {
+      border-color: var(--green); background: rgba(63,185,80,.12);
+    }
+    .voice-mic-btn.speaking {
+      border-color: var(--accent); background: rgba(88,166,255,.12);
+    }
+    .voice-mic-btn.processing {
+      border-color: var(--purple); background: rgba(188,140,255,.12);
+    }
+    .voice-text-input {
+      flex: 1; padding: 8px 12px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text);
+      font-size: 13px; font-family: inherit; outline: none;
+    }
+    .voice-text-input:focus { border-color: var(--accent); }
+    .voice-send-btn {
+      background: var(--accent); color: #fff; border: none;
+      border-radius: 8px; padding: 8px 14px;
+      font-size: 14px; cursor: pointer;
+    }
+    .voice-send-btn:hover { opacity: 0.85; }
   </style>
 </head>
 <body>
@@ -484,6 +811,16 @@
       <span class="nav-label">Memory</span>
     </a>
 
+    <div class="nav-group-title">Media</div>
+    <a class="nav-item" data-view="gallery" onclick="navigate('gallery')">
+      <span class="nav-icon">&#128444;</span>
+      <span class="nav-label">Gallery</span>
+    </a>
+    <a class="nav-item" data-view="dungeon" onclick="navigate('dungeon')">
+      <span class="nav-icon">&#128009;</span>
+      <span class="nav-label">Dungeon</span>
+    </a>
+
     <div class="nav-group-title">Settings</div>
     <a class="nav-item" data-view="config" onclick="navigate('config')">
       <span class="nav-icon">&#9881;</span>
@@ -503,6 +840,10 @@
       <span class="nav-icon">&#128200;</span>
       <span class="nav-label">Portfolio</span>
     </a>
+    <a class="nav-item" data-view="engagement" onclick="navigate('engagement')">
+      <span class="nav-icon">&#128202;</span>
+      <span class="nav-label">Engagement</span>
+    </a>
 
     <div class="nav-group-title">System</div>
     <a class="nav-item" data-view="system" onclick="navigate('system')">
@@ -517,7 +858,7 @@
       Rate limit actif — agents en pause jusqu'a <span id="rate-reset-time">--</span>
     </div>
 
-    <!-- ═══ VIEW: Chat ═══ -->
+    <!-- ═══ VIEW: Chat (center) ═══ -->
     <div class="view active" id="view-chat">
       <div class="chat-tabs">
         <div class="chat-tab active" data-tab="kingston" onclick="switchTab('kingston')">Kingston</div>
@@ -645,12 +986,133 @@
       </div>
     </div>
 
+    <!-- ═══ VIEW: Engagement ═══ -->
+    <div class="view" id="view-engagement">
+      <div class="view-header">Engagement Dashboard</div>
+      <div class="view-body" id="engagement-body" style="padding:16px;">
+        <div id="engagement-loading" style="color:var(--text2);">Loading...</div>
+      </div>
+    </div>
+
     <!-- ═══ VIEW: System ═══ -->
     <div class="view" id="view-system">
       <div class="view-header">System Information</div>
       <div class="view-body" id="system-body"></div>
     </div>
+
+    <!-- ═══ VIEW: Gallery ═══ -->
+    <div class="view" id="view-gallery">
+      <div class="view-header">
+        Gallery
+        <span style="font-size:12px;color:var(--text2);margin-left:8px;" id="gallery-count"></span>
+      </div>
+      <div class="view-body" id="gallery-body" style="padding:16px;">
+        <div class="gallery-grid" id="gallery-grid"></div>
+        <div class="gallery-empty" id="gallery-empty" style="display:none;">
+          <div style="font-size:48px;opacity:0.3;">&#128444;</div>
+          <div style="font-size:14px;color:var(--text2);margin-top:8px;">Aucune image disponible</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dungeon Master View -->
+    <div class="view" id="view-dungeon">
+      <div class="view-header">
+        &#128009; Dungeon Master
+        <span style="font-size:12px;color:var(--text2);margin-left:8px;" id="dungeon-session-name"></span>
+        <a href="/dungeon.html" target="_blank" style="margin-left:auto;padding:6px 14px;background:linear-gradient(135deg,#d2aa4a,#b28a2e);color:#1b1a17;border-radius:6px;text-decoration:none;font-size:12px;font-weight:700;font-family:'Cinzel',serif;letter-spacing:0.5px;">&#9876; Mode Immersif</a>
+      </div>
+      <div class="view-body" id="dungeon-body" style="padding:0;display:flex;flex-direction:column;height:100%;">
+        <!-- Session selector (shown when no active session) -->
+        <div id="dungeon-selector" style="padding:16px;">
+          <div style="display:flex;gap:12px;margin-bottom:16px;">
+            <input id="dungeon-new-name" placeholder="Nom de la campagne..." style="flex:1;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text1);font-size:13px;">
+            <input id="dungeon-new-setting" placeholder="Setting (ex: Dark Fantasy)" style="flex:1;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text1);font-size:13px;">
+            <input id="dungeon-new-chars" placeholder="Personnages: Nom/Race/Classe, ..." style="flex:2;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text1);font-size:13px;" value="Aventurier/Humain/Guerrier">
+            <button onclick="dungeonCreate()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Creer</button>
+          </div>
+          <div id="dungeon-sessions-list"></div>
+        </div>
+        <!-- Game layout (shown when session active) -->
+        <div id="dungeon-game" style="display:none;flex:1;overflow:hidden;">
+          <div style="display:flex;height:100%;">
+            <!-- Left: Party panel -->
+            <div id="dungeon-party" style="width:220px;border-right:1px solid var(--border);overflow-y:auto;padding:12px;flex-shrink:0;">
+              <div style="font-weight:700;font-size:13px;margin-bottom:12px;color:var(--accent);">Groupe</div>
+              <div id="dungeon-characters"></div>
+              <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+                <div style="font-weight:700;font-size:12px;margin-bottom:8px;color:var(--text2);">Dice Roller</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;" id="dungeon-dice-buttons">
+                  <button onclick="dungeonQuickRoll('d4')" style="padding:4px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text1);cursor:pointer;font-size:11px;">d4</button>
+                  <button onclick="dungeonQuickRoll('d6')" style="padding:4px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text1);cursor:pointer;font-size:11px;">d6</button>
+                  <button onclick="dungeonQuickRoll('d8')" style="padding:4px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text1);cursor:pointer;font-size:11px;">d8</button>
+                  <button onclick="dungeonQuickRoll('d10')" style="padding:4px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text1);cursor:pointer;font-size:11px;">d10</button>
+                  <button onclick="dungeonQuickRoll('d12')" style="padding:4px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text1);cursor:pointer;font-size:11px;">d12</button>
+                  <button onclick="dungeonQuickRoll('d20')" style="padding:6px 10px;background:var(--accent);border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:12px;font-weight:700;">d20</button>
+                  <button onclick="dungeonQuickRoll('2d6')" style="padding:4px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text1);cursor:pointer;font-size:11px;">2d6</button>
+                </div>
+                <div id="dungeon-roll-result" style="margin-top:8px;font-size:12px;color:var(--text2);min-height:20px;"></div>
+              </div>
+              <div style="margin-top:12px;">
+                <button onclick="dungeonBackToSessions()" style="width:100%;padding:6px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer;font-size:11px;">&#8592; Campagnes</button>
+              </div>
+            </div>
+            <!-- Center: Narrative chat -->
+            <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+              <div id="dungeon-narrative" style="flex:1;overflow-y:auto;padding:16px;"></div>
+              <div style="padding:12px;border-top:1px solid var(--border);display:flex;gap:8px;">
+                <input id="dungeon-action-input" placeholder="Ton action..." style="flex:1;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text1);font-size:13px;" onkeydown="if(event.key==='Enter')dungeonPlay()">
+                <button onclick="dungeonPlay()" id="dungeon-play-btn" style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;">Jouer</button>
+                <button onclick="dungeonGenerateScene()" title="Generer image de scene" style="padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text1);cursor:pointer;font-size:15px;">&#127912;</button>
+              </div>
+            </div>
+            <!-- Right: Scene images -->
+            <div id="dungeon-scenes" style="width:260px;border-left:1px solid var(--border);overflow-y:auto;padding:12px;flex-shrink:0;">
+              <div style="font-weight:700;font-size:13px;margin-bottom:12px;color:var(--accent);">Scenes</div>
+              <div id="dungeon-scene-main" style="margin-bottom:12px;"></div>
+              <div id="dungeon-scene-gallery" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
+
+  <!-- Image preview overlay -->
+  <div class="gallery-preview-overlay" id="gallery-preview-overlay" onclick="closeGalleryPreview()">
+    <div class="gallery-preview-content" onclick="event.stopPropagation()">
+      <img id="gallery-preview-img" src="" alt="Preview">
+      <div class="gallery-preview-info" id="gallery-preview-info"></div>
+      <button class="gallery-preview-close" onclick="closeGalleryPreview()">&#10005;</button>
+    </div>
+  </div>
+
+  <!-- Voice Sidebar (right) — always visible on all views -->
+  <aside class="voice-sidebar" id="voice-sidebar">
+    <button class="voice-sidebar-toggle" onclick="toggleVoiceSidebar()" title="Toggle voice">&#9666;</button>
+    <div class="kingston-avatar" id="kingston-avatar">
+      <div class="kingston-orb" id="kingston-orb" data-state="off">&#9775;</div>
+      <div class="kingston-avatar-label">Kingston</div>
+      <div class="kingston-avatar-status" id="kingston-avatar-status">Inactif</div>
+    </div>
+    <div class="voice-transcript" id="voice-transcript">
+      <div class="voice-msg voice-msg-system">Dis "Computer" ou clique le micro pour commencer.</div>
+    </div>
+    <div class="voice-wake-bar" id="voice-wake-bar">
+      <span id="voice-wake-text">Ecoute...</span>
+    </div>
+    <div class="voice-controls-bar">
+      <button class="voice-ctrl-btn" id="voice-wake-toggle" title="Wake word Computer">&#128276; Computer</button>
+      <button class="voice-ctrl-btn" id="voice-mode-toggle" title="Changer mode: Local (Ollama) / Cloud (Gemini Live)" style="font-size:11px;padding:6px 8px;">&#9729; Local</button>
+      <button class="voice-mic-btn" id="voice-mic-btn" title="Micro">&#127908;</button>
+      <input class="voice-text-input" id="voice-text-input" type="text" placeholder="Message..." />
+      <button class="voice-send-btn" id="voice-send-btn" title="Envoyer">&#10148;</button>
+    </div>
+  </aside>
+
+  <!-- Floating voice toggle (visible when sidebar collapsed/responsive) -->
+  <button class="voice-float-toggle" id="voice-float-toggle" onclick="toggleVoiceSidebar()">&#127908;</button>
 
 <script>
 // ══════════════════════════════════════════════════════════════
@@ -660,7 +1122,7 @@ let currentView = 'chat';
 let activeTab = 'kingston';
 let ws = null;
 let typingSeq = 0;
-const CHAT_TIMEOUT_MS = 180000;
+const CHAT_TIMEOUT_MS = 300000; // 5min — tool chains can be long
 const AUTH_TOKEN_STORAGE_KEY = 'dashboard_auth_token';
 let authToken = '';
 let allSkills = [];
@@ -700,6 +1162,9 @@ function loadView(view) {
     case 'debug': loadDebug(); break;
     case 'system': loadSystem(); break;
     case 'trading': loadTrading(); break;
+    case 'engagement': loadEngagement(); break;
+    case 'gallery': loadGallery(); break;
+    case 'dungeon': loadDungeon(); break;
   }
 }
 
@@ -780,7 +1245,59 @@ async function postChat(agent, message) {
     if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
     return data.response || 'No response.';
   } catch (err) {
-    if (err && err.name === 'AbortError') throw new Error('Timeout 180s');
+    if (err && err.name === 'AbortError') throw new Error('Timeout 5min');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function postChatStream(message, onProgress) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  try {
+    const res = await fetch('/api/chat/kingston/stream', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ message }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResponse = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      let eventType = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const raw = line.slice(6);
+          try {
+            const data = JSON.parse(raw);
+            if (eventType === 'progress' && onProgress) {
+              onProgress(data.tool, data.status, data.detail);
+            } else if (eventType === 'done') {
+              finalResponse = data.response || '';
+            } else if (eventType === 'error') {
+              throw new Error(data.error || 'Stream error');
+            }
+          } catch (e) {
+            if (e.message && !e.message.includes('JSON')) throw e;
+          }
+          eventType = '';
+        }
+      }
+    }
+    return finalResponse || 'No response.';
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw new Error('Timeout 5min');
     throw err;
   } finally {
     clearTimeout(timeout);
@@ -906,26 +1423,24 @@ async function loadScheduler() {
     el.innerHTML = `
       <h3 style="margin-bottom:12px;font-size:14px;">Reminders</h3>
       <table class="data-table">
-        <tr><th>ID</th><th>Label</th><th>Fire At</th><th>Chat</th></tr>
+        <tr><th>ID</th><th>Message</th><th>Fire At</th></tr>
         ${(data.reminders || []).map(r => `
           <tr>
             <td>${r.id}</td>
-            <td>${escapeHtml(r.label || '')}</td>
+            <td>${escapeHtml(r.message || '')}</td>
             <td>${new Date(r.fire_at * 1000).toLocaleString('fr-CA')}</td>
-            <td>${r.chat_id}</td>
           </tr>
-        `).join('') || '<tr><td colspan="4" style="color:var(--text2)">Aucun reminder</td></tr>'}
+        `).join('') || '<tr><td colspan="3" style="color:var(--text2)">Aucun reminder</td></tr>'}
       </table>
       <h3 style="margin:20px 0 12px;font-size:14px;">Recent Runs</h3>
       <table class="data-table">
-        <tr><th>Event</th><th>Fired At</th><th>Result</th></tr>
+        <tr><th>Event</th><th>Last Run</th></tr>
         ${(data.recent || []).map(r => `
           <tr>
             <td style="font-family:monospace;">${escapeHtml(r.event_key || '')}</td>
-            <td>${new Date(r.fired_at * 1000).toLocaleString('fr-CA')}</td>
-            <td style="font-size:12px;color:var(--text2);">${escapeHtml((r.result || '').slice(0, 80))}</td>
+            <td>${new Date(r.last_run_at * 1000).toLocaleString('fr-CA')}</td>
           </tr>
-        `).join('') || '<tr><td colspan="3" style="color:var(--text2)">Aucun run</td></tr>'}
+        `).join('') || '<tr><td colspan="2" style="color:var(--text2)">Aucun run</td></tr>'}
       </table>
     `;
   } catch (err) {
@@ -1553,24 +2068,70 @@ function renderChat() {
   container.innerHTML = history.map(m => {
     if (m.role === 'system') return `<div class="msg msg-system">${m.content}</div>`;
     if (m.role === 'user') return `<div class="msg msg-user">${escapeHtml(m.content)}</div>`;
+    const content = renderMsgContent(m.content);
     if ((activeTab === 'conseil' || activeTab === 'aster') && m.agent) {
       const agentCls = m.agent === 'kingston' ? 'kingston-msg' : 'emile-msg';
       const labelCls = m.agent === 'kingston' ? 'kingston' : 'emile';
       const label = m.agent === 'kingston' ? 'KINGSTON' : 'EMILE';
       return `<div class="msg msg-assistant ${agentCls}">
         <div class="msg-label ${labelCls}">${label}</div>
-        ${escapeHtml(m.content)}
+        ${content}
       </div>`;
     }
     const cls = `msg-assistant${activeTab === 'emile' ? ' emile' : ''}`;
-    return `<div class="msg ${cls}">${escapeHtml(m.content)}</div>`;
+    return `<div class="msg ${cls}">${content}</div>`;
   }).join('');
   container.scrollTop = container.scrollHeight;
 }
 
-function addMessage(tab, role, content) {
-  chatHistory[tab].push({ role, content });
-  if (activeTab === tab && currentView === 'chat') renderChat();
+function renderMsgContent(text) {
+  if (!text) return '';
+  // Split out fenced code blocks first (preserve them from other transforms)
+  const codeBlocks = [];
+  let safe = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push('<pre><code class="' + escapeHtml(lang) + '">' + escapeHtml(code.trim()) + '</code></pre>');
+    return '\x00CB' + idx + '\x00';
+  });
+  // Escape HTML in the rest
+  safe = escapeHtml(safe);
+  // Restore code blocks
+  safe = safe.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[+i]);
+  // Inline code
+  safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Images: markdown syntax
+  safe = safe.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;" loading="lazy" onerror="this.style.display=\'none\'">');
+  // Images: bare URLs
+  safe = safe.replace(/(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s]*)?)/gi,
+    '<img src="$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;" loading="lazy" onerror="this.style.display=\'none\'">');
+  // Images: upload paths
+  safe = safe.replace(/((?:uploads|images)\/[^\s"']+\.(?:png|jpg|jpeg|gif|webp))/gi,
+    '<img src="/$1" style="max-width:100%;max-height:400px;border-radius:6px;margin:4px 0;" loading="lazy" onerror="this.style.display=\'none\'">');
+  // Links
+  safe = safe.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Bold
+  safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  safe = safe.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  // Headings (# ## ###)
+  safe = safe.replace(/(^|\n)#{1,3}\s+(.+)/g, '$1<h3>$2</h3>');
+  // Blockquotes
+  safe = safe.replace(/(^|\n)&gt;\s?(.+)/g, '$1<blockquote>$2</blockquote>');
+  // Unordered lists: consecutive lines starting with - or *
+  safe = safe.replace(/((?:^|\n)[*-]\s+.+(?:\n[*-]\s+.+)*)/g, (match) => {
+    const items = match.trim().split('\n').map(l => '<li>' + l.replace(/^[*-]\s+/, '') + '</li>').join('');
+    return '<ul>' + items + '</ul>';
+  });
+  // Line breaks
+  safe = safe.replace(/\n/g, '<br>');
+  return safe;
+}
+
+function addMessage(tab, role, content, meta) {
+  const entry = { role, content };
+  if (meta) entry.meta = meta;
+  chatHistory[tab].push(entry);
+  if (activeTab === tab) renderChat();
 }
 
 function showTyping() {
@@ -1627,13 +2188,34 @@ async function sendMessage() {
 async function fetchAgent(agent, message) {
   const typingId = showTyping();
   try {
-    const response = await postChat(agent, message);
-    hideTyping(typingId);
-    addMessage(agent, 'assistant', response);
+    if (agent === 'kingston') {
+      // SSE streaming with tool progress
+      const response = await postChatStream(message, (tool, status, detail) => {
+        updateTypingProgress(typingId, tool, status, detail);
+      });
+      hideTyping(typingId);
+      addMessage(agent, 'assistant', response);
+    } else {
+      // Emile: batch mode
+      const response = await postChat(agent, message);
+      hideTyping(typingId);
+      addMessage(agent, 'assistant', response);
+    }
   } catch (err) {
     hideTyping(typingId);
     addMessage(agent, 'system', `Erreur: ${getErrorMessage(err)}`);
   }
+}
+
+function updateTypingProgress(typingId, tool, status, detail) {
+  const el = document.querySelector(`[data-typing-id="${typingId}"]`);
+  if (!el) return;
+  const toolLabel = tool ? tool.split('.').pop() : '...';
+  const icon = status === 'running' ? '\u2699\uFE0F' : '\u2713';
+  const detailStr = detail ? ': ' + detail.slice(-40) : '';
+  el.innerHTML = `<span class="typing-progress">${icon} ${escapeHtml(toolLabel)}${escapeHtml(detailStr)}...</span>`;
+  const container = document.getElementById('chat-messages');
+  if (container) container.scrollTop = container.scrollHeight;
 }
 
 function fetchAsterParallel(message) {
@@ -1647,7 +2229,7 @@ async function fetchAgentForTab(tab, agent, message) {
     const response = await postChat(agent, message);
     hideTyping(typingId);
     chatHistory[tab].push({ role: 'assistant', content: response, agent });
-    if (activeTab === tab && currentView === 'chat') renderChat();
+    if (activeTab === tab) renderChat();
   } catch (err) {
     hideTyping(typingId);
     addMessage(tab, 'system', `Erreur ${agent}: ${getErrorMessage(err)}`);
@@ -1787,10 +2369,14 @@ function statusBadge(status) {
   }
 }
 function formatDuration(ms) {
-  const h = Math.floor(ms / 3600000);
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  if (d > 0) return `${d}d ${h}h${m}m`;
   if (h > 0) return `${h}h${m}m`;
-  return `${m}m`;
+  if (m > 0) return `${m}m${s}s`;
+  return `${s}s`;
 }
 function formatCountdown(ms) {
   if (ms <= 0) return 'now';
@@ -1803,6 +2389,1132 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ══════════════════════════════════════════════════════════════
+// VIEW: Voice — Wake Word + Local/Cloud Mode
+// ══════════════════════════════════════════════════════════════
+let voiceWakeEnabled = false, voiceWakeActive = false, voiceWakeRecog = null;
+let voiceSessionActive = false, voiceLocalProcessing = false;
+let voiceLocalRecog = null, voiceLocalListening = false;
+let voiceFinalText = '', voiceSilenceTimer = null;
+let voicePlayCtx = null, voiceLocalAudio = null;
+let voiceInited = false;
+// Cloud mode (Gemini Live WebSocket)
+let voiceMode = localStorage.getItem('kingston_sidebar_voice_mode') || 'cloud'; // 'local' or 'cloud'
+let voiceWs = null, voiceWsRetries = 0;
+let voiceCloudMicStream = null, voiceCloudAudioCtx = null, voiceCloudWorklet = null;
+let voiceCloudPlayQueue = [], voiceCloudNextPlayTime = 0, voiceCloudSpeaking = false;
+
+const VOICE_WAKE_REGEX = /comput[eè]r|ordinat[eè]ur|computer/i;
+
+// ─── Language detection for dual voice (fr/en) ───
+function voiceDetectLang(text) {
+  if (!text) return 'fr-male';
+  const lower = text.toLowerCase();
+  const frSignals = (lower.match(/[àâäéèêëïîôùûüÿçœæ]/g) || []).length;
+  const frWords = ['je ', 'tu ', 'il ', 'elle ', 'nous ', 'vous ', 'les ', 'des ', 'est ', 'une ', 'dans ', 'pour ', 'que ', 'qui ', 'sur ', 'avec ', 'pas ', 'mais ', 'oui ', 'non ', 'bien ', 'fait ', 'très ', 'comme ', 'cette ', 'sont ', 'tout ', 'aussi ', "c'est ", "j'ai ", "l'", "d'", "n'", "qu'"];
+  const enWords = ['the ', 'is ', 'are ', 'was ', 'were ', 'have ', 'has ', 'been ', 'will ', 'would ', 'could ', 'should ', 'this ', 'that ', 'with ', 'from ', 'they ', 'what ', 'when ', 'where ', 'which ', 'there ', 'their ', 'your ', 'about ', "it's ", "don't ", "can't ", "i'm "];
+  let frScore = frSignals * 2;
+  let enScore = 0;
+  for (const w of frWords) { if (lower.includes(w)) frScore++; }
+  for (const w of enWords) { if (lower.includes(w)) enScore++; }
+  return enScore > frScore ? 'en-male' : 'fr-male';
+}
+
+function hasVoiceWebSpeech() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function voiceSetStatus(state, label) {
+  const mic = document.getElementById('voice-mic-btn');
+  // Update Kingston orb indicator
+  const orb = document.getElementById('kingston-orb');
+  const orbStatus = document.getElementById('kingston-avatar-status');
+  if (orb) orb.dataset.state = state;
+  if (orbStatus) orbStatus.textContent = label;
+  if (mic) {
+    mic.className = 'voice-mic-btn' + ({
+      listen: ' active', speak: ' speaking', think: ' processing'
+    }[state] || '');
+  }
+}
+
+function voiceAddMsg(role, text) {
+  const container = document.getElementById('voice-transcript');
+  if (!container) return;
+  const div = document.createElement('div');
+  if (role === 'user') {
+    div.className = 'voice-msg voice-msg-user';
+    const lbl = document.createElement('div');
+    lbl.className = 'voice-msg-label lbl-user';
+    lbl.textContent = 'Toi';
+    div.appendChild(lbl);
+    const c = document.createElement('div');
+    c.textContent = text;
+    div.appendChild(c);
+  } else if (role === 'kingston') {
+    div.className = 'voice-msg voice-msg-kingston';
+    const lbl = document.createElement('div');
+    lbl.className = 'voice-msg-label lbl-kingston';
+    lbl.textContent = 'Kingston';
+    div.appendChild(lbl);
+    const c = document.createElement('div');
+    c.textContent = text;
+    div.appendChild(c);
+  } else {
+    div.className = 'voice-msg voice-msg-system';
+    div.textContent = text;
+  }
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function voicePlayBeep(freq, dur) {
+  try {
+    const c = new AudioContext();
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.frequency.value = freq; o.type = 'sine'; g.gain.value = 0.12;
+    o.connect(g); g.connect(c.destination); o.start();
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur / 1000);
+    o.stop(c.currentTime + dur / 1000 + 0.05);
+    setTimeout(() => c.close(), dur + 200);
+  } catch {}
+}
+
+// ── Wake Word (NO FLASH fix) ──────────────────────────
+function voiceStartWake() {
+  if (!hasVoiceWebSpeech() || voiceWakeActive || voiceSessionActive) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  voiceWakeRecog = new SR();
+  voiceWakeRecog.continuous = true;
+  voiceWakeRecog.interimResults = true;
+  voiceWakeRecog.lang = 'fr-CA';
+
+  voiceWakeRecog.onstart = () => {
+    voiceWakeActive = true;
+    // Show wake bar and set text — STABLE, no toggling
+    const bar = document.getElementById('voice-wake-bar');
+    const txt = document.getElementById('voice-wake-text');
+    if (bar) bar.classList.add('visible');
+    if (txt) { txt.textContent = 'Ecoute... dis "Computer"'; txt.className = ''; }
+    if (!voiceSessionActive) voiceSetStatus('wake', 'Dis "Computer"...');
+  };
+
+  voiceWakeRecog.onresult = (e) => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t; else interim += t;
+    }
+    const display = (final || interim).trim();
+    const txt = document.getElementById('voice-wake-text');
+    if (display && txt) txt.textContent = display;
+    const check = (final || interim).toLowerCase().replace(/[.,!?;:'"]/g, '');
+    if (VOICE_WAKE_REGEX.test(check)) voiceOnWakeDetected();
+  };
+
+  voiceWakeRecog.onerror = (e) => {
+    // no-speech and aborted are normal — restart silently without flash
+    if (e.error === 'no-speech' || e.error === 'aborted') return;
+    if (e.error === 'not-allowed') {
+      voiceWakeActive = false;
+      voiceWakeEnabled = false;
+      const btn = document.getElementById('voice-wake-toggle');
+      if (btn) btn.classList.remove('on');
+      const bar = document.getElementById('voice-wake-bar');
+      if (bar) bar.classList.remove('visible');
+      voiceSetStatus('off', 'Micro refuse');
+      return;
+    }
+    // Other errors: restart silently
+    if (voiceWakeEnabled && !voiceSessionActive) {
+      setTimeout(voiceRestartWake, 500);
+    }
+  };
+
+  voiceWakeRecog.onend = () => {
+    voiceWakeActive = false;
+    // KEY FIX: do NOT hide the bar on restart. Just restart silently.
+    if (voiceWakeEnabled && !voiceSessionActive) {
+      setTimeout(voiceRestartWake, 300);
+    } else {
+      // Only hide when actually disabled
+      const bar = document.getElementById('voice-wake-bar');
+      if (bar) bar.classList.remove('visible');
+      if (!voiceSessionActive) voiceSetStatus('off', 'Inactif');
+    }
+  };
+
+  try { voiceWakeRecog.start(); } catch {}
+}
+
+function voiceStopWake() {
+  voiceWakeActive = false;
+  try { if (voiceWakeRecog) voiceWakeRecog.stop(); } catch {}
+  voiceWakeRecog = null;
+}
+
+function voiceRestartWake() {
+  if (!voiceWakeEnabled || voiceSessionActive || voiceWakeActive) return;
+  // Do NOT call voiceStopWake() which would hide the bar
+  // Just stop the recognition object and restart
+  try { if (voiceWakeRecog) voiceWakeRecog.stop(); } catch {}
+  voiceWakeRecog = null;
+  setTimeout(() => {
+    if (voiceWakeEnabled && !voiceSessionActive) voiceStartWake();
+  }, 200);
+}
+
+function voiceOnWakeDetected() {
+  // Anti-double: cross-tab lock via localStorage
+  const lastWake = parseInt(localStorage.getItem('kingston_wake_lock') || '0');
+  if (Date.now() - lastWake < 3000) return; // Another tab already handling
+  localStorage.setItem('kingston_wake_lock', String(Date.now()));
+
+  voiceAddMsg('system', '"Computer" detecte!');
+  voicePlayBeep(880, 120);
+  const txt = document.getElementById('voice-wake-text');
+  if (txt) { txt.textContent = 'Detecte!'; txt.className = 'heard'; }
+  voiceStopWake();
+  const bar = document.getElementById('voice-wake-bar');
+  if (bar) bar.classList.remove('visible');
+  if (voiceMode === 'cloud') {
+    voiceStartCloudSession();
+  } else {
+    voiceSpeakGreeting().then(() => { voiceStartLocalSession(); });
+  }
+}
+
+async function voiceSpeakGreeting() {
+  const texts = ['Bonjour Nicolas!', 'Oui Nicolas?', 'Je t\'ecoute Nicolas.', 'A ton service Nicolas.'];
+  const text = texts[Math.floor(Math.random() * texts.length)];
+  voiceAddMsg('kingston', text);
+  voiceSetStatus('speak', 'Kingston...');
+  try {
+    if (!voicePlayCtx) voicePlayCtx = new AudioContext({ sampleRate: 24000 });
+    if (voicePlayCtx.state === 'suspended') await voicePlayCtx.resume();
+    const r = await fetch('/api/tts', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ text, voice: 'fr-male' })
+    });
+    if (r.ok) {
+      const ab = await r.arrayBuffer();
+      const decoded = await voicePlayCtx.decodeAudioData(ab);
+      const src = voicePlayCtx.createBufferSource();
+      src.buffer = decoded;
+      src.connect(voicePlayCtx.destination);
+      await new Promise(res => { src.onended = res; src.start(); });
+    }
+  } catch (e) { console.warn('[voice-greeting] TTS error:', e); }
+}
+
+// ── Local Session (STT → Claude → TTS) ────────────────
+function voiceStartLocalSession() {
+  if (voiceSessionActive) return;
+  voiceSessionActive = true;
+  voiceLocalProcessing = false;
+  voiceFinalText = '';
+  voiceStopWake();
+  const bar = document.getElementById('voice-wake-bar');
+  if (bar) bar.classList.remove('visible');
+  voiceAddMsg('system', 'Session locale — parle, Kingston ecoute...');
+  voiceStartLocalListening();
+}
+
+function voiceStartLocalListening() {
+  if (!hasVoiceWebSpeech() || voiceLocalProcessing || voiceLocalListening) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  voiceLocalRecog = new SR();
+  voiceLocalRecog.continuous = true;
+  voiceLocalRecog.interimResults = true;
+  voiceLocalRecog.lang = 'fr-CA';
+
+  voiceLocalRecog.onstart = () => {
+    voiceLocalListening = true;
+    voiceFinalText = '';
+    const bar = document.getElementById('voice-wake-bar');
+    const txt = document.getElementById('voice-wake-text');
+    if (bar) bar.classList.add('visible');
+    if (txt) { txt.textContent = 'Ecoute...'; txt.className = ''; }
+    voiceSetStatus('listen', 'Kingston ecoute...');
+  };
+
+  voiceLocalRecog.onresult = (e) => {
+    let interim = '', nf = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) nf += t; else interim += t;
+    }
+    if (nf) voiceFinalText += (voiceFinalText ? ' ' : '') + nf.trim();
+    const display = (voiceFinalText + (interim ? ' ' + interim : '')).trim();
+    const txt = document.getElementById('voice-wake-text');
+    if (display && txt) txt.textContent = display;
+    clearTimeout(voiceSilenceTimer);
+    if (voiceFinalText) {
+      voiceSilenceTimer = setTimeout(() => {
+        if (voiceFinalText && !voiceLocalProcessing && voiceSessionActive) {
+          voiceProcessLocal(voiceFinalText.trim());
+        }
+      }, 800);
+    }
+  };
+
+  voiceLocalRecog.onerror = (e) => {
+    if (e.error === 'no-speech' || e.error === 'aborted') return;
+    if (e.error === 'not-allowed') { voiceStopLocalSession(); return; }
+    if (voiceSessionActive && !voiceLocalProcessing) {
+      voiceLocalListening = false;
+      setTimeout(() => {
+        if (voiceSessionActive && !voiceLocalProcessing) voiceStartLocalListening();
+      }, 300);
+    }
+  };
+
+  voiceLocalRecog.onend = () => {
+    voiceLocalListening = false;
+    // Don't hide bar during session — restart silently
+    if (voiceSessionActive && !voiceLocalProcessing) {
+      setTimeout(() => {
+        if (voiceSessionActive && !voiceLocalProcessing) voiceStartLocalListening();
+      }, 200);
+    }
+  };
+
+  try { voiceLocalRecog.start(); } catch { voiceLocalListening = false; }
+}
+
+function voiceStopLocalListening() {
+  voiceLocalListening = false;
+  clearTimeout(voiceSilenceTimer);
+  try { if (voiceLocalRecog) voiceLocalRecog.stop(); } catch {}
+  voiceLocalRecog = null;
+  const bar = document.getElementById('voice-wake-bar');
+  if (bar) bar.classList.remove('visible');
+}
+
+async function voiceProcessLocal(text) {
+  if (!text || voiceLocalProcessing) return;
+  voiceLocalProcessing = true;
+  voiceFinalText = '';
+  voiceStopLocalListening();
+  voiceAddMsg('user', text);
+  voiceSetStatus('think', 'Kingston reflechit...');
+  const bar = document.getElementById('voice-wake-bar');
+  const txt = document.getElementById('voice-wake-text');
+  if (bar) bar.classList.add('visible');
+  if (txt) { txt.textContent = 'Reflexion...'; txt.className = ''; }
+
+  // Pre-warm AudioContext early (don't wait for TTS response)
+  if (!voicePlayCtx) voicePlayCtx = new AudioContext({ sampleRate: 24000 });
+  if (voicePlayCtx.state === 'suspended') voicePlayCtx.resume().catch(() => {});
+
+  try {
+    // Full Kingston voice — all tools, memory, code.request
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 120000);
+    const r = await fetch('/api/chat/voice', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ message: text }),
+      signal: ctrl.signal
+    });
+    clearTimeout(to);
+    if (!r.ok) throw new Error('API ' + r.status);
+    const d = await r.json();
+    const resp = d.response || 'Desole, pas de reponse.';
+    voiceAddMsg('kingston', resp);
+
+    // TTS — fire immediately after response
+    voiceSetStatus('speak', 'Kingston parle...');
+    if (txt) txt.textContent = 'Synthese...';
+    const tCtrl = new AbortController();
+    const tTo = setTimeout(() => tCtrl.abort(), 15000);
+    const tr = await fetch('/api/tts', {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ text: resp.slice(0, 500), voice: voiceDetectLang(resp) }),
+      signal: tCtrl.signal
+    });
+    clearTimeout(tTo);
+    if (tr.ok) {
+      if (voicePlayCtx.state === 'suspended') await voicePlayCtx.resume();
+      const ab = await tr.arrayBuffer();
+      const decoded = await voicePlayCtx.decodeAudioData(ab);
+      const src = voicePlayCtx.createBufferSource();
+      src.buffer = decoded;
+      src.connect(voicePlayCtx.destination);
+      voiceLocalAudio = { stop: () => { try { src.stop(); } catch {} } };
+      await new Promise(res => {
+        src.onended = () => { voiceLocalAudio = null; res(); };
+        src.start();
+      });
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') voiceAddMsg('system', 'Timeout.');
+    else voiceAddMsg('system', 'Erreur: ' + (err.message || ''));
+  }
+
+  voiceLocalProcessing = false;
+  if (bar) bar.classList.remove('visible');
+  if (voiceSessionActive) voiceStartLocalListening();
+}
+
+function voiceStopLocalSession() {
+  voiceSessionActive = false;
+  voiceLocalProcessing = false;
+  voiceFinalText = '';
+  clearTimeout(voiceSilenceTimer);
+  voiceStopLocalListening();
+  if (voiceLocalAudio) { try { voiceLocalAudio.stop(); } catch {} voiceLocalAudio = null; }
+  const mic = document.getElementById('voice-mic-btn');
+  if (mic) mic.className = 'voice-mic-btn';
+  if (voiceWakeEnabled) {
+    setTimeout(() => {
+      if (!voiceSessionActive) {
+        voiceStartWake();
+        voiceSetStatus('wake', 'Dis "Computer"...');
+      }
+    }, 500);
+  } else {
+    voiceSetStatus('off', 'Inactif');
+  }
+}
+
+function voiceToggleSession() {
+  if (voiceSessionActive) {
+    if (voiceMode === 'cloud') voiceStopCloudSession();
+    else voiceStopLocalSession();
+  } else {
+    if (voiceMode === 'cloud') voiceStartCloudSession();
+    else voiceStartLocalSession();
+  }
+}
+
+// ── Cloud Mode (Gemini Live WebSocket) ────────────────
+function voiceStartCloudSession() {
+  if (voiceSessionActive) return;
+  voiceSessionActive = true;
+  voiceStopWake();
+  const bar = document.getElementById('voice-wake-bar');
+  if (bar) bar.classList.remove('visible');
+  voiceAddMsg('system', 'Gemini Live — connexion...');
+  voiceSetStatus('connecting', 'Connexion...');
+  voiceCloudConnect();
+}
+
+function voiceCloudConnect() {
+  if (voiceWs) return;
+  const wsUrl = window.location.origin.replace(/^http/, 'ws') + '/ws/voice';
+  try { voiceWs = new WebSocket(wsUrl); } catch (e) {
+    voiceAddMsg('system', 'Erreur WebSocket: ' + e.message);
+    voiceWs = null; return;
+  }
+  voiceWs.onopen = () => {
+    voiceWsRetries = 0;
+    voiceWs.send(JSON.stringify({
+      type: 'auth', token: authToken || '', voice: 'Enceladus', language: 'fr,en'
+    }));
+  };
+  voiceWs.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    voiceCloudHandleMsg(m);
+  };
+  voiceWs.onerror = () => {};
+  voiceWs.onclose = () => {
+    voiceWs = null;
+    if (voiceSessionActive && voiceWsRetries < 3) {
+      voiceWsRetries++;
+      voiceAddMsg('system', 'Reconnexion... (' + voiceWsRetries + '/3)');
+      setTimeout(() => { if (voiceSessionActive) voiceCloudConnect(); }, 1500 * voiceWsRetries);
+    } else if (voiceSessionActive) {
+      voiceAddMsg('system', 'Connexion perdue.');
+      voiceStopCloudSession();
+    }
+  };
+}
+
+function voiceCloudHandleMsg(m) {
+  switch (m.type) {
+    case 'ready':
+      voiceSetStatus('listen', 'Kingston ecoute...');
+      voiceAddMsg('system', 'Gemini Live connecte — parle!');
+      voiceCloudStartMic();
+      break;
+    case 'audio':
+      voiceCloudPlayChunk(m.data);
+      if (!voiceCloudSpeaking) { voiceCloudSpeaking = true; voiceSetStatus('speak', 'Kingston parle...'); }
+      break;
+    case 'transcript':
+      if (m.role === 'model') voiceAddMsg('kingston', m.text);
+      else voiceAddMsg('user', m.text);
+      break;
+    case 'interrupted':
+      voiceCloudStopPlayback();
+      voiceCloudSpeaking = false;
+      voiceSetStatus('listen', 'Kingston ecoute...');
+      break;
+    case 'turn_complete':
+      voiceCloudSpeaking = false;
+      voiceSetStatus('listen', 'Kingston ecoute...');
+      break;
+    case 'tool':
+      if (m.status === 'calling') voiceAddMsg('system', '> ' + m.name + '...');
+      else if (m.status === 'done') voiceAddMsg('system', '< ' + m.name + ': ' + (m.result || '').slice(0, 150));
+      break;
+    case 'image':
+      voiceAddMsg('system', '🎨 Image: ' + (m.caption || ''));
+      break;
+    case 'session_closed':
+      voiceAddMsg('system', 'Session Gemini expiree — reconnexion...');
+      if (voiceWs) { try { voiceWs.close(); } catch {} voiceWs = null; }
+      voiceCloudStopMic();
+      voiceCloudStopPlayback();
+      voiceCloudSpeaking = false;
+      setTimeout(() => { if (voiceSessionActive) { voiceSetStatus('connecting', 'Reconnexion...'); voiceCloudConnect(); } }, 1500);
+      break;
+    case 'error':
+      voiceAddMsg('system', 'Erreur: ' + m.message);
+      break;
+  }
+}
+
+async function voiceCloudStartMic() {
+  try {
+    voiceCloudMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
+    });
+    voiceCloudAudioCtx = new AudioContext({ sampleRate: 16000 });
+    if (voiceCloudAudioCtx.state === 'suspended') await voiceCloudAudioCtx.resume();
+    const code = `class P extends AudioWorkletProcessor{constructor(){super();this.b=[];}process(i){const c=i[0]?.[0];if(!c)return true;for(let j=0;j<c.length;j++)this.b.push(c[j]);if(this.b.length>=1600){this.port.postMessage(new Float32Array(this.b.splice(0,1600)));}return true;}}registerProcessor('p',P);`;
+    const blob = new Blob([code], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    await voiceCloudAudioCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const src = voiceCloudAudioCtx.createMediaStreamSource(voiceCloudMicStream);
+    voiceCloudWorklet = new AudioWorkletNode(voiceCloudAudioCtx, 'p');
+    voiceCloudWorklet.port.onmessage = (e) => {
+      if (!voiceWs || voiceWs.readyState !== 1) return;
+      const f = e.data;
+      const i16 = new Int16Array(f.length);
+      for (let j = 0; j < f.length; j++) i16[j] = Math.max(-32768, Math.min(32767, Math.round(f[j] * 32767)));
+      const b = new Uint8Array(i16.buffer);
+      let s = ''; for (let j = 0; j < b.length; j++) s += String.fromCharCode(b[j]);
+      voiceWs.send(JSON.stringify({ type: 'audio', data: btoa(s) }));
+    };
+    src.connect(voiceCloudWorklet);
+    const gain = voiceCloudAudioCtx.createGain(); gain.gain.value = 0;
+    voiceCloudWorklet.connect(gain); gain.connect(voiceCloudAudioCtx.destination);
+  } catch (err) {
+    voiceAddMsg('system', 'Erreur micro: ' + err.message);
+  }
+}
+
+function voiceCloudStopMic() {
+  if (voiceCloudWorklet) { voiceCloudWorklet.disconnect(); voiceCloudWorklet = null; }
+  if (voiceCloudMicStream) { voiceCloudMicStream.getTracks().forEach(t => t.stop()); voiceCloudMicStream = null; }
+  if (voiceCloudAudioCtx) { voiceCloudAudioCtx.close().catch(() => {}); voiceCloudAudioCtx = null; }
+}
+
+function voiceCloudPlayChunk(b64) {
+  if (!voicePlayCtx) voicePlayCtx = new AudioContext({ sampleRate: 24000 });
+  if (voicePlayCtx.state === 'suspended') voicePlayCtx.resume();
+  const r = atob(b64);
+  const b = new Uint8Array(r.length);
+  for (let i = 0; i < r.length; i++) b[i] = r.charCodeAt(i);
+  const i16 = new Int16Array(b.buffer);
+  const f = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f[i] = i16[i] / 32768;
+  const buf = voicePlayCtx.createBuffer(1, f.length, 24000);
+  buf.getChannelData(0).set(f);
+  const src = voicePlayCtx.createBufferSource();
+  src.buffer = buf; src.connect(voicePlayCtx.destination);
+  const now = voicePlayCtx.currentTime;
+  const at = Math.max(now + 0.01, voiceCloudNextPlayTime);
+  src.start(at);
+  voiceCloudNextPlayTime = at + buf.duration;
+  voiceCloudPlayQueue.push(src);
+  src.onended = () => { const idx = voiceCloudPlayQueue.indexOf(src); if (idx >= 0) voiceCloudPlayQueue.splice(idx, 1); };
+}
+
+function voiceCloudStopPlayback() {
+  voiceCloudPlayQueue.forEach(s => { try { s.stop(); } catch {} });
+  voiceCloudPlayQueue = [];
+  voiceCloudNextPlayTime = 0;
+}
+
+function voiceStopCloudSession() {
+  voiceSessionActive = false;
+  voiceCloudStopMic();
+  voiceCloudStopPlayback();
+  voiceCloudSpeaking = false;
+  if (voiceWs) { try { voiceWs.close(); } catch {} voiceWs = null; }
+  const mic = document.getElementById('voice-mic-btn');
+  if (mic) mic.className = 'voice-mic-btn';
+  if (voiceWakeEnabled) {
+    setTimeout(() => { if (!voiceSessionActive) { voiceStartWake(); voiceSetStatus('wake', 'Dis "Computer"...'); } }, 500);
+  } else {
+    voiceSetStatus('off', 'Inactif');
+  }
+}
+
+function voiceToggleMode() {
+  voiceMode = voiceMode === 'local' ? 'cloud' : 'local';
+  localStorage.setItem('kingston_sidebar_voice_mode', voiceMode);
+  const btn = document.getElementById('voice-mode-toggle');
+  if (btn) {
+    btn.innerHTML = voiceMode === 'cloud' ? '&#9729; Gemini' : '&#9729; Local';
+    btn.title = voiceMode === 'cloud' ? 'Mode: Gemini Live (streaming)' : 'Mode: Local (Ollama + TTS)';
+  }
+  voiceAddMsg('system', 'Mode: ' + (voiceMode === 'cloud' ? 'Gemini Live (streaming audio)' : 'Local (Ollama + TTS)'));
+}
+
+function voiceToggleWake() {
+  voiceWakeEnabled = !voiceWakeEnabled;
+  const btn = document.getElementById('voice-wake-toggle');
+  if (btn) btn.classList.toggle('on', voiceWakeEnabled);
+  if (voiceWakeEnabled) {
+    if (!voiceSessionActive) {
+      voiceStartWake();
+      voiceAddMsg('system', 'Wake word "Computer" active.');
+    }
+  } else {
+    voiceStopWake();
+    const bar = document.getElementById('voice-wake-bar');
+    if (bar) bar.classList.remove('visible');
+    if (!voiceSessionActive) voiceSetStatus('off', 'Inactif');
+    voiceAddMsg('system', 'Wake word desactive.');
+  }
+}
+
+function voiceSendText() {
+  const input = document.getElementById('voice-text-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  if (voiceMode === 'cloud') {
+    // Cloud mode: send text via WebSocket
+    if (!voiceWs || voiceWs.readyState !== 1) {
+      // Start session first, then send
+      voiceStartCloudSession();
+      // Wait for ready, then send text
+      const waitAndSend = setInterval(() => {
+        if (voiceWs && voiceWs.readyState === 1) {
+          clearInterval(waitAndSend);
+          voiceWs.send(JSON.stringify({ type: 'text', text }));
+          voiceAddMsg('user', text);
+        }
+      }, 500);
+      setTimeout(() => clearInterval(waitAndSend), 10000);
+    } else {
+      voiceWs.send(JSON.stringify({ type: 'text', text }));
+      voiceAddMsg('user', text);
+    }
+  } else {
+    // Local mode: existing behavior
+    if (voiceSessionActive) voiceStopLocalSession();
+    voiceSessionActive = true;
+    voiceLocalProcessing = false;
+    voiceFinalText = '';
+    voiceStopWake();
+    voiceProcessLocal(text);
+  }
+}
+
+function loadVoice() {
+  if (voiceInited) return;
+  voiceInited = true;
+
+  document.getElementById('voice-wake-toggle').addEventListener('click', voiceToggleWake);
+  document.getElementById('voice-mic-btn').addEventListener('click', voiceToggleSession);
+  document.getElementById('voice-send-btn').addEventListener('click', voiceSendText);
+  document.getElementById('voice-text-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); voiceSendText(); }
+  });
+  // Mode toggle button
+  const modeBtn = document.getElementById('voice-mode-toggle');
+  if (modeBtn) {
+    modeBtn.addEventListener('click', voiceToggleMode);
+    modeBtn.innerHTML = voiceMode === 'cloud' ? '&#9729; Gemini' : '&#9729; Local';
+    modeBtn.title = voiceMode === 'cloud' ? 'Mode: Gemini Live (streaming)' : 'Mode: Local (Ollama + TTS)';
+  }
+
+  if (!hasVoiceWebSpeech() && voiceMode === 'local') {
+    voiceAddMsg('system', 'Web Speech API non supportee — utilise Gemini Live ou le texte.');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// Engagement Dashboard
+// ══════════════════════════════════════════════════════════════
+let engagementRefreshTimer = null;
+
+async function loadEngagement() {
+  if (engagementRefreshTimer) clearInterval(engagementRefreshTimer);
+  try {
+    const data = await api('analytics/engagement');
+    renderEngagement(data);
+    engagementRefreshTimer = setInterval(async () => {
+      if (currentView !== 'engagement') { clearInterval(engagementRefreshTimer); return; }
+      try { const d = await api('analytics/engagement'); renderEngagement(d); } catch {}
+    }, 60000);
+  } catch (err) {
+    document.getElementById('engagement-body').innerHTML = `<p style="color:var(--red);">${err.message}</p>`;
+  }
+}
+
+function renderEngagement(data) {
+  const t = data.trading || {};
+  const c = data.content || {};
+  const p = data.pipeline || {};
+  const r = data.revenue || {};
+  const tokens = Array.isArray(data.tokenUsage) ? data.tokenUsage : [];
+  const agents = Array.isArray(data.agentPerformance) ? data.agentPerformance : [];
+  const decisions = data.decisions || {};
+
+  const tPnL = t.totalPnL || 0;
+  const tColor = tPnL >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+
+  let html = `
+    <div class="cards-grid">
+      <div class="card">
+        <div class="card-title">Trading P&L</div>
+        <div class="card-value" style="font-size:22px;color:${tColor};">${tPnL >= 0 ? '+' : ''}$${tPnL.toFixed(2)}</div>
+        <div class="card-sub">${t.positionCount || 0} positions | Equity: $${(t.equity || 0).toLocaleString()}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Revenue</div>
+        <div class="card-value" style="font-size:22px;color:${(r.net || 0) >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)'};">$${(r.net || 0).toFixed(2)}</div>
+        <div class="card-sub">Income: $${(r.totalIncome || 0).toFixed(0)} | Expenses: $${(r.totalExpenses || 0).toFixed(0)}</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Content</div>
+        <div class="card-value" style="font-size:22px;">${c.total || 0}</div>
+        <div class="card-sub">${c.published || 0} published | ${c.drafts || 0} drafts | ${c.last7d || 0} this week</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Lead Pipeline</div>
+        <div class="card-value" style="font-size:22px;">${p.total || 0}</div>
+        <div class="card-sub">${(p.byStatus || []).map(s => s.status + ': ' + s.count).join(' | ') || 'No leads'}</div>
+      </div>
+    </div>`;
+
+  // Trading positions table
+  if (t.positions && t.positions.length > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Positions</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="border-bottom:1px solid var(--border);text-align:left;">
+          <th style="padding:6px;">Symbol</th>
+          <th style="padding:6px;text-align:right;">Qty</th>
+          <th style="padding:6px;text-align:right;">Price</th>
+          <th style="padding:6px;text-align:right;">P&L</th>
+          <th style="padding:6px;text-align:right;">P&L %</th>
+          <th style="padding:6px;text-align:right;">Day %</th>
+        </tr></thead><tbody>`;
+    for (const pos of t.positions) {
+      const plCol = pos.pnl >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+      const dayCol = pos.changePct >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+      html += `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;font-weight:600;">${escapeHtml(pos.symbol)}</td>
+        <td style="padding:6px;text-align:right;">${pos.qty}</td>
+        <td style="padding:6px;text-align:right;">$${pos.currentPrice.toFixed(2)}</td>
+        <td style="padding:6px;text-align:right;color:${plCol};">${pos.pnl >= 0 ? '+' : ''}$${pos.pnl.toFixed(2)}</td>
+        <td style="padding:6px;text-align:right;color:${plCol};">${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(1)}%</td>
+        <td style="padding:6px;text-align:right;color:${dayCol};">${pos.changePct >= 0 ? '+' : ''}${pos.changePct.toFixed(1)}%</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // Agent performance
+  if (agents.length > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Agent Performance (24h)</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="border-bottom:1px solid var(--border);text-align:left;">
+          <th style="padding:6px;">Agent</th>
+          <th style="padding:6px;text-align:right;">Runs</th>
+          <th style="padding:6px;text-align:right;">Success</th>
+          <th style="padding:6px;text-align:right;">Errors</th>
+          <th style="padding:6px;text-align:right;">Avg Duration</th>
+        </tr></thead><tbody>`;
+    for (const a of agents) {
+      const rate = a.runs > 0 ? Math.round(a.successes / a.runs * 100) : 0;
+      const rateCol = rate >= 90 ? 'var(--green, #22c55e)' : rate >= 70 ? 'var(--yellow, #eab308)' : 'var(--red, #ef4444)';
+      html += `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${escapeHtml(a.agent_id)}</td>
+        <td style="padding:6px;text-align:right;">${a.runs}</td>
+        <td style="padding:6px;text-align:right;color:${rateCol};">${a.successes} (${rate}%)</td>
+        <td style="padding:6px;text-align:right;color:${a.errors > 0 ? 'var(--red, #ef4444)' : 'var(--text2)'};">${a.errors}</td>
+        <td style="padding:6px;text-align:right;">${a.avg_duration_ms ? (a.avg_duration_ms / 1000).toFixed(1) + 's' : '-'}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // Token usage
+  if (tokens.length > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Token Usage (7d)</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="border-bottom:1px solid var(--border);text-align:left;">
+          <th style="padding:6px;">Provider</th>
+          <th style="padding:6px;text-align:right;">Requests</th>
+          <th style="padding:6px;text-align:right;">Input Tokens</th>
+          <th style="padding:6px;text-align:right;">Output Tokens</th>
+          <th style="padding:6px;text-align:right;">Est. Cost</th>
+        </tr></thead><tbody>`;
+    for (const t of tokens) {
+      html += `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">${escapeHtml(t.provider)}</td>
+        <td style="padding:6px;text-align:right;">${(t.requests || 0).toLocaleString()}</td>
+        <td style="padding:6px;text-align:right;">${(t.input_tokens || 0).toLocaleString()}</td>
+        <td style="padding:6px;text-align:right;">${(t.output_tokens || 0).toLocaleString()}</td>
+        <td style="padding:6px;text-align:right;">$${(t.cost || 0).toFixed(4)}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // Autonomous decisions
+  if (decisions.last24h > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Autonomous Decisions (24h): ${decisions.last24h}</h3>`;
+    if (decisions.byCategory && decisions.byCategory.length > 0) {
+      html += `<div style="display:flex;gap:8px;flex-wrap:wrap;">`;
+      for (const cat of decisions.byCategory) {
+        html += `<span style="background:var(--bg3);padding:4px 10px;border-radius:12px;font-size:12px;">${escapeHtml(cat.category)}: ${cat.count}</span>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  // Content by platform
+  if (c.byPlatform && c.byPlatform.length > 0) {
+    html += `<h3 style="margin:20px 0 8px;color:var(--text1);">Content by Platform</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">`;
+    for (const plat of c.byPlatform) {
+      html += `<span style="background:var(--bg3);padding:4px 10px;border-radius:12px;font-size:12px;">${escapeHtml(plat.platform)}: ${plat.count}</span>`;
+    }
+    html += `</div>`;
+  }
+
+  document.getElementById('engagement-body').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Gallery
+// ══════════════════════════════════════════════════════════════
+async function loadGallery() {
+  const grid = document.getElementById('gallery-grid');
+  const empty = document.getElementById('gallery-empty');
+  const count = document.getElementById('gallery-count');
+  if (!grid) return;
+  grid.innerHTML = '<div style="color:var(--text2);">Chargement...</div>';
+  let files = [];
+  try {
+    const data = await api('gallery');
+    files = data.files || [];
+  } catch {
+    // API not available yet (server needs restart) — probe known images
+    const knownImages = [
+      'design-tshirt-bastilon-transparent.png', 'design-tshirt-bastilon-raw.png',
+      'design-tshirt-bastilon.png', 'meme-console-log.png',
+      'design-01-404-shell.png', 'design-02-sudo-ocean.png', 'design-03-coding-3am.png',
+      'photo_8189338836_1770442023236.jpg', 'photo_8189338836_1770565450654.jpg',
+      'photo_8189338836_1770572624766.jpg', 'photo_8189338836_1770771134136.jpg',
+      'photo_8189338836_1770775563049.jpg', 'photo_8189338836_1770793703478.jpg',
+      'photo_8189338836_1770793848252.jpg', 'photo_8189338836_1770833120341.jpg'
+    ];
+    // Probe each to see if it exists
+    const probes = await Promise.allSettled(
+      knownImages.map(name => fetch('/uploads/' + name, { method: 'HEAD' }).then(r => r.ok ? name : null))
+    );
+    files = probes
+      .filter(p => p.status === 'fulfilled' && p.value)
+      .map(p => ({ name: p.value, url: '/uploads/' + p.value, size: 0, mtime: Date.now() }));
+  }
+  if (count) count.textContent = files.length + ' images';
+  if (files.length === 0) {
+    grid.innerHTML = '';
+    if (empty) empty.style.display = 'flex';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  grid.innerHTML = files.map(f => {
+    const sizeKB = f.size ? Math.round(f.size / 1024) + ' KB' : '';
+    const date = f.mtime > 1000000000000 ? new Date(f.mtime).toLocaleDateString('fr-CA') : '';
+    const info = [sizeKB, date].filter(Boolean).join(' — ');
+    return `<div class="gallery-item" onclick="openGalleryPreview('${escapeHtml(f.url)}', '${escapeHtml(f.name)}', '${escapeHtml(info)}')">
+      <img src="${escapeHtml(f.url)}" alt="${escapeHtml(f.name)}" loading="lazy"
+        onerror="this.parentElement.style.display='none'">
+      <div class="gallery-item-info">
+        <span class="gallery-item-name">${escapeHtml(f.name)}</span>
+        <span>${escapeHtml(info)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openGalleryPreview(url, name, info) {
+  const overlay = document.getElementById('gallery-preview-overlay');
+  const img = document.getElementById('gallery-preview-img');
+  const infoEl = document.getElementById('gallery-preview-info');
+  if (overlay && img) {
+    img.src = url;
+    if (infoEl) infoEl.textContent = name + ' — ' + info;
+    overlay.classList.add('visible');
+  }
+}
+
+function closeGalleryPreview() {
+  const overlay = document.getElementById('gallery-preview-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+// Keyboard: Escape closes gallery preview
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeGalleryPreview();
+});
+
+// ══════════════════════════════════════════════════════════════
+// Dungeon Master
+// ══════════════════════════════════════════════════════════════
+let dungeonActiveSession = null;
+
+async function loadDungeon() {
+  if (dungeonActiveSession) {
+    await dungeonLoadSession(dungeonActiveSession);
+  } else {
+    await dungeonShowSessions();
+  }
+}
+
+async function dungeonShowSessions() {
+  dungeonActiveSession = null;
+  document.getElementById('dungeon-selector').style.display = 'block';
+  document.getElementById('dungeon-game').style.display = 'none';
+  document.getElementById('dungeon-session-name').textContent = '';
+  try {
+    const data = await api('dungeon/sessions');
+    const list = document.getElementById('dungeon-sessions-list');
+    if (!data.sessions || data.sessions.length === 0) {
+      list.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center;">Aucune campagne. Creez-en une ci-dessus!</div>';
+      return;
+    }
+    list.innerHTML = data.sessions.map(s => {
+      const status = s.status === 'active' ? '<span style="color:var(--green);">&#9679;</span>' : s.status === 'paused' ? '<span style="color:var(--yellow);">&#9646;&#9646;</span>' : '<span style="color:var(--text2);">&#10003;</span>';
+      const date = new Date(s.created_at * 1000).toLocaleDateString('fr-CA');
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;" onclick="dungeonLoadSession(${s.id})">
+        <div>${status} <b>${escapeHtml(s.name)}</b> <span style="color:var(--text2);font-size:12px;">— ${escapeHtml(s.setting||'Fantasy')} — Tour ${s.turn_number}</span></div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span style="color:var(--text2);font-size:11px;">${date}</span>
+          <button onclick="event.stopPropagation();dungeonDelete(${s.id})" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;" title="Supprimer">&#128465;</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('dungeon-sessions-list').innerHTML = '<div style="color:var(--red);">Erreur: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function dungeonCreate() {
+  const name = document.getElementById('dungeon-new-name').value.trim();
+  const setting = document.getElementById('dungeon-new-setting').value.trim();
+  const chars = document.getElementById('dungeon-new-chars').value.trim();
+  if (!name) return alert('Donnez un nom a la campagne');
+  try {
+    const data = await postApi('dungeon/create', {
+      name, setting: setting || 'Heroic Fantasy', characters: chars || 'Aventurier/Humain/Guerrier'
+    });
+    if (data.session) {
+      document.getElementById('dungeon-new-name').value = '';
+      document.getElementById('dungeon-new-setting').value = '';
+      await dungeonLoadSession(data.session.id);
+      return;
+    }
+  } catch (e) {
+    console.error('Create error:', e);
+  }
+  await dungeonShowSessions();
+}
+
+async function dungeonLoadSession(id) {
+  dungeonActiveSession = id;
+  document.getElementById('dungeon-selector').style.display = 'none';
+  document.getElementById('dungeon-game').style.display = 'flex';
+  try {
+    const data = await api('dungeon/session/' + id);
+    if (!data.session) { dungeonActiveSession = null; return dungeonShowSessions(); }
+    document.getElementById('dungeon-session-name').textContent = data.session.name + ' — ' + data.session.current_location;
+    dungeonRenderParty(data.characters || []);
+    dungeonRenderNarrative(data.turns || []);
+    dungeonRenderScenes(data.turns || []);
+  } catch (e) {
+    console.error('Dungeon load error:', e);
+  }
+}
+
+function dungeonRenderParty(characters) {
+  const el = document.getElementById('dungeon-characters');
+  if (!characters.length) { el.innerHTML = '<div style="color:var(--text2);font-size:12px;">Aucun personnage</div>'; return; }
+  el.innerHTML = characters.map(c => {
+    const hpPct = c.hp_max > 0 ? Math.round((c.hp / c.hp_max) * 100) : 0;
+    const hpColor = hpPct > 60 ? 'var(--green)' : hpPct > 30 ? 'var(--yellow)' : 'var(--red)';
+    const tag = c.is_npc ? ' <span style="color:var(--text2);font-size:10px;">(PNJ)</span>' : '';
+    const stats = c.stats || {};
+    const statStr = Object.keys(stats).length > 0 ? Object.entries(stats).map(([k,v]) => k.toUpperCase().slice(0,3) + ':' + v).join(' ') : '';
+    const inv = Array.isArray(c.inventory) ? c.inventory : [];
+    return `<div style="margin-bottom:12px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border);">
+      <div style="font-weight:600;font-size:12px;">${escapeHtml(c.name)}${tag}</div>
+      <div style="font-size:11px;color:var(--text2);">${escapeHtml(c.race)} ${escapeHtml(c.class)} Niv.${c.level}</div>
+      <div style="margin:4px 0;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div style="flex:1;height:6px;background:var(--bg2);border-radius:3px;overflow:hidden;">
+            <div style="height:100%;width:${hpPct}%;background:${hpColor};border-radius:3px;transition:width 0.3s;"></div>
+          </div>
+          <span style="font-size:10px;color:${hpColor};">${c.hp}/${c.hp_max}</span>
+        </div>
+      </div>
+      ${statStr ? '<div style="font-size:10px;color:var(--text2);font-family:monospace;">' + statStr + '</div>' : ''}
+      ${inv.length > 0 ? '<details style="margin-top:4px;"><summary style="font-size:10px;color:var(--text2);cursor:pointer;">Inventaire (' + inv.length + ')</summary><div style="font-size:10px;color:var(--text2);padding:4px 0;">' + inv.map(i => '- ' + escapeHtml(i)).join('<br>') + '</div></details>' : ''}
+    </div>`;
+  }).join('');
+}
+
+function dungeonRenderNarrative(turns) {
+  const el = document.getElementById('dungeon-narrative');
+  if (!turns.length) {
+    el.innerHTML = '<div style="color:var(--text2);text-align:center;padding:40px;font-size:14px;"><div style="font-size:48px;margin-bottom:12px;">&#128009;</div>L\'aventure attend... Entrez votre premiere action ci-dessous!</div>';
+    return;
+  }
+  el.innerHTML = turns.map(t => {
+    let html = '';
+    if (t.player_action) {
+      html += `<div style="margin-bottom:8px;"><div style="display:inline-block;padding:8px 14px;background:var(--accent);color:#fff;border-radius:12px 12px 2px 12px;max-width:80%;font-size:13px;"><b>Joueur:</b> ${escapeHtml(t.player_action)}</div></div>`;
+    }
+    if (t.dm_narrative) {
+      const narrative = t.dm_narrative.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\*([^*]+)\*/g, '<i>$1</i>').replace(/\[([^\]]+)\]/g, '<span style="color:var(--yellow);font-family:monospace;">[$1]</span>').replace(/\n/g, '<br>');
+      html += `<div style="margin-bottom:8px;"><div style="padding:12px 16px;background:var(--bg2);border-left:3px solid var(--yellow);border-radius:4px;font-size:13px;line-height:1.6;color:var(--text);">${narrative}</div>`;
+      if (t.event_type) html += `<div style="font-size:10px;color:var(--text2);margin-top:2px;">Tour ${t.turn_number} &middot; ${t.event_type}</div>`;
+      html += '</div>';
+    }
+    if (t.image_url) {
+      html += `<div style="margin-bottom:8px;text-align:center;"><img src="${escapeHtml(t.image_url)}" style="max-width:100%;max-height:300px;border-radius:8px;border:1px solid var(--border);" loading="lazy"></div>`;
+    }
+    return html;
+  }).join('<div style="border-top:1px solid var(--border);margin:12px 0;"></div>');
+  // Scroll to bottom
+  setTimeout(() => el.scrollTop = el.scrollHeight, 100);
+}
+
+function dungeonRenderScenes(turns) {
+  const mainEl = document.getElementById('dungeon-scene-main');
+  const galleryEl = document.getElementById('dungeon-scene-gallery');
+  const scenes = turns.filter(t => t.image_url).reverse();
+  if (scenes.length === 0) {
+    mainEl.innerHTML = '<div style="text-align:center;color:var(--text2);font-size:12px;padding:20px;">&#127912; Cliquez le bouton peinture pour generer une scene</div>';
+    galleryEl.innerHTML = '';
+    return;
+  }
+  const latest = scenes[0];
+  mainEl.innerHTML = `<img src="${escapeHtml(latest.image_url)}" style="width:100%;border-radius:8px;border:1px solid var(--border);" loading="lazy">
+    <div style="font-size:11px;color:var(--text2);margin-top:4px;">Tour ${latest.turn_number}</div>`;
+  galleryEl.innerHTML = scenes.slice(1, 9).map(s =>
+    `<img src="${escapeHtml(s.image_url)}" style="width:calc(50% - 2px);aspect-ratio:3/2;object-fit:cover;border-radius:4px;cursor:pointer;border:1px solid var(--border);" onclick="document.getElementById('dungeon-scene-main').querySelector('img').src='${escapeHtml(s.image_url)}'" loading="lazy">`
+  ).join('');
+}
+
+async function dungeonPlay() {
+  if (!dungeonActiveSession) return;
+  const input = document.getElementById('dungeon-action-input');
+  const action = input.value.trim();
+  if (!action) return;
+  input.value = '';
+  const btn = document.getElementById('dungeon-play-btn');
+  btn.disabled = true;
+  btn.textContent = '...';
+  // Immediately show player action
+  const narrative = document.getElementById('dungeon-narrative');
+  narrative.innerHTML += `<div style="border-top:1px solid var(--border);margin:12px 0;"></div><div style="margin-bottom:8px;"><div style="display:inline-block;padding:8px 14px;background:var(--accent);color:#fff;border-radius:12px 12px 2px 12px;max-width:80%;font-size:13px;"><b>Joueur:</b> ${escapeHtml(action)}</div></div>`;
+  narrative.scrollTop = narrative.scrollHeight;
+  try {
+    const data = await postApi('dungeon/play', { session_id: dungeonActiveSession, action });
+    // Render DM response
+    if (data.narrative) {
+      const dm = data.narrative.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\*([^*]+)\*/g, '<i>$1</i>').replace(/\[([^\]]+)\]/g, '<span style="color:var(--yellow);font-family:monospace;">[$1]</span>').replace(/\n/g, '<br>');
+      narrative.innerHTML += `<div style="margin-bottom:8px;"><div style="padding:12px 16px;background:var(--bg2);border-left:3px solid var(--yellow);border-radius:4px;font-size:13px;line-height:1.6;color:var(--text);">${dm}</div></div>`;
+    }
+    if (data.characters) dungeonRenderParty(data.characters);
+    if (data.session) document.getElementById('dungeon-session-name').textContent = data.session.name + ' — ' + data.session.current_location;
+    if (data.lastTurn && data.lastTurn.image_url) {
+      document.getElementById('dungeon-scene-main').innerHTML = `<img src="${escapeHtml(data.lastTurn.image_url)}" style="width:100%;border-radius:8px;border:1px solid var(--border);">`;
+    }
+    narrative.scrollTop = narrative.scrollHeight;
+  } catch (e) {
+    narrative.innerHTML += `<div style="color:var(--red);padding:8px;">Erreur: ${escapeHtml(e.message)}</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Jouer';
+}
+
+async function dungeonQuickRoll(dice) {
+  try {
+    const data = await postApi('dungeon/roll', { dice });
+    document.getElementById('dungeon-roll-result').innerHTML = data.result ? data.result.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>') : dice;
+  } catch (e) {
+    document.getElementById('dungeon-roll-result').textContent = 'Erreur: ' + e.message;
+  }
+}
+
+async function dungeonGenerateScene() {
+  if (!dungeonActiveSession) return;
+  try {
+    const data = await postApi('dungeon/scene', { session_id: dungeonActiveSession });
+    if (data.result) {
+      const imgMatch = data.result.match(/!\[.*?\]\((.+?)\)/);
+      if (imgMatch) {
+        document.getElementById('dungeon-scene-main').innerHTML = `<img src="${escapeHtml(imgMatch[1])}" style="width:100%;border-radius:8px;border:1px solid var(--border);">`;
+      }
+    }
+  } catch (e) {
+    console.error('Scene generation error:', e);
+  }
+}
+
+async function dungeonDelete(id) {
+  if (!confirm('Supprimer cette campagne?')) return;
+  try {
+    const res = await fetch('/api/dungeon/session/' + id, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+  } catch {}
+  await dungeonShowSessions();
+}
+
+function dungeonBackToSessions() {
+  dungeonActiveSession = null;
+  dungeonShowSessions();
+}
+
+// Voice Sidebar
+// ══════════════════════════════════════════════════════════════
+let voiceSidebarCollapsed = false;
+
+function toggleVoiceSidebar() {
+  const sidebar = document.getElementById('voice-sidebar');
+  const floatBtn = document.getElementById('voice-float-toggle');
+  voiceSidebarCollapsed = !voiceSidebarCollapsed;
+  if (voiceSidebarCollapsed) {
+    sidebar.classList.add('collapsed');
+    floatBtn.classList.add('visible');
+  } else {
+    sidebar.classList.remove('collapsed');
+    floatBtn.classList.remove('visible');
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1819,6 +3531,9 @@ async function init() {
   addMessage('emile', 'system', 'Chat Emile.');
   addMessage('aster', 'system', 'Mode Aster: Kingston + Emile en parallele.');
   addMessage('conseil', 'system', 'Mode Conseil: Kingston et Emile collaborent tour par tour.');
+
+  // Init voice system immediately (available on all views)
+  loadVoice();
 
   // Route from hash
   const hash = location.hash.replace('#', '') || 'chat';

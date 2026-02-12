@@ -3,7 +3,8 @@
  * Client relationship management for autonomous business operations.
  */
 import { registerSkill } from "../loader.js";
-import { getDb } from "../../storage/store.js";
+import { getDb, kgUpsertEntity, kgGetEntity } from "../../storage/store.js";
+import { log } from "../../utils/log.js";
 
 interface ClientRow {
   id: number;
@@ -150,6 +151,7 @@ registerSkill({
     }
     if (args.contacted === "now") {
       updates.push("last_contact_at = unixepoch()");
+      updates.push("interaction_count = interaction_count + 1");
     }
 
     if (updates.length === 0) return "Nothing to update.";
@@ -159,7 +161,16 @@ registerSkill({
 
     d.prepare(`UPDATE clients SET ${updates.join(", ")} WHERE id = ?`).run(...params);
 
-    return `Client #${clientId} (${row.name}) updated: ${updates.filter((u) => !u.includes("updated_at")).join(", ")}`;
+    // Auto-rescore after update
+    try {
+      const updated = d.prepare("SELECT * FROM clients WHERE id = ?").get(clientId) as any;
+      if (updated) {
+        const newScore = computeClientScore(updated);
+        d.prepare("UPDATE clients SET score = ? WHERE id = ?").run(newScore, clientId);
+      }
+    } catch (e) { log.debug(`[client.update] Auto-rescore failed: ${e}`); }
+
+    return `Client #${clientId} (${row.name}) updated: ${updates.filter((u) => !u.includes("updated_at") && !u.includes("interaction_count")).join(", ")}`;
   },
 });
 
@@ -281,5 +292,134 @@ registerSkill({
     ).run(clientId);
 
     return proposal;
+  },
+});
+
+// ── Contact Scoring Intelligence ──
+
+function computeClientScore(client: any): number {
+  let score = 50;
+  const now = Math.floor(Date.now() / 1000);
+
+  // +2 per interaction (max +20)
+  const interactions = Math.min(10, client.interaction_count || 0);
+  score += interactions * 2;
+
+  // Recency bonus/penalty
+  if (client.last_contact_at) {
+    const daysSince = (now - client.last_contact_at) / 86400;
+    if (daysSince < 7) score += 10;
+    else if (daysSince < 30) score += 5;
+    else if (daysSince > 90) score -= 10;
+  }
+
+  // Commitment stage bonus
+  const stageBonus: Record<string, number> = {
+    cold: 0, warm: 5, engaged: 10, customer: 15, advocate: 20,
+  };
+  score += stageBonus[client.commitment_stage] || 0;
+
+  // Profile completeness
+  if (client.email && client.phone) score += 5;
+  if (client.company) score += 3;
+  if (client.needs) score += 5;
+
+  return Math.max(0, Math.min(100, score));
+}
+
+registerSkill({
+  name: "client.score",
+  description: "Calculate/recalculate client scores. Call with id for one client, or without to rescore all.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      id: { type: "number", description: "Client ID (optional — omit to rescore all)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const d = getDb();
+
+    if (args.id) {
+      const client = d.prepare("SELECT * FROM clients WHERE id = ?").get(args.id as number) as any;
+      if (!client) return `Client #${args.id} not found.`;
+      const newScore = computeClientScore(client);
+      d.prepare("UPDATE clients SET score = ? WHERE id = ?").run(newScore, client.id);
+      return `Client #${client.id} (${client.name}): score = ${newScore}/100`;
+    }
+
+    // Rescore all
+    const clients = d.prepare("SELECT * FROM clients").all() as any[];
+    let updated = 0;
+    for (const client of clients) {
+      const newScore = computeClientScore(client);
+      d.prepare("UPDATE clients SET score = ? WHERE id = ?").run(newScore, client.id);
+      updated++;
+    }
+    return `${updated} client(s) rescored.`;
+  },
+});
+
+registerSkill({
+  name: "client.smart_search",
+  description: "Search clients across name, company, needs, notes. Results sorted by score (highest first).",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Search query" },
+      limit: { type: "number", description: "Max results (default: 10)" },
+    },
+    required: ["query"],
+  },
+  async execute(args): Promise<string> {
+    const query = `%${String(args.query)}%`;
+    const limit = Number(args.limit) || 10;
+    const d = getDb();
+
+    const rows = d.prepare(
+      `SELECT * FROM clients
+       WHERE name LIKE ? OR company LIKE ? OR needs LIKE ? OR notes LIKE ?
+       ORDER BY score DESC, updated_at DESC LIMIT ?`
+    ).all(query, query, query, query, limit) as any[];
+
+    if (rows.length === 0) return `Aucun client trouvé pour "${args.query}".`;
+
+    return rows.map((c: any) => {
+      const lastContact = c.last_contact_at
+        ? new Date(c.last_contact_at * 1000).toLocaleDateString("fr-CA", { timeZone: "America/Toronto" })
+        : "jamais";
+      return (
+        `**#${c.id} ${c.name}** [${c.status}] Score: ${c.score || 50}/100` +
+        (c.company ? ` @ ${c.company}` : "") +
+        `\n  ${c.email || ""} ${c.phone || ""}` +
+        `\n  Besoins: ${c.needs || "N/A"} | Contact: ${lastContact}`
+      );
+    }).join("\n\n");
+  },
+});
+
+registerSkill({
+  name: "client.learn",
+  description: "Store client intelligence config in KG (skip_domains, prefer_titles, min_exchanges for prospection).",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      key: { type: "string", description: "Config key: skip_domains, prefer_titles, min_exchanges" },
+      value: { type: "string", description: "Config value (JSON array for lists, number for min_exchanges)" },
+    },
+    required: ["key", "value"],
+  },
+  async execute(args): Promise<string> {
+    const key = String(args.key);
+    const value = String(args.value);
+    const allowed = ["skip_domains", "prefer_titles", "min_exchanges"];
+    if (!allowed.includes(key)) {
+      return `Clé invalide. Clés supportées: ${allowed.join(", ")}`;
+    }
+
+    kgUpsertEntity(`client_config:${key}`, "config", { value });
+    return `Client intelligence config stockée: ${key} = ${value}`;
   },
 });

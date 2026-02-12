@@ -82,7 +82,7 @@ export async function embedText(text: string): Promise<number[]> {
 
 // --- Cosine Similarity ---
 
-function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0, normA = 0, normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
@@ -151,6 +151,62 @@ function findNearestMemory(
   return bestSim >= threshold ? { id: bestId, similarity: bestSim } : null;
 }
 
+// --- AI Consolidation ---
+
+/**
+ * Use Gemini Flash to decide how to merge two similar memories.
+ * Returns merged text, or null if they should be kept separate.
+ */
+async function aiConsolidateMemories(existing: string, incoming: string, category: string): Promise<string | null> {
+  if (!config.geminiApiKey) return null;
+
+  const prompt = `Two memories about "${category}" are similar. Decide how to handle them.
+
+EXISTING: ${existing}
+NEW: ${incoming}
+
+Options:
+- MERGE: Combine both into one concise memory (1-2 sentences)
+- REPLACE: The new memory is strictly better/more current — use it
+- KEEP_SEPARATE: They cover different aspects — don't merge
+
+Respond with EXACTLY one line:
+ACTION: [MERGE|REPLACE|KEEP_SEPARATE]
+RESULT: [merged text if MERGE, new text if REPLACE, empty if KEEP_SEPARATE]`;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+
+    const actionMatch = text.match(/ACTION:\s*(MERGE|REPLACE|KEEP_SEPARATE)/i);
+    if (!actionMatch) return null;
+
+    const action = actionMatch[1].toUpperCase();
+    if (action === "KEEP_SEPARATE") return null;
+
+    const resultMatch = text.match(/RESULT:\s*(.+)/i);
+    if (!resultMatch) return action === "REPLACE" ? incoming : null;
+
+    const result = resultMatch[1].trim();
+    if (result.length < 5) return action === "REPLACE" ? incoming : null;
+
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 // --- CRUD ---
 
 export async function addMemory(
@@ -189,10 +245,45 @@ export async function addMemory(
     log.warn(`[semantic] Embedding failed for new memory: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // Semantic dedup: if near-duplicate exists in same category, reinforce instead of inserting
+  // Semantic dedup with AI consolidation: if near-duplicate exists, ask LLM to merge/replace/keep
   if (embedding) {
     const nearest = findNearestMemory(embedding, category, config.memoryDedupThreshold);
     if (nearest) {
+      // Try AI consolidation for medium similarity (0.75-0.95), pure reinforce for very high (>0.95)
+      if (nearest.similarity > 0.95) {
+        db.prepare(
+          `UPDATE memory_items SET access_count = access_count + 1,
+           salience = MIN(salience + 0.05, 1.0),
+           last_accessed_at = unixepoch(), updated_at = unixepoch()
+           WHERE id = ?`
+        ).run(nearest.id);
+        log.debug(`[semantic] Near-dup of #${nearest.id} (sim=${nearest.similarity.toFixed(3)}), reinforced`);
+        return nearest.id;
+      }
+
+      // AI consolidation for moderate similarity
+      try {
+        const existingRow = db.prepare("SELECT content FROM memory_items WHERE id = ?").get(nearest.id) as { content: string } | undefined;
+        if (existingRow) {
+          const merged = await aiConsolidateMemories(existingRow.content, content, category);
+          if (merged) {
+            const newHash = hashContent(merged);
+            const newEmb = await embedText(merged);
+            db.prepare(
+              `UPDATE memory_items SET content = ?, content_hash = ?, embedding = ?,
+               access_count = access_count + 1, salience = MIN(salience + 0.1, 1.0),
+               last_accessed_at = unixepoch(), updated_at = unixepoch()
+               WHERE id = ?`
+            ).run(merged, newHash, JSON.stringify(newEmb), nearest.id);
+            log.info(`[semantic] AI-merged new memory into #${nearest.id}: "${merged.slice(0, 60)}..."`);
+            return nearest.id;
+          }
+        }
+      } catch (err) {
+        log.debug(`[semantic] AI consolidation failed, falling back to reinforce: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Fallback: just reinforce
       db.prepare(
         `UPDATE memory_items SET access_count = access_count + 1,
          salience = MIN(salience + 0.05, 1.0),
@@ -316,6 +407,234 @@ export async function searchMemories(query: string, limit: number = 10): Promise
   }
 
   return results.filter((r) => r.score > 0.2); // Filter noise
+}
+
+// --- FTS5 BM25 Search ---
+
+export function searchMemoriesFTS(query: string, limit: number = 10, categoryFilter?: string): (MemoryItem & { score: number })[] {
+  const db = getDb();
+
+  // Build FTS5 query — escape special chars for safety
+  const ftsQuery = query.replace(/['"]/g, "").replace(/[^\w\s]/g, " ").trim();
+  if (!ftsQuery) return [];
+
+  try {
+    let rows: MemoryRow[];
+    if (categoryFilter) {
+      rows = db.prepare(
+        `SELECT m.*, bm25(memory_items_fts) as rank
+         FROM memory_items_fts fts
+         JOIN memory_items m ON fts.rowid = m.id
+         WHERE memory_items_fts MATCH ? AND m.category = ?
+         ORDER BY rank
+         LIMIT ?`
+      ).all(ftsQuery, categoryFilter, limit) as any[];
+    } else {
+      rows = db.prepare(
+        `SELECT m.*, bm25(memory_items_fts) as rank
+         FROM memory_items_fts fts
+         JOIN memory_items m ON fts.rowid = m.id
+         WHERE memory_items_fts MATCH ?
+         ORDER BY rank
+         LIMIT ?`
+      ).all(ftsQuery, limit) as any[];
+    }
+
+    // BM25 returns negative scores (more negative = better match), normalize to 0-1
+    if (rows.length === 0) return [];
+    const ranks = rows.map((r: any) => Math.abs(r.rank));
+    const maxRank = Math.max(...ranks, 0.001);
+
+    return rows.map((row: any, idx) => ({
+      ...rowToItem(row),
+      score: 1.0 - (ranks[idx] / maxRank) * 0.5, // Normalize: best match → ~1.0
+    }));
+  } catch (err) {
+    log.debug(`[semantic] FTS5 search failed: ${err instanceof Error ? err.message : String(err)}`);
+    return fallbackTextSearch(query, limit);
+  }
+}
+
+// --- Query Expansion (Ollama / Groq) ---
+
+/**
+ * Generate 1-2 alternative phrasings of a query using a lightweight LLM call.
+ * Used to improve recall in hybrid search. Falls back gracefully (returns []).
+ */
+async function expandQuery(query: string): Promise<string[]> {
+  // Skip very short or single-word queries — expansion won't help
+  if (query.split(/\s+/).length < 2) return [];
+
+  const prompt = `Rephrase this search query in 2 different ways. Return ONLY the 2 rephrased queries, one per line, no numbering, no explanation.\n\nQuery: ${query}`;
+
+  // Try Ollama first (free, local)
+  try {
+    const res = await fetch(`${config.ollamaUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.ollamaModel,
+        prompt,
+        stream: false,
+        options: { temperature: 0.3, num_predict: 80 },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const lines = (data.response || "")
+        .split("\n")
+        .map((l: string) => l.replace(/^\d+[\.\)]\s*/, "").trim())
+        .filter((l: string) => l.length > 3 && l.length < 200);
+      if (lines.length > 0) {
+        log.debug(`[semantic] Query expanded via Ollama: ${lines.length} variants`);
+        return lines.slice(0, 2);
+      }
+    }
+  } catch { /* Ollama unavailable, try Groq */ }
+
+  // Fallback to Groq
+  if (config.groqApiKey) {
+    try {
+      const { runGroq } = await import("../llm/groqClient.js");
+      const result = await runGroq(
+        "You rephrase search queries concisely.",
+        `Rephrase this search query in 2 different ways. One per line, no numbering.\n\nQuery: ${query}`,
+        { maxTokens: 80, temperature: 0.3 },
+      );
+      const lines = result
+        .split("\n")
+        .map(l => l.replace(/^\d+[\.\)]\s*/, "").trim())
+        .filter(l => l.length > 3 && l.length < 200);
+      if (lines.length > 0) {
+        log.debug(`[semantic] Query expanded via Groq: ${lines.length} variants`);
+        return lines.slice(0, 2);
+      }
+    } catch { /* Groq also failed */ }
+  }
+
+  return [];
+}
+
+// --- Hybrid Search (BM25 + Vector + RRF Fusion) ---
+
+/**
+ * Reciprocal Rank Fusion — merges multiple ranked lists.
+ * score = sum(1 / (k + rank)) across all lists, with optional weight per list.
+ */
+function rrfFusion(
+  rankedLists: Array<{ items: Array<{ id: number; score: number }>; weight: number }>,
+  k: number = 60
+): Map<number, number> {
+  const scores = new Map<number, number>();
+
+  for (const list of rankedLists) {
+    for (let rank = 0; rank < list.items.length; rank++) {
+      const item = list.items[rank];
+      const rrfScore = list.weight / (k + rank + 1);
+      scores.set(item.id, (scores.get(item.id) || 0) + rrfScore);
+    }
+  }
+
+  return scores;
+}
+
+/**
+ * Hybrid search: runs BM25 + vector in parallel, fuses with RRF.
+ * With expand=true, generates query variants via Ollama/Groq for better recall.
+ * Original query weighted 2x vs expanded queries.
+ */
+export async function searchMemoriesHybrid(
+  query: string,
+  limit: number = 10,
+  categoryFilter?: string,
+  expand: boolean = false
+): Promise<(MemoryItem & { score: number })[]> {
+  const db = getDb();
+
+  // Run BM25 and vector search in parallel (+ optional query expansion)
+  const [ftsResults, vectorResults, expansions] = await Promise.all([
+    Promise.resolve(searchMemoriesFTS(query, limit * 3, categoryFilter)),
+    searchMemories(query, limit * 3).then(results =>
+      categoryFilter ? results.filter(r => r.category === categoryFilter) : results
+    ),
+    expand ? expandQuery(query) : Promise.resolve([]),
+  ]);
+
+  // Run expanded query searches in parallel if we got expansions
+  const expandedLists: Array<{ items: Array<{ id: number; score: number }>; weight: number }> = [];
+  const expandedItems = new Map<number, MemoryItem & { score: number }>();
+  if (expansions.length > 0) {
+    const expandedSearches = await Promise.all(
+      expansions.map(async (eq) => {
+        const [fts, vec] = await Promise.all([
+          Promise.resolve(searchMemoriesFTS(eq, limit * 2, categoryFilter)),
+          searchMemories(eq, limit * 2).then(r =>
+            categoryFilter ? r.filter(x => x.category === categoryFilter) : r
+          ),
+        ]);
+        return { fts, vec };
+      })
+    );
+
+    for (const { fts, vec } of expandedSearches) {
+      if (fts.length > 0)
+        expandedLists.push({ items: fts.map(r => ({ id: r.id, score: r.score })), weight: 1.0 });
+      if (vec.length > 0)
+        expandedLists.push({ items: vec.map(r => ({ id: r.id, score: r.score })), weight: 1.0 });
+      for (const r of fts) expandedItems.set(r.id, r);
+      for (const r of vec) expandedItems.set(r.id, r);
+    }
+  }
+
+  if (ftsResults.length === 0 && vectorResults.length === 0 && expandedLists.length === 0) return [];
+
+  // If one method failed, return the other
+  if (ftsResults.length === 0 && expandedLists.length === 0) return vectorResults.slice(0, limit);
+  if (vectorResults.length === 0 && expandedLists.length === 0) return ftsResults.slice(0, limit);
+
+  // RRF fusion — original query weighted 2x, expanded queries 1x
+  const fused = rrfFusion([
+    { items: ftsResults.map(r => ({ id: r.id, score: r.score })), weight: 2.0 },
+    { items: vectorResults.map(r => ({ id: r.id, score: r.score })), weight: 2.0 },
+    ...expandedLists,
+  ]);
+
+  // Top-rank bonuses
+  const sortedFused = [...fused.entries()].sort((a, b) => b[1] - a[1]);
+  if (sortedFused.length > 0) sortedFused[0][1] += 0.05;
+  if (sortedFused.length > 1) sortedFused[1][1] += 0.02;
+  if (sortedFused.length > 2) sortedFused[2][1] += 0.02;
+
+  // Normalize scores to 0-1
+  const maxScore = sortedFused.length > 0 ? sortedFused[0][1] : 1;
+
+  // Build result map from all sources
+  const allItems = new Map<number, MemoryItem & { score: number }>();
+  for (const r of ftsResults) allItems.set(r.id, r);
+  for (const r of vectorResults) allItems.set(r.id, r);
+  for (const [id, r] of expandedItems) allItems.set(id, r);
+
+  // Merge and sort
+  const results: (MemoryItem & { score: number })[] = [];
+  for (const [id, score] of sortedFused) {
+    const item = allItems.get(id);
+    if (item) {
+      results.push({ ...item, score: score / maxScore });
+    }
+  }
+
+  // Update access counts for top results
+  const now = Math.floor(Date.now() / 1000);
+  const updateStmt = db.prepare(
+    "UPDATE memory_items SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?"
+  );
+  for (const item of results.slice(0, limit)) {
+    if (item.score > 0.3) updateStmt.run(now, item.id);
+  }
+
+  return results.slice(0, limit).filter(r => r.score > 0.1);
 }
 
 function fallbackTextSearch(query: string, limit: number): (MemoryItem & { score: number })[] {

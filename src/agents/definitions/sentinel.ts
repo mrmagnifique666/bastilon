@@ -84,11 +84,11 @@ function buildSentinelPrompt(cycle: number): string | null {
       `[MODEL:ollama]\n` +
       `Tu es Kingston Sentinel — agent autonome.\n` +
       AGENT_RULES +
-      `Mission: Briefing matinal pour Nicolas.\n\n` +
+      `Mission: Briefing matinal — LOG INTERNE UNIQUEMENT.\n\n` +
       `1. Utilise trading.morning pour générer le briefing complet (portfolio, marché, top movers)\n` +
-      `2. Envoie le résultat via telegram.send — c'est le seul message du matin\n` +
-      `3. Log dans notes.add avec tag "sentinel-morning"\n` +
-      `4. Si le marché s'ouvre bientôt (${h >= 8 && h < 10 ? "OUI — ALERTE PRE-MARKET" : "NON"}), mentionne les catalyseurs importants.\n` +
+      `2. Log le briefing dans notes.add avec tag "sentinel-morning" — PAS de telegram.send\n` +
+      `3. telegram.send SEULEMENT si une position a bougé de +/-5% overnight ou urgence réelle\n` +
+      `4. Si le marché s'ouvre bientôt (${h >= 8 && h < 10 ? "OUI — ALERTE PRE-MARKET" : "NON"}), note les catalyseurs dans notes.add.\n` +
       `5. Rappel objectif: Atteindre $120K depuis ~$100K pour obtenir un vrai compte.`,
 
     1: // Moltbook check (with anti-injection)

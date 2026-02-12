@@ -404,16 +404,12 @@ async function processCommand(command) {
   addMsg('user', command);
 
   try {
-    // Send to Kingston via dashboard API — voice mode prompt
-    const voicePrompt =
-      '[VOICE MODE — Wake Word]\n' +
-      'IMPORTANT: Reponds EN TEXTE COURT (1-3 phrases). Ne fais PAS telegram.send — ta reponse sera lue a voix haute ici.\n' +
-      'Ne dis PAS "Je vais envoyer un message" — reponds directement.\n\n' +
-      command;
-    const resp = await fetch(API_BASE + '/api/chat/kingston', {
+    // Send to Kingston via voice endpoint — has full memory/context of the day
+    const authToken = new URLSearchParams(window.location.search).get('token') || 'kingston';
+    const resp = await fetch(API_BASE + '/api/chat/voice', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: voicePrompt }),
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+      body: JSON.stringify({ message: command }),
     });
 
     if (!resp.ok) {

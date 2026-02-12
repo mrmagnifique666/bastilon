@@ -179,9 +179,10 @@ const TIER1_PREFIXES = [
   "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
   "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
   "trading.", "mood.", "soul.", "cron.", "mind.", "kg.", "episodic.", "rules.",
-  "planner.", "revenue.", "client.", "selfimprove.", "content.",
+  "planner.", "revenue.", "client.", "selfimprove.", "content.", "dungeon.",
   "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
-  "cohere.", "mistral.", "together.", "replicate.", "workflow.",
+  "cohere.", "mistral.", "together.", "replicate.", "workflow.", "xp.",
+  "notify.", "goals.", "autofix.", "brand.", "invoice.", "price.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -207,11 +208,19 @@ const TIER2_KEYWORDS: Array<{ keywords: string[]; prefix: string }> = [
   { keywords: ["crypto", "bitcoin", "ethereum"], prefix: "crypto." },
   { keywords: ["stocks", "bourse", "action"], prefix: "stocks." },
   { keywords: ["trading", "trade", "picks", "day trading", "alpaca", "acheter", "vendre"], prefix: "trading." },
+  { keywords: ["dungeon", "d&d", "donjons", "dragons", "campagne", "personnage"], prefix: "dungeon." },
+  { keywords: ["ingest", "rag", "knowledge base", "ingérer", "recall"], prefix: "memory." },
   { keywords: ["security", "sécurité", "scan"], prefix: "security." },
   { keywords: ["audit"], prefix: "audit." },
-  { keywords: ["health", "santé"], prefix: "health." },
+  { keywords: ["health", "santé", "sommeil", "sleep", "wearable", "oura", "fitbit"], prefix: "health." },
   { keywords: ["db", "database", "sqlite"], prefix: "db." },
   { keywords: ["api."], prefix: "api." },
+  { keywords: ["travel", "voyage", "itinéraire", "itinerary", "packing", "bagages"], prefix: "travel." },
+  { keywords: ["tutor", "language", "langue", "quiz", "practice", "apprendre une langue"], prefix: "tutor." },
+  { keywords: ["job", "emploi", "freelance", "opportunité", "opportunity", "hiring"], prefix: "jobs." },
+  { keywords: ["youtube", "competitor", "concurren", "chaîne"], prefix: "youtube." },
+  { keywords: ["calendar", "agenda", "schedule", "planifier", "auto-schedule"], prefix: "calendar." },
+  { keywords: ["vault", "import", "chat export", "whatsapp export"], prefix: "memory." },
 ];
 
 /**
@@ -310,7 +319,8 @@ const OLLAMA_TIER1_PREFIXES = [
   "system.status", "code.", "memory.", "analytics.",
   "contacts.", "errors.", "ftp.", "git.", "time.", "cron.", "mind.",
   "kg.", "episodic.", "rules.",
-  "planner.", "selfimprove.", "client.", "revenue.", "content.",
+  "planner.", "selfimprove.", "client.", "revenue.", "content.", "nlp.",
+  "notify.", "goals.", "autofix.", "brand.",
 ];
 
 /**
@@ -500,6 +510,31 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/replicate.js");
   await import("./builtin/workflow.js");
   await import("./builtin/agent-profiles.js");
+  await import("./builtin/secrets.js");
+  await import("./builtin/marketing.js");
+  await import("./builtin/hooks.js");
+  await import("./builtin/mcp.js");
+  await import("./builtin/xp.js");
+  await import("./builtin/freeapis.js");
+  await import("./builtin/freeapis-tier2.js");
+  await import("./builtin/freeapis-tier3.js");
+  await import("./builtin/dungeon.js");
+  await import("./builtin/humanize.js");
+  await import("./builtin/knowledge-ingest.js");
+  await import("./builtin/briefing-council.js");
+  await import("./builtin/notify.js");
+  await import("./builtin/goals.js");
+  await import("./builtin/calendar-scheduler.js");
+  await import("./builtin/brand-voice.js");
+  await import("./builtin/autofix.js");
+  await import("./builtin/invoice.js");
+  await import("./builtin/youtube-tracker.js");
+  await import("./builtin/price-tracker.js");
+  await import("./builtin/knowledge-vault.js");
+  await import("./builtin/language-tutor.js");
+  await import("./builtin/job-scout.js");
+  await import("./builtin/travel.js");
+  await import("./builtin/health-wearable.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

@@ -8,7 +8,10 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
-import { getDb, clearSession, clearTurns } from "../storage/store.js";
+import {
+  getDb, clearSession, clearTurns, getTurns,
+  dungeonListSessions, dungeonGetSession, dungeonGetCharacters, dungeonGetTurns,
+} from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
 import { config, reloadEnv } from "../config/env.js";
 import { log, getRecentLogs, setLogBroadcast } from "../utils/log.js";
@@ -24,6 +27,7 @@ import {
   evaluateEffectiveness,
   getErrorTrends as getPatternTrends,
 } from "../memory/self-review.js";
+import { registerHook, removeHooksByNamespace } from "../hooks/hooks.js";
 
 const PORT = Number(process.env.DASHBOARD_PORT) || 3200;
 
@@ -221,11 +225,11 @@ function apiScheduler(): unknown {
   const db = getDb();
   const recent = db
     .prepare(
-      `SELECT id, event_key, fired_at, result FROM scheduler_runs ORDER BY fired_at DESC LIMIT 20`
+      `SELECT event_key, last_run_at FROM scheduler_runs ORDER BY last_run_at DESC LIMIT 20`
     )
     .all();
   const reminders = db
-    .prepare(`SELECT id, label, fire_at, chat_id FROM scheduler_reminders ORDER BY fire_at ASC`)
+    .prepare(`SELECT id, fire_at, message, fired FROM scheduler_reminders WHERE fired = 0 ORDER BY fire_at ASC`)
     .all();
   return { recent, reminders };
 }
@@ -329,11 +333,16 @@ function apiSessions(): unknown {
     const sessions = db
       .prepare(`SELECT chat_id, COUNT(*) as turns FROM turns GROUP BY chat_id ORDER BY chat_id`)
       .all() as { chat_id: number; turns: number }[];
+    const agentNames: Record<number, string> = {
+      100: "Scout", 101: "Analyst", 102: "Learner", 103: "Executor",
+      104: "Trading-Monitor", 105: "Sentinel", 106: "Mind",
+    };
     return sessions.map(s => ({
       chatId: s.chat_id,
       turns: s.turns,
       label: s.chat_id === 1 ? "Scheduler" : s.chat_id === 2 ? "Dashboard Kingston" : s.chat_id === 3 ? "Dashboard Emile" :
-        s.chat_id >= 100 && s.chat_id <= 103 ? `Agent ${s.chat_id - 100}` : `User ${s.chat_id}`,
+        agentNames[s.chat_id] ? `Agent: ${agentNames[s.chat_id]}` :
+        s.chat_id >= 200 && s.chat_id <= 249 ? `Cron ${s.chat_id}` : `User ${s.chat_id}`,
     }));
   } catch {
     return [];
@@ -393,7 +402,11 @@ async function apiTrading(): Promise<unknown> {
       fetch(`${ALPACA_PAPER}/v2/clock`, { headers }),
     ]);
 
-    const account = acctRes.ok ? await acctRes.json() : null;
+    if (!acctRes.ok) {
+      const errBody = await acctRes.text().catch(() => "");
+      return { error: `Alpaca API error ${acctRes.status}: ${errBody.slice(0, 200)}` };
+    }
+    const account = await acctRes.json();
     const positions = posRes.ok ? await posRes.json() : [];
     const orders = ordRes.ok ? await ordRes.json() : [];
     const clock = clockRes.ok ? await clockRes.json() : null;
@@ -510,6 +523,138 @@ function buildUltimatePrompt(payload: {
   ].filter(Boolean).join("\n");
 }
 
+// ── Engagement analytics (Phase 2B) ──
+
+async function apiAnalyticsEngagement(): Promise<unknown> {
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const day24h = now - 86400;
+  const day7d = now - 7 * 86400;
+
+  // Trading P&L from Alpaca
+  let trading: unknown = { error: "not configured" };
+  try {
+    const headers = alpacaHeaders();
+    if (headers["APCA-API-KEY-ID"]) {
+      const [acctRes, posRes] = await Promise.all([
+        fetch(`${ALPACA_PAPER}/v2/account`, { headers }),
+        fetch(`${ALPACA_PAPER}/v2/positions`, { headers }),
+      ]);
+      if (acctRes.ok) {
+        const account = await acctRes.json() as Record<string, string>;
+        const positions = posRes.ok ? await posRes.json() as Array<Record<string, string>> : [];
+        const totalPnL = positions.reduce((sum: number, p: Record<string, string>) =>
+          sum + Number(p.unrealized_pl || 0), 0);
+        trading = {
+          equity: Number(account.equity || 0),
+          cash: Number(account.cash || 0),
+          buyingPower: Number(account.buying_power || 0),
+          totalPnL: Math.round(totalPnL * 100) / 100,
+          totalPnLPct: positions.length > 0
+            ? Math.round(positions.reduce((sum: number, p: Record<string, string>) =>
+                sum + Number(p.unrealized_plpc || 0), 0) / positions.length * 10000) / 100
+            : 0,
+          positionCount: positions.length,
+          positions: positions.map((p: Record<string, string>) => ({
+            symbol: p.symbol,
+            qty: Number(p.qty),
+            pnl: Math.round(Number(p.unrealized_pl || 0) * 100) / 100,
+            pnlPct: Math.round(Number(p.unrealized_plpc || 0) * 10000) / 100,
+            currentPrice: Number(p.current_price || 0),
+          })),
+        };
+      }
+    }
+  } catch (err) {
+    trading = { error: (err as Error).message };
+  }
+
+  // Content metrics (Moltbook, social)
+  let content: unknown = {};
+  try {
+    const total = db.prepare(`SELECT COUNT(*) as count FROM content_items`).get() as { count: number };
+    const published = db.prepare(`SELECT COUNT(*) as count FROM content_items WHERE status = 'published'`).get() as { count: number };
+    const drafts = db.prepare(`SELECT COUNT(*) as count FROM content_items WHERE status = 'draft'`).get() as { count: number };
+    const recent7d = db.prepare(`SELECT COUNT(*) as count FROM content_items WHERE created_at > ?`).get(day7d) as { count: number };
+    const byPlatform = db.prepare(
+      `SELECT platform, COUNT(*) as count FROM content_items GROUP BY platform ORDER BY count DESC`
+    ).all() as Array<{ platform: string; count: number }>;
+    content = { total: total.count, published: published.count, drafts: drafts.count, last7d: recent7d.count, byPlatform };
+  } catch { content = { total: 0 }; }
+
+  // Lead pipeline (clients)
+  let pipeline: unknown = {};
+  try {
+    const byStatus = db.prepare(
+      `SELECT status, COUNT(*) as count FROM clients GROUP BY status ORDER BY count DESC`
+    ).all() as Array<{ status: string; count: number }>;
+    const totalClients = db.prepare(`SELECT COUNT(*) as count FROM clients`).get() as { count: number };
+    const recentContacts = db.prepare(
+      `SELECT name, status, last_contact_at FROM clients WHERE last_contact_at > ? ORDER BY last_contact_at DESC LIMIT 5`
+    ).all(day7d);
+    pipeline = { total: totalClients.count, byStatus, recentContacts };
+  } catch { pipeline = { total: 0 }; }
+
+  // Revenue
+  let revenue: unknown = {};
+  try {
+    const totalIncome = db.prepare(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM revenue WHERE type = 'income'`
+    ).get() as { total: number };
+    const totalExpenses = db.prepare(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM revenue WHERE type = 'expense'`
+    ).get() as { total: number };
+    const recent = db.prepare(
+      `SELECT source, amount, type, currency, description, created_at FROM revenue ORDER BY created_at DESC LIMIT 10`
+    ).all();
+    revenue = { totalIncome: totalIncome.total, totalExpenses: totalExpenses.total, net: totalIncome.total - totalExpenses.total, recent };
+  } catch { revenue = { totalIncome: 0, totalExpenses: 0, net: 0 }; }
+
+  // Token usage (last 7 days)
+  let tokenUsage: unknown = {};
+  try {
+    const usage = db.prepare(
+      `SELECT provider, SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens,
+              SUM(requests) as requests, SUM(estimated_cost_usd) as cost
+       FROM token_usage WHERE date >= date('now', '-7 days') GROUP BY provider`
+    ).all();
+    tokenUsage = usage;
+  } catch { tokenUsage = []; }
+
+  // Agent performance (last 24h)
+  let agentPerformance: unknown = {};
+  try {
+    agentPerformance = db.prepare(
+      `SELECT agent_id, COUNT(*) as runs,
+              SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END) as successes,
+              SUM(CASE WHEN outcome='error' THEN 1 ELSE 0 END) as errors,
+              ROUND(AVG(duration_ms)) as avg_duration_ms
+       FROM agent_runs WHERE started_at > ? GROUP BY agent_id`
+    ).all(day24h);
+  } catch { agentPerformance = []; }
+
+  // Autonomous decisions (last 24h)
+  let decisions: unknown = {};
+  try {
+    const count = db.prepare(`SELECT COUNT(*) as count FROM autonomous_decisions WHERE created_at > ?`).get(day24h) as { count: number };
+    const byCategory = db.prepare(
+      `SELECT category, COUNT(*) as count FROM autonomous_decisions WHERE created_at > ? GROUP BY category`
+    ).all(day24h);
+    decisions = { last24h: count.count, byCategory };
+  } catch { decisions = { last24h: 0 }; }
+
+  return {
+    timestamp: new Date().toISOString(),
+    trading,
+    content,
+    pipeline,
+    revenue,
+    tokenUsage,
+    agentPerformance,
+    decisions,
+  };
+}
+
 // ── Request handler ─────────────────────────────────────────
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url || "/", `http://localhost:${PORT}`);
@@ -520,7 +665,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   if (method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": getCorsOrigin(),
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token, Authorization",
     });
     res.end();
@@ -655,6 +800,179 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!checkAuth(req, res)) return;
       return json(res, await apiTrading());
     }
+    if (pathname === "/api/analytics/engagement" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      return json(res, await apiAnalyticsEngagement());
+    }
+    // ── Dungeon Master API ──
+    if (pathname === "/api/dungeon/sessions" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const sessions = dungeonListSessions();
+      return json(res, { sessions });
+    }
+    if (pathname.startsWith("/api/dungeon/session/") && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const id = Number(pathname.split("/").pop());
+      const session = dungeonGetSession(id);
+      if (!session) return sendJson(res, 404, { error: "Session not found" });
+      const characters = dungeonGetCharacters(id);
+      const turns = dungeonGetTurns(id, 50);
+      return json(res, { session, characters, turns });
+    }
+    if (pathname === "/api/dungeon/create" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      try {
+        const { getSkill } = await import("../skills/loader.js");
+        const skill = getSkill("dungeon.start");
+        if (!skill) return sendJson(res, 500, { error: "dungeon.start skill not loaded" });
+        const result = await skill.execute({
+          name: body.name || "Aventure",
+          setting: body.setting || "Heroic Fantasy",
+          characters: body.characters || "Aventurier/Humain/Guerrier",
+        });
+        // Find the created session
+        const sessions = dungeonListSessions();
+        const latest = sessions[0];
+        return json(res, { ok: true, result, session: latest });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (pathname.startsWith("/api/dungeon/session/") && method === "DELETE") {
+      if (!checkAuth(req, res)) return;
+      const id = Number(pathname.split("/").pop());
+      try {
+        const { dungeonDeleteSession: delSession } = await import("../storage/store.js");
+        delSession(id);
+        return json(res, { ok: true });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (pathname === "/api/dungeon/play" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      const sessionId = Number(body.session_id);
+      const action = String(body.action || "").trim();
+      if (!sessionId || !action) return sendJson(res, 400, { error: "session_id and action required" });
+      try {
+        const { getSkill } = await import("../skills/loader.js");
+        const skill = getSkill("dungeon.play");
+        if (!skill) return sendJson(res, 500, { error: "dungeon.play skill not loaded" });
+        const result = await skill.execute({ session_id: sessionId, action });
+        const session = dungeonGetSession(sessionId);
+        const characters = dungeonGetCharacters(sessionId);
+        const turns = dungeonGetTurns(sessionId, 1);
+        return json(res, { narrative: result, session, characters, lastTurn: turns[turns.length - 1] || null });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (pathname === "/api/dungeon/roll" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      try {
+        const { getSkill } = await import("../skills/loader.js");
+        const skill = getSkill("dungeon.roll");
+        if (!skill) return sendJson(res, 500, { error: "dungeon.roll skill not loaded" });
+        const result = await skill.execute({ dice: body.dice, purpose: body.purpose });
+        return json(res, { result });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (pathname === "/api/dungeon/scene" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      try {
+        const { getSkill } = await import("../skills/loader.js");
+        const skill = getSkill("dungeon.scene");
+        if (!skill) return sendJson(res, 500, { error: "dungeon.scene skill not loaded" });
+        const result = await skill.execute({ session_id: body.session_id, description: body.description });
+        return json(res, { result });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    // ── DM Narrate (LLM proxy for voice DM) ──────────────────────
+    if (pathname === "/api/dm/narrate" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      log.info("[dm] narrate request received");
+      try {
+        const { GoogleGenerativeAI } = await import("@google/generative-ai");
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) return sendJson(res, 500, { error: "GEMINI_API_KEY not configured" });
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({
+          model: "gemini-2.0-flash",
+          generationConfig: { temperature: 0.9, maxOutputTokens: 4096 },
+        });
+        const msgs = (body.messages || []) as Array<{ role: string; content: string }>;
+        let history = msgs.slice(0, -1).map((m) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: m.content }],
+        }));
+        // Gemini requires history to start with "user" role
+        while (history.length > 0 && history[0].role !== "user") {
+          history.shift();
+        }
+        const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].content : "";
+        log.info(`[dm] sending to Gemini: ${msgs.length} msgs, system=${(body.system as string || "").slice(0, 60)}...`);
+        const sysText = (body.system as string) || "";
+        const chat = model.startChat({
+          systemInstruction: sysText ? { role: "user", parts: [{ text: sysText }] } : undefined,
+          history: history.length > 0 ? history : undefined,
+        });
+        // 30s timeout
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Gemini timeout (30s)")), 30000)
+        );
+        const result = await Promise.race([chat.sendMessage(lastMsg), timeoutPromise]);
+        const text = result.response.text();
+        log.info(`[dm] Gemini response: ${text.length} chars`);
+        return json(res, { response: text });
+      } catch (err) {
+        log.error(`[dm] narrate error: ${err instanceof Error ? err.message : String(err)}`);
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // ── DM Campaigns CRUD (individual files) ────────────────────
+    const DM_DIR = path.resolve(process.cwd(), "relay", "dm-campaigns");
+
+    if (pathname === "/api/dm/campaigns" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      try {
+        if (!fs.existsSync(DM_DIR)) return json(res, { campaigns: [] });
+        const files = fs.readdirSync(DM_DIR).filter((f: string) => f.endsWith(".json"));
+        const campaigns = files.map((f: string) => {
+          try { return JSON.parse(fs.readFileSync(path.join(DM_DIR, f), "utf8")); }
+          catch { return null; }
+        }).filter(Boolean);
+        return json(res, { campaigns });
+      } catch { return json(res, { campaigns: [] }); }
+    }
+    if (pathname === "/api/dm/campaigns" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      if (!body.id) return sendJson(res, 400, { error: "id required" });
+      if (!fs.existsSync(DM_DIR)) fs.mkdirSync(DM_DIR, { recursive: true });
+      const filePath = path.join(DM_DIR, `${body.id}.json`);
+      if (!filePath.startsWith(DM_DIR)) return sendJson(res, 403, { error: "Invalid id" });
+      fs.writeFileSync(filePath, JSON.stringify(body, null, 2));
+      return json(res, { ok: true, file: `dm-campaigns/${body.id}.json` });
+    }
+    if (pathname.startsWith("/api/dm/campaign/") && method === "DELETE") {
+      if (!checkAuth(req, res)) return;
+      const id = pathname.split("/").pop();
+      const filePath = path.join(DM_DIR, `${id}.json`);
+      if (!filePath.startsWith(DM_DIR)) return sendJson(res, 403, { error: "Invalid id" });
+      try { fs.unlinkSync(filePath); } catch {}
+      return json(res, { ok: true });
+    }
+
     if (pathname === "/api/chat/reset" && method === "POST") {
       if (!checkAuth(req, res)) return;
       // Reset dashboard sessions for fresh starts
@@ -664,6 +982,121 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       clearTurns(EMILE_DASHBOARD_ID);
       log.info("[dashboard] Reset Kingston + Émile sessions");
       return json(res, { ok: true, message: "Sessions reset" });
+    }
+    // Fast voice endpoint — uses Groq/Ollama for conversational speed (~1-3s vs 10-30s for Claude CLI)
+    if (pathname === "/api/chat/voice" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      if (!checkRateLimit(req, res)) return;
+      const body = await parseBody(req);
+      const message = String(body.message || "").trim();
+      if (!message) return sendJson(res, 400, { ok: false, error: "message is required" });
+
+      // Use Nicolas's REAL chatId so voice has full memory + conversation context
+      const userId = getDashboardUserId();
+      const voiceChatId = config.adminChatId || userId;
+      try {
+        const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+          Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+
+        // Voice needs speed — try Ollama first (fast, local), fallback to handleMessage
+        let response = "";
+        const voicePrefix =
+          "[VOICE MODE] Reponds en francais, concis (2-3 phrases max). " +
+          "PAS de markdown, PAS de headers, PAS de **bold**, PAS de listes. " +
+          "Texte naturel parlé seulement. Tu as accès à toute la mémoire de la journée.\n\n";
+
+        try {
+          // Ollama-chat with tools — fast (~2-5s) + has tool access for memory/notes
+          const { runOllamaChat } = await import("../llm/ollamaClient.js");
+          // Build a quick memory context to inject
+          const { getSummary, getDb } = await import("../storage/store.js");
+          let memoryHint = "";
+          try {
+            const summary = getSummary(voiceChatId);
+            if (summary?.summary) memoryHint += "Résumé conversation récente: " + summary.summary + "\n";
+            const db = getDb();
+            const recentNotes = db.prepare(
+              "SELECT content FROM notes ORDER BY id DESC LIMIT 5"
+            ).all() as { content: string }[];
+            if (recentNotes.length > 0) {
+              memoryHint += "Notes récentes: " + recentNotes.map(n => n.content.slice(0, 100)).join(" | ") + "\n";
+            }
+          } catch { /* no memory context available */ }
+
+          response = await withTimeout(
+            runOllamaChat({
+              chatId: voiceChatId,
+              userMessage: voicePrefix + memoryHint + message,
+              isAdmin: true,
+              userId,
+            }),
+            30_000
+          );
+          log.debug(`[voice] Ollama-chat responded: ${response.slice(0, 80)}...`);
+        } catch (ollamaErr) {
+          log.debug(`[voice] Ollama-chat failed: ${ollamaErr instanceof Error ? ollamaErr.message : ollamaErr}, falling back to handleMessage...`);
+          // Fallback: handleMessage with model override to avoid Opus (too slow for voice)
+          response = await withTimeout(
+            handleMessage(voiceChatId, "[MODEL:sonnet] " + voicePrefix + message, userId, "user"),
+            60_000
+          );
+        }
+
+        return json(res, { ok: true, response: response || "Desole, je n'ai pas pu repondre." });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error(`[voice] Error: ${errMsg}`);
+        return sendJson(res, 500, { ok: false, error: errMsg });
+      }
+    }
+    if (pathname === "/api/chat/kingston/stream" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      if (!checkRateLimit(req, res)) return;
+      const body = await parseBody(req);
+      const message = String(body.message || "").trim();
+      if (!message) return sendJson(res, 400, { ok: false, error: "message is required" });
+
+      // SSE headers
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": getCorsOrigin(),
+      });
+
+      const requestId = `sse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const namespace = `sse-${requestId}`;
+
+      // Register temporary hooks for tool progress
+      registerHook("tool:before", async (_evt, ctx) => {
+        if (ctx.chatId !== KINGSTON_DASHBOARD_ID) return;
+        const toolName = String(ctx.tool || ctx.name || "");
+        const args = ctx.args as Record<string, unknown> | undefined;
+        const detail = String(args?.path || args?.query || args?.command || "").slice(0, 80);
+        try {
+          res.write(`event: progress\ndata: ${JSON.stringify({ tool: toolName, status: "running", detail })}\n\n`);
+        } catch {}
+      }, { namespace, priority: "low", description: "SSE progress for dashboard" });
+
+      registerHook("tool:after", async (_evt, ctx) => {
+        if (ctx.chatId !== KINGSTON_DASHBOARD_ID) return;
+        const toolName = String(ctx.tool || ctx.name || "");
+        try {
+          res.write(`event: progress\ndata: ${JSON.stringify({ tool: toolName, status: "done" })}\n\n`);
+        } catch {}
+      }, { namespace, priority: "low", description: "SSE progress for dashboard" });
+
+      try {
+        const response = await apiChatKingston(message);
+        res.write(`event: done\ndata: ${JSON.stringify({ response })}\n\n`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        res.write(`event: error\ndata: ${JSON.stringify({ error: errMsg })}\n\n`);
+      } finally {
+        removeHooksByNamespace(namespace);
+        res.end();
+      }
+      return;
     }
     if (pathname === "/api/chat/kingston" && method === "POST") {
       if (!checkAuth(req, res)) return;
@@ -828,6 +1261,22 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (handleMcpRequest(req, res)) return;
     }
 
+    if (pathname === "/api/gallery" && method === "GET") {
+      const uploadsDir = path.resolve(config.uploadsDir);
+      try {
+        const files = fs.readdirSync(uploadsDir)
+          .filter(f => /\.(png|jpg|jpeg|gif|webp|svg|bmp)$/i.test(f))
+          .map(f => {
+            const stat = fs.statSync(path.join(uploadsDir, f));
+            return { name: f, url: `/uploads/${f}`, size: stat.size, mtime: stat.mtimeMs };
+          })
+          .sort((a, b) => b.mtime - a.mtime);
+        return sendJson(res, 200, { ok: true, files });
+      } catch {
+        return sendJson(res, 200, { ok: true, files: [] });
+      }
+    }
+
     if (pathname.startsWith("/api/") || pathname.startsWith("/v1/")) {
       return sendJson(res, 404, { ok: false, error: "Not found" });
     }
@@ -925,6 +1374,7 @@ export function startDashboard(): void {
             onTurnComplete() { trySend({ type: "turn_complete" }); },
             onToolCall(name, args) { trySend({ type: "tool", name, status: "calling", args }); },
             onToolResult(name, result) { trySend({ type: "tool", name, status: "done", result: result.slice(0, 500) }); },
+            onImageGenerated(url, caption) { trySend({ type: "image", url, caption }); },
             onReady() { trySend({ type: "ready" }); },
             onError(message) { trySend({ type: "error", message }); },
             onClose() {

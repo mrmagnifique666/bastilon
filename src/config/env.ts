@@ -195,6 +195,26 @@ function buildConfig() {
 
 export const config: ReturnType<typeof buildConfig> = buildConfig();
 
+/** Validate critical env vars exist — logs warnings (doesn't crash) for optional but important ones */
+export function validateEnv(): void {
+  const critical = ["TELEGRAM_BOT_TOKEN"];
+  const important = [
+    { key: "TELEGRAM_ALLOWED_USERS", desc: "No allowed users — bot won't respond to anyone" },
+    { key: "TELEGRAM_ADMIN_CHAT_ID", desc: "No admin chat ID — alerts won't be delivered" },
+    { key: "CLAUDE_ALLOWED_TOOLS", desc: "No tool allowlist — Kingston has no skills" },
+  ];
+  for (const key of critical) {
+    if (!process.env[key]) {
+      throw new Error(`[config] CRITICAL: Missing required env var: ${key} — bot cannot start`);
+    }
+  }
+  for (const { key, desc } of important) {
+    if (!process.env[key]) {
+      log.warn(`[config] WARNING: ${key} not set — ${desc}`);
+    }
+  }
+}
+
 export function reloadEnv(): void {
   dotenv.config({ override: true });
   try {

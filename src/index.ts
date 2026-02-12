@@ -6,7 +6,7 @@
  *
  * Connects Telegram chats to a local Claude Code CLI instance.
  */
-import { config, watchEnv } from "./config/env.js";
+import { config, watchEnv, validateEnv } from "./config/env.js";
 import { setLogLevel, addRedactPattern, log } from "./utils/log.js";
 import { loadBuiltinSkills } from "./skills/loader.js";
 import { migrateNotesToMemories } from "./memory/semantic.js";
@@ -149,6 +149,9 @@ async function main() {
     log.error("[FATAL] Unhandled promise rejection:", reason);
   });
 
+  // Validate env vars early
+  validateEnv();
+
   // Process any pending code requests from Kingston
   await processCodeRequests();
 
@@ -157,6 +160,11 @@ async function main() {
 
   // Load hooks (after skills so they can use the skill registry)
   await import("./hooks/builtin/session-memory.js");
+
+  // Load hook plugins (auto-discover from src/hooks/plugins/)
+  const { loadPlugins } = await import("./hooks/hooks.js");
+  const pluginsLoaded = await loadPlugins();
+  if (pluginsLoaded > 0) log.info(`[hooks] Loaded ${pluginsLoaded} plugin(s)`);
 
   // Ollama: auto-start + health check
   if (config.ollamaEnabled) {
@@ -192,8 +200,12 @@ async function main() {
   // Watch .env for hot-reload
   watchEnv();
 
-  // Cleanup stale database entries on startup
+  // Cleanup stale database entries on startup + daily at 4am
   cleanupDatabase();
+  setInterval(() => {
+    const hour = new Date().getHours();
+    if (hour === 4) cleanupDatabase();
+  }, 3600_000); // Check every hour, run at 4am
 
   // Start local dashboard UI first so we always have a control plane.
   try {

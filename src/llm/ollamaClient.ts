@@ -5,7 +5,7 @@
  *   runOllama()     — text-only (heartbeats, greetings) via /api/generate
  *   runOllamaChat() — full tool chain (agents, fallback) via /api/chat
  *
- * Uses the Ollama REST API (localhost:11434) with qwen2.5:14b or similar.
+ * Uses the Ollama REST API (localhost:11434) with qwen3:14b or similar.
  * Fallback to Haiku on failure is handled by the router.
  */
 import { config } from "../config/env.js";
@@ -62,6 +62,7 @@ export async function runOllama(chatId: number, message: string): Promise<Ollama
         prompt: message,
         system: SYSTEM_PROMPT,
         stream: false,
+        think: false,
         options: { temperature: 0.7, num_predict: 500 },
       }),
       signal: controller.signal,
@@ -228,7 +229,7 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
       }
 
       // Hard block: agents/cron (internal chatIds) cannot use browser.*
-      if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
+      if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
         log.warn(`[ollama-chat] Internal session chatId=${chatId} tried to call ${toolName} — blocked`);
         messages.push({
           role: "tool",
@@ -250,7 +251,7 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
 
       // Agent/cron chatId fix: internal chatIds (100-106 agents, 200-249 cron) use fake IDs for session isolation.
       // Rewrite telegram.* targets to the real admin chatId so messages actually deliver.
-      if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+      if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
         safeArgs.chatId = String(config.adminChatId);
         log.debug(`[ollama-chat] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
       }
@@ -333,6 +334,7 @@ async function callOllamaChatAPI(
       model: config.ollamaModel,
       messages,
       stream: false,
+      think: false,
       options: {
         temperature: 0.7,
         num_predict: config.ollamaNumPredict || 2048,

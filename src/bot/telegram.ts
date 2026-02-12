@@ -18,7 +18,7 @@ import { enqueue } from "./chatLock.js";
 import { sendFormatted } from "./formatting.js";
 import { createDraftController } from "./draftMessage.js";
 import { compactContext } from "../orchestrator/compaction.js";
-import { emitHook } from "../hooks/hooks.js";
+import { emitHook, emitHookAsync } from "../hooks/hooks.js";
 
 const startTime = Date.now();
 
@@ -309,6 +309,7 @@ export function createBot(): Bot {
     }
 
     log.info(`Message from user ${userId} in chat ${chatId}: ${text.slice(0, 80)}...`);
+    emitHookAsync("message:received", { chatId, userId, messageType: "text" });
 
     // Debounce: buffer rapid messages
     const combined = await debounce(chatId, text);
@@ -420,10 +421,12 @@ export function createBot(): Bot {
           await sendLong(ctx, response);
         }
         await reaction.done();
+        emitHookAsync("message:sent", { chatId, userId });
       } catch (err) {
         log.error("Error handling message:", err);
         logError(err instanceof Error ? err : String(err), "telegram:text_handler");
         await reaction.error();
+        emitHookAsync("error:unhandled", { chatId, component: "telegram", error: String(err) });
         try {
           await ctx.reply("Désolé, une erreur s'est produite. Réessaie.");
         } catch { /* if even this fails, we can't do more */ }

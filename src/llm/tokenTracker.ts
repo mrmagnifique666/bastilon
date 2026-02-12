@@ -26,13 +26,14 @@ interface TokenUsageRow {
   estimated_cost_usd: number;
 }
 
-// Cost per 1K tokens (input) for each provider — $0 for free tiers
-const COST_PER_1K: Record<Provider, number> = {
-  ollama: 0,
-  groq: 0, // free tier
-  gemini: 0, // free tier
-  claude: 0, // Max plan
-  haiku: 0.00025, // if ever used via API
+// Pricing per 1M tokens (input/output) — tracks theoretical cost even for free tiers
+interface ModelPricing { inputPer1M: number; outputPer1M: number; }
+export const PRICING_TABLE: Record<Provider, ModelPricing> = {
+  claude:  { inputPer1M: 15.00, outputPer1M: 75.00 },  // Opus (Max plan = $0 réel)
+  haiku:   { inputPer1M: 0.80,  outputPer1M: 4.00 },
+  gemini:  { inputPer1M: 0.30,  outputPer1M: 1.20 },   // Flash free tier
+  ollama:  { inputPer1M: 0,     outputPer1M: 0 },
+  groq:    { inputPer1M: 0,     outputPer1M: 0 },
 };
 
 let tableReady = false;
@@ -82,7 +83,8 @@ export function logTokens(
   try {
     const db = getDb();
     const date = getDateStr();
-    const cost = ((inputTokens + outputTokens) / 1000) * COST_PER_1K[provider];
+    const pricing = PRICING_TABLE[provider];
+    const cost = (inputTokens / 1_000_000) * pricing.inputPer1M + (outputTokens / 1_000_000) * pricing.outputPer1M;
 
     db.prepare(
       `INSERT INTO token_usage (provider, date, input_tokens, output_tokens, requests, estimated_cost_usd)
@@ -171,6 +173,33 @@ export function estimateContextTokens(messages: Array<{ content: string }>): num
     totalChars += (m.content || "").length;
   }
   return estimateTokens(totalChars);
+}
+
+/**
+ * Get daily usage trend — group by date with totals per provider.
+ */
+export function getUsageTrend(days = 7): Array<{
+  date: string;
+  provider: string;
+  input_tokens: number;
+  output_tokens: number;
+  requests: number;
+  cost: number;
+}> {
+  ensureTable();
+  try {
+    const db = getDb();
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceStr = since.toISOString().split("T")[0];
+
+    return db.prepare(
+      `SELECT date, provider, input_tokens, output_tokens, requests, estimated_cost_usd as cost
+       FROM token_usage WHERE date >= ? ORDER BY date ASC, provider`
+    ).all(sinceStr) as any[];
+  } catch {
+    return [];
+  }
 }
 
 // Rate limiting: track last call timestamp per provider

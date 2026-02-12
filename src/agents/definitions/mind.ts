@@ -185,9 +185,9 @@ function buildMindPrompt(cycle: number): string | null {
       contextBlock +
       `CYCLE: COMMUNICATION\n\n` +
       `Mission: Communique proactivement — contenu, social, rapport à Nicolas.\n\n` +
-      `1. Si tu as des résultats importants à rapporter, envoie un résumé à Nicolas via telegram.send\n` +
+      `1. Log les résultats importants dans notes.add — PAS de telegram.send sauf si Nicolas DOIT AGIR\n` +
       `   — Format: bref, actionnable, avec les chiffres clés\n` +
-      `   — NE DÉRANGE PAS pour des trucs mineurs\n` +
+      `   — telegram.send UNIQUEMENT: client qui répond, opportunité urgente, erreur critique\n` +
       `2. Rédige du contenu thought leadership avec content.draft\n` +
       `   — Sujets: AI agents, trading algorithmique, entrepreneuriat tech\n` +
       `3. Si du contenu est prêt, publie sur Moltbook avec moltbook.post\n` +

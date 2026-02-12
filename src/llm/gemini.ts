@@ -450,7 +450,7 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
         }
 
         // Hard block: agents/cron (internal chatIds) cannot use browser.*
-        if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
+        if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
           log.warn(`[gemini] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
           contents.push({
             role: "user",
@@ -471,7 +471,7 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
         const safeArgs = normalizeArgs(toolName, rawArgs || {}, chatId, skill);
 
         // Agent/cron chatId fix: rewrite internal chatIds to real admin chatId for telegram.*
-        if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+        if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
           safeArgs.chatId = String(config.adminChatId);
           log.debug(`[gemini] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
         }
@@ -488,7 +488,7 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
         }
 
         // Block placeholder hallucinations in outbound messages (agents and cron)
-        if (chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) {
+        if (chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) {
           const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
           if (outboundTools.includes(toolName)) {
             const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");

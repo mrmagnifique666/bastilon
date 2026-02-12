@@ -45,11 +45,8 @@ export function selectModel(
     return "sonnet";
   }
 
-  // Agent tasks — Ollama-first when enabled (local, free, 24/7 with tools)
+  // Agent tasks — ALL go to Ollama when enabled (local, free, 24/7 with tools)
   if (message.startsWith("[AGENT:")) {
-    // Complex agent tasks still go to Sonnet for best quality
-    if (/weekly.*deep.*dive|alpha.*report|proactive.*fix|effectiveness.*review/i.test(message)) return "sonnet";
-    // All other agent tasks → Ollama with tool chain (when enabled)
     if (config.ollamaEnabled) {
       log.debug(`[model] Agent task → ollama (Ollama-first architecture)`);
       return "ollama";
@@ -58,10 +55,8 @@ export function selectModel(
     return "haiku";
   }
 
-  // Scheduler events — conserve Claude quota, use free tiers
+  // Scheduler events — ALL go to Ollama (free, local) when enabled
   if (context === "scheduler" || message.startsWith("[SCHEDULER]") || message.startsWith("[HEARTBEAT")) {
-    if (/digest/i.test(message)) return "haiku";
-    // All scheduler tasks → ollama (free, local) or gemini fallback
     if (config.ollamaEnabled) {
       log.debug(`[model] Scheduler task → ollama`);
       return "ollama";

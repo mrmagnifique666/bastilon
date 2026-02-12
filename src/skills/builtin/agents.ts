@@ -217,3 +217,63 @@ registerSkill({
       .join("\n\n");
   },
 });
+
+// --- Dynamic Subordinate Spawning ---
+
+registerSkill({
+  name: "agents.spawn",
+  description: "Spawn a temporary subordinate agent for a subtask. Runs the task through Ollama with a custom system prompt, returns result, then disposes. Used for breaking down complex tasks.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      task: { type: "string", description: "The task/question for the subordinate to handle" },
+      role: { type: "string", description: "Role/persona for the subordinate (e.g., 'market researcher', 'copywriter')" },
+      context: { type: "string", description: "Additional context to include in the system prompt (optional)" },
+    },
+    required: ["task"],
+  },
+  async execute(args): Promise<string> {
+    const task = args.task as string;
+    const role = (args.role as string) || "assistant";
+    const context = (args.context as string) || "";
+
+    // Use a high chatId range (300-399) for subordinate sessions
+    const subChatId = 300 + Math.floor(Math.random() * 100);
+
+    try {
+      // Try to use Ollama chat with the task
+      const { runOllamaChat } = await import("../../llm/ollamaClient.js");
+
+      // Build the prompt with role and context
+      const prompt = context
+        ? `[SUBORDINATE AGENT — Role: ${role}]\nContext: ${context}\n\nTask: ${task}`
+        : `[SUBORDINATE AGENT — Role: ${role}]\nTask: ${task}`;
+
+      const result = await runOllamaChat({
+        chatId: subChatId,
+        userMessage: prompt,
+        isAdmin: true,
+        userId: 0,
+      });
+
+      // Clean up turns for this temporary session
+      const { clearTurns } = await import("../../storage/store.js");
+      clearTurns(subChatId);
+
+      return `[Subordinate: ${role}]\n${result}`;
+    } catch (err) {
+      // Fallback: try Groq
+      try {
+        const { runGroq } = await import("../../llm/groqClient.js");
+        const result = await runGroq(
+          `You are a ${role}. ${context ? "Context: " + context + "\n" : ""}Task: ${task}`,
+          "llama-3.3-70b-versatile"
+        );
+        return `[Subordinate: ${role} via Groq]\n${result}`;
+      } catch (err2) {
+        return `Subordinate spawn failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+  },
+});

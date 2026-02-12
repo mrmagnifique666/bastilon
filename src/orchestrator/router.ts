@@ -23,11 +23,11 @@ import { emitHook } from "../hooks/hooks.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
 /**
- * Check if a chatId belongs to an automated/internal session (agents or cron jobs).
- * Agent chatIds: 100-106, Cron chatIds: 200-249 (config.cronChatIdBase + 0..49)
+ * Check if a chatId belongs to an automated/internal session (scheduler, agents, or cron jobs).
+ * Scheduler chatId: 1, Agent chatIds: 100-106, Cron chatIds: 200-249
  */
 export function isInternalChatId(chatId: number): boolean {
-  return (chatId >= 100 && chatId <= 106) || (chatId >= 200 && chatId <= 249);
+  return chatId === 1 || (chatId >= 100 && chatId <= 106) || (chatId >= 200 && chatId <= 249);
 }
 
 const GROQ_SYSTEM_PROMPT = [
@@ -67,7 +67,7 @@ function backgroundExtract(chatId: number, userMessage: string, assistantRespons
   if (chatId <= 1000) return;
   extractAndStoreMemories(chatId, `User: ${userMessage}\nAssistant: ${assistantResponse}`)
     .then(count => { if (count > 0) log.debug(`[memory] Extracted ${count} new memories`); })
-    .catch(err => log.debug(`[memory] Extraction failed: ${err instanceof Error ? err.message : String(err)}`));
+    .catch(err => log.warn(`[memory] Extraction failed (possible quota issue): ${err instanceof Error ? err.message : String(err)}`));
 }
 
 export let progressCallback: ((chatId: number, message: string) => Promise<void>) | null = null;

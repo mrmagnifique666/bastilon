@@ -98,6 +98,27 @@ export function getDb(): Database.Database {
       CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
       CREATE INDEX IF NOT EXISTS idx_memory_salience ON memory_items(salience DESC);
 
+      -- FTS5 virtual table for BM25 full-text search on memories
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
+        content,
+        category,
+        content='memory_items',
+        content_rowid='id',
+        tokenize='unicode61'
+      );
+
+      -- Triggers to keep FTS5 in sync with memory_items
+      CREATE TRIGGER IF NOT EXISTS memory_items_ai AFTER INSERT ON memory_items BEGIN
+        INSERT INTO memory_items_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memory_items_ad AFTER DELETE ON memory_items BEGIN
+        INSERT INTO memory_items_fts(memory_items_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE ON memory_items BEGIN
+        INSERT INTO memory_items_fts(memory_items_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+        INSERT INTO memory_items_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+      END;
+
       CREATE TABLE IF NOT EXISTS cron_jobs (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -259,6 +280,51 @@ export function getDb(): Database.Database {
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
       CREATE INDEX IF NOT EXISTS idx_rules_category ON behavioral_rules(category, enabled, priority DESC);
+
+      -- Dungeon Master tables
+      CREATE TABLE IF NOT EXISTS dungeon_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        setting TEXT,
+        current_location TEXT DEFAULT 'Taverne du Dragon Endormi',
+        turn_number INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        party_level INTEGER DEFAULT 1,
+        notes TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE TABLE IF NOT EXISTS dungeon_characters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        race TEXT DEFAULT 'Humain',
+        class TEXT DEFAULT 'Guerrier',
+        level INTEGER DEFAULT 1,
+        hp INTEGER DEFAULT 10,
+        hp_max INTEGER DEFAULT 10,
+        stats TEXT,
+        inventory TEXT,
+        status TEXT DEFAULT 'alive',
+        is_npc INTEGER DEFAULT 0,
+        description TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_dungeon_chars_session ON dungeon_characters(session_id);
+
+      CREATE TABLE IF NOT EXISTS dungeon_turns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        turn_number INTEGER NOT NULL,
+        player_action TEXT,
+        dm_narrative TEXT,
+        dice_rolls TEXT,
+        image_url TEXT,
+        event_type TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_dungeon_turns_session ON dungeon_turns(session_id, turn_number DESC);
     `);
     // Migrate: add new columns to error_log if missing
     try {
@@ -280,6 +346,235 @@ export function getDb(): Database.Database {
       db.exec(`CREATE INDEX IF NOT EXISTS idx_error_tool ON error_log(tool_name)`);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_error_pattern ON error_log(pattern_key)`);
     } catch { /* indexes may already exist */ }
+
+    // Migrate: populate FTS5 index from existing memory_items
+    try {
+      const ftsCount = (db.prepare("SELECT COUNT(*) as c FROM memory_items_fts").get() as { c: number }).c;
+      const memCount = (db.prepare("SELECT COUNT(*) as c FROM memory_items").get() as { c: number }).c;
+      if (ftsCount === 0 && memCount > 0) {
+        db.exec("INSERT INTO memory_items_fts(rowid, content, category) SELECT id, content, category FROM memory_items");
+        log.info(`[store] Populated FTS5 index with ${memCount} existing memories`);
+      }
+    } catch { /* FTS5 population may fail on first run */ }
+
+    // LLM response cache table
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS llm_cache (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          prompt_hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          response TEXT NOT NULL,
+          ttl_seconds INTEGER NOT NULL DEFAULT 3600,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_llm_cache_lookup ON llm_cache(prompt_hash, model);
+      `);
+    } catch { /* table may already exist */ }
+
+    // Migrate: add commitment_stage to clients if missing
+    try {
+      const clientCols = db.prepare("PRAGMA table_info(clients)").all() as Array<{ name: string }>;
+      const clientColNames = new Set(clientCols.map((c) => c.name));
+      if (!clientColNames.has("commitment_stage")) {
+        db.exec("ALTER TABLE clients ADD COLUMN commitment_stage TEXT NOT NULL DEFAULT 'cold'");
+      }
+    } catch { /* column may already exist */ }
+
+    // Migrate: add pillar, hook_type, embedding to content_items if missing
+    try {
+      const contentCols = db.prepare("PRAGMA table_info(content_items)").all() as Array<{ name: string }>;
+      const contentColNames = new Set(contentCols.map((c) => c.name));
+      if (!contentColNames.has("pillar")) {
+        db.exec("ALTER TABLE content_items ADD COLUMN pillar TEXT");
+      }
+      if (!contentColNames.has("hook_type")) {
+        db.exec("ALTER TABLE content_items ADD COLUMN hook_type TEXT");
+      }
+      if (!contentColNames.has("embedding")) {
+        db.exec("ALTER TABLE content_items ADD COLUMN embedding TEXT");
+      }
+    } catch { /* columns may already exist */ }
+
+    // Migrate: add score, tags, interaction_count to clients if missing
+    try {
+      const clCols = db.prepare("PRAGMA table_info(clients)").all() as Array<{ name: string }>;
+      const clColNames = new Set(clCols.map((c) => c.name));
+      if (!clColNames.has("score")) {
+        db.exec("ALTER TABLE clients ADD COLUMN score INTEGER NOT NULL DEFAULT 50");
+      }
+      if (!clColNames.has("tags")) {
+        db.exec("ALTER TABLE clients ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'");
+      }
+      if (!clColNames.has("interaction_count")) {
+        db.exec("ALTER TABLE clients ADD COLUMN interaction_count INTEGER NOT NULL DEFAULT 0");
+      }
+    } catch { /* columns may already exist */ }
+
+    // Knowledge ingestion tables
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_sources (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          url TEXT,
+          url_normalized TEXT UNIQUE,
+          title TEXT,
+          source_type TEXT NOT NULL DEFAULT 'article',
+          summary TEXT,
+          raw_content TEXT,
+          content_hash TEXT UNIQUE,
+          tags TEXT DEFAULT '[]',
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_chunks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source_id INTEGER NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+          chunk_index INTEGER NOT NULL,
+          content TEXT NOT NULL,
+          embedding TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_kchunks_source ON knowledge_chunks(source_id);
+      `);
+    } catch { /* tables may already exist */ }
+
+    // Council reports table
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS council_reports (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date TEXT NOT NULL,
+          phase1_json TEXT,
+          phase2_json TEXT,
+          phase3_json TEXT,
+          final_recommendations TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+      `);
+    } catch { /* table may already exist */ }
+
+    // Notification tiering queue
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notification_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          level TEXT NOT NULL DEFAULT 'general',
+          source TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          delivered INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_notif_level ON notification_queue(level, delivered, created_at);
+      `);
+    } catch { /* table may already exist */ }
+
+    // Goals table
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS goals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          description TEXT,
+          target_value REAL,
+          current_value REAL NOT NULL DEFAULT 0,
+          unit TEXT NOT NULL DEFAULT 'units',
+          deadline TEXT,
+          milestones TEXT DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'active',
+          category TEXT NOT NULL DEFAULT 'business',
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+      `);
+    } catch { /* table may already exist */ }
+
+    // Price watches table
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS price_watches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product TEXT NOT NULL,
+          url TEXT,
+          target_price REAL,
+          current_price REAL,
+          lowest_price REAL,
+          currency TEXT NOT NULL DEFAULT 'CAD',
+          last_checked_at INTEGER,
+          alert_sent INTEGER NOT NULL DEFAULT 0,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+      `);
+    } catch { /* table may already exist */ }
+
+    // YouTube competitor tracking
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS youtube_competitors (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          channel_id TEXT NOT NULL UNIQUE,
+          channel_name TEXT NOT NULL,
+          last_video_count INTEGER DEFAULT 0,
+          last_checked_at INTEGER,
+          notes TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE TABLE IF NOT EXISTS youtube_competitor_videos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          competitor_id INTEGER NOT NULL REFERENCES youtube_competitors(id) ON DELETE CASCADE,
+          video_id TEXT NOT NULL UNIQUE,
+          title TEXT NOT NULL,
+          published_at TEXT,
+          views INTEGER DEFAULT 0,
+          likes INTEGER DEFAULT 0,
+          comments INTEGER DEFAULT 0,
+          checked_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_yt_comp_vid ON youtube_competitor_videos(competitor_id, checked_at DESC);
+      `);
+    } catch { /* tables may already exist */ }
+
+    // Invoice tracking
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vendor TEXT NOT NULL,
+          amount REAL NOT NULL,
+          currency TEXT NOT NULL DEFAULT 'CAD',
+          category TEXT NOT NULL DEFAULT 'other',
+          invoice_date TEXT,
+          source TEXT DEFAULT 'manual',
+          file_path TEXT,
+          notes TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(invoice_date, category);
+      `);
+    } catch { /* table may already exist */ }
+
+    // Job/opportunity tracking
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS job_opportunities (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          company TEXT,
+          url TEXT,
+          match_score INTEGER DEFAULT 0,
+          salary_range TEXT,
+          location TEXT,
+          source TEXT DEFAULT 'search',
+          status TEXT NOT NULL DEFAULT 'new',
+          notes TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status ON job_opportunities(status, match_score DESC);
+      `);
+    } catch { /* table may already exist */ }
 
     log.info(`SQLite store initialised at ${dbPath}`);
   }
@@ -359,14 +654,15 @@ export function addTurn(chatId: number, turn: Turn): void {
   }
 }
 
-export function getTurns(chatId: number): Turn[] {
+export function getTurns(chatId: number, limit?: number): Turn[] {
   const d = getDb();
+  const maxTurns = limit || config.memoryTurns || 30;
   const rows = d
     .prepare(
-      "SELECT role, content FROM turns WHERE chat_id = ? ORDER BY id ASC"
+      "SELECT role, content FROM turns WHERE chat_id = ? ORDER BY id DESC LIMIT ?"
     )
-    .all(chatId) as Turn[];
-  return rows;
+    .all(chatId, maxTurns) as Turn[];
+  return rows.reverse(); // Return in chronological order
 }
 
 export function clearTurns(chatId: number): void {
@@ -529,20 +825,7 @@ export function resolveError(id: number): boolean {
  * Delete old errors and expired admin sessions.
  * Called on startup and periodically by the scheduler.
  */
-export function cleanupDatabase(errorMaxAgeDays = 30): { errors: number; sessions: number } {
-  const d = getDb();
-  const errorResult = d
-    .prepare("DELETE FROM error_log WHERE resolved = 1 AND (unixepoch() - timestamp) > ?")
-    .run(errorMaxAgeDays * 86400);
-  const sessionResult = d
-    .prepare("DELETE FROM admin_sessions WHERE (unixepoch() - authenticated_at) >= ?")
-    .run(ADMIN_EXPIRY_SECONDS);
-  const removed = { errors: errorResult.changes, sessions: sessionResult.changes };
-  if (removed.errors > 0 || removed.sessions > 0) {
-    log.info(`[cleanup] Removed ${removed.errors} old error(s), ${removed.sessions} expired session(s)`);
-  }
-  return removed;
-}
+// Old cleanupDatabase moved to comprehensive version at bottom of file
 
 // --- Autonomous decisions (Kingston Mind) ---
 
@@ -937,4 +1220,186 @@ export function autoDisableFailingRules(): number {
     log.info(`[rules] Auto-disabled ${info.changes} failing rule(s)`);
   }
   return info.changes;
+}
+
+// --- Dungeon Master CRUD ---
+
+export function dungeonCreateSession(name: string, setting?: string): number {
+  const d = getDb();
+  const info = d.prepare(
+    "INSERT INTO dungeon_sessions (name, setting) VALUES (?, ?)"
+  ).run(name, setting ?? null);
+  log.info(`[dungeon] Session created: "${name}" #${info.lastInsertRowid}`);
+  return info.lastInsertRowid as number;
+}
+
+export function dungeonGetSession(id: number): any | null {
+  const d = getDb();
+  return d.prepare("SELECT * FROM dungeon_sessions WHERE id = ?").get(id) ?? null;
+}
+
+export function dungeonListSessions(): any[] {
+  const d = getDb();
+  return d.prepare("SELECT * FROM dungeon_sessions ORDER BY updated_at DESC").all();
+}
+
+export function dungeonUpdateSession(id: number, fields: Record<string, unknown>): void {
+  const d = getDb();
+  const allowed = ["name", "setting", "current_location", "turn_number", "status", "party_level", "notes"];
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (allowed.includes(k)) {
+      sets.push(`${k} = ?`);
+      vals.push(v);
+    }
+  }
+  if (sets.length === 0) return;
+  sets.push("updated_at = unixepoch()");
+  vals.push(id);
+  d.prepare(`UPDATE dungeon_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+}
+
+export function dungeonDeleteSession(id: number): void {
+  const d = getDb();
+  d.prepare("DELETE FROM dungeon_turns WHERE session_id = ?").run(id);
+  d.prepare("DELETE FROM dungeon_characters WHERE session_id = ?").run(id);
+  d.prepare("DELETE FROM dungeon_sessions WHERE id = ?").run(id);
+  log.info(`[dungeon] Session #${id} deleted`);
+}
+
+export function dungeonAddCharacter(sessionId: number, char: {
+  name: string; race?: string; class?: string; level?: number;
+  hp?: number; hp_max?: number; stats?: Record<string, number>;
+  inventory?: string[]; is_npc?: boolean; description?: string;
+}): number {
+  const d = getDb();
+  const hpMax = char.hp_max || char.hp || 10;
+  const info = d.prepare(
+    `INSERT INTO dungeon_characters (session_id, name, race, class, level, hp, hp_max, stats, inventory, is_npc, description)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    sessionId, char.name, char.race || "Humain", char.class || "Guerrier",
+    char.level || 1, char.hp || hpMax, hpMax,
+    JSON.stringify(char.stats || {}), JSON.stringify(char.inventory || []),
+    char.is_npc ? 1 : 0, char.description || null
+  );
+  return info.lastInsertRowid as number;
+}
+
+export function dungeonGetCharacters(sessionId: number): any[] {
+  const d = getDb();
+  const rows = d.prepare("SELECT * FROM dungeon_characters WHERE session_id = ? ORDER BY is_npc, name").all(sessionId) as any[];
+  return rows.map((r) => {
+    let stats = {}; let inventory: string[] = [];
+    try { stats = JSON.parse(r.stats || "{}"); } catch { /* */ }
+    try { inventory = JSON.parse(r.inventory || "[]"); } catch { /* */ }
+    return { ...r, stats, inventory };
+  });
+}
+
+export function dungeonUpdateCharacter(id: number, fields: Record<string, unknown>): void {
+  const d = getDb();
+  const allowed = ["name", "race", "class", "level", "hp", "hp_max", "stats", "inventory", "status", "description"];
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (allowed.includes(k)) {
+      sets.push(`${k} = ?`);
+      vals.push(k === "stats" || k === "inventory" ? JSON.stringify(v) : v);
+    }
+  }
+  if (sets.length === 0) return;
+  vals.push(id);
+  d.prepare(`UPDATE dungeon_characters SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+}
+
+export function dungeonAddTurn(sessionId: number, turn: {
+  turn_number: number; player_action?: string; dm_narrative?: string;
+  dice_rolls?: any[]; image_url?: string; event_type?: string;
+}): number {
+  const d = getDb();
+  const info = d.prepare(
+    `INSERT INTO dungeon_turns (session_id, turn_number, player_action, dm_narrative, dice_rolls, image_url, event_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    sessionId, turn.turn_number, turn.player_action || null,
+    turn.dm_narrative || null, JSON.stringify(turn.dice_rolls || []),
+    turn.image_url || null, turn.event_type || "exploration"
+  );
+  // Update session turn_number
+  d.prepare("UPDATE dungeon_sessions SET turn_number = ?, updated_at = unixepoch() WHERE id = ?")
+    .run(turn.turn_number, sessionId);
+  return info.lastInsertRowid as number;
+}
+
+export function dungeonGetTurns(sessionId: number, limit = 20): any[] {
+  const d = getDb();
+  const rows = d.prepare(
+    "SELECT * FROM dungeon_turns WHERE session_id = ? ORDER BY turn_number DESC LIMIT ?"
+  ).all(sessionId, limit) as any[];
+  return rows.reverse().map((r) => {
+    let dice_rolls: any[] = [];
+    try { dice_rolls = JSON.parse(r.dice_rolls || "[]"); } catch { /* */ }
+    return { ...r, dice_rolls };
+  });
+}
+
+// ── Database maintenance — prevents unbounded table growth ──────────
+export function cleanupDatabase(): { purged: Record<string, number> } {
+  const d = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const thirtyDaysAgo = now - 30 * 86400;
+  const ninetyDaysAgo = now - 90 * 86400;
+  const sevenDaysAgo = now - 7 * 86400;
+  const purged: Record<string, number> = {};
+
+  // 1. agent_runs older than 90 days
+  const agentRuns = d.prepare("DELETE FROM agent_runs WHERE started_at < ?").run(ninetyDaysAgo);
+  purged.agent_runs = agentRuns.changes;
+
+  // 2. error_log resolved older than 30 days, unresolved older than 90 days
+  const errResolved = d.prepare("DELETE FROM error_log WHERE resolved = 1 AND timestamp < ?").run(thirtyDaysAgo);
+  const errOld = d.prepare("DELETE FROM error_log WHERE timestamp < ?").run(ninetyDaysAgo);
+  purged.error_log = errResolved.changes + errOld.changes;
+
+  // 3. llm_cache expired entries
+  const cacheExpired = d.prepare("DELETE FROM llm_cache WHERE (unixepoch() - created_at) > ttl_seconds").run();
+  purged.llm_cache = cacheExpired.changes;
+
+  // 4. Expired admin sessions (>7 days)
+  const adminExpired = d.prepare("DELETE FROM admin_sessions WHERE (unixepoch() - authenticated_at) >= ?").run(7 * 86400);
+  purged.admin_sessions = adminExpired.changes;
+
+  // 5. autonomous_decisions older than 90 days
+  const decisions = d.prepare("DELETE FROM autonomous_decisions WHERE created_at < ?").run(ninetyDaysAgo);
+  purged.autonomous_decisions = decisions.changes;
+
+  // 6. episodic_events low-importance older than 90 days (keep high-importance)
+  const episodic = d.prepare("DELETE FROM episodic_events WHERE importance < 0.7 AND created_at < ?").run(ninetyDaysAgo);
+  purged.episodic_events = episodic.changes;
+
+  // 7. Old turns from inactive chats (no activity in 30 days, keep agent/scheduler chats)
+  const staleChats = d.prepare(
+    `DELETE FROM turns WHERE chat_id IN (
+       SELECT DISTINCT chat_id FROM turns
+       WHERE chat_id > 1000
+       GROUP BY chat_id
+       HAVING MAX(created_at) < ?
+     )`
+  ).run(thirtyDaysAgo);
+  purged.stale_turns = staleChats.changes;
+
+  // 8. Old conversation summaries for stale chats
+  const staleSummaries = d.prepare(
+    `DELETE FROM conversation_summaries WHERE chat_id > 1000 AND updated_at < ?`
+  ).run(thirtyDaysAgo);
+  purged.stale_summaries = staleSummaries.changes;
+
+  const total = Object.values(purged).reduce((a, b) => a + b, 0);
+  if (total > 0) {
+    log.info(`[db-cleanup] Purged ${total} rows: ${JSON.stringify(purged)}`);
+  }
+
+  return { purged };
 }

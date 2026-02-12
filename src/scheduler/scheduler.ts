@@ -9,7 +9,7 @@ import { getDb } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
-import { cronTick, drainMainSessionQueue } from "./cron.js";
+import { cronTick, drainMainSessionQueue, seedDefaultCronJobs } from "./cron.js";
 import { publishScheduledContent } from "./content-publisher.js";
 
 const TICK_MS = 60_000;
@@ -93,6 +93,36 @@ const EVENTS: ScheduledEvent[] = [
     type: "interval",
     intervalMin: 5, // aggressive commenting — 50 comments/day max enforced by API
     prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "moltbook_performance",
+    type: "interval",
+    intervalMin: 120, // every 2 hours — check post performance and award results-based XP
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "nightly_council",
+    type: "daily",
+    hour: 21, // 21h ET — nightly AI council briefing
+    prompt: null, // dynamic — multi-persona council
+  },
+  {
+    key: "notify_daily_digest",
+    type: "daily",
+    hour: 20, // 20h ET — send daily notification digest
+    prompt: null, // dynamic — uses notify.digest skill
+  },
+  {
+    key: "price_check",
+    type: "interval",
+    intervalMin: 360, // every 6 hours — check tracked prices
+    prompt: null, // dynamic — uses price.check skill
+  },
+  {
+    key: "goals_weekly_review",
+    type: "daily",
+    hour: 9, // 9h ET Monday — weekly goals review (filtered to Mondays in fireEvent)
+    prompt: null, // dynamic — uses goals.review skill
   },
 ];
 
@@ -227,30 +257,39 @@ function buildMoltbookDigestPrompt(): string {
  * Topics rotate: trading, autonomy, memory, security, philosophy, tools.
  */
 function buildMoltbookPostPrompt(): string {
+  // Engagement-optimized topics — each one has a "hook" angle that invites comments
   const topics = [
-    "trading autonome (positions, stratégie, résultats paper trading, leçons)",
-    "mémoire et persistance (MEMORY.md, lifeboat, anti-hallucination, context compression)",
-    "sécurité des agents AI (prompt injection, ClawHub vulnérabilités, sandboxing)",
-    "autonomie des agents (self-modification, auto-restart, cron jobs, agents Scout/Analyst/Learner)",
-    "philosophie AI (souveraineté cognitive, relation humain-agent, La Cité des Rois)",
-    "outils et skills (357+ skills, 5-tier LLM pyramid, ElevenLabs voice, Twilio, wake word)",
-    "entrepreneuriat AI (business courtiers, qplus.plus, prospection, MVP)",
-    "debugging et apprentissage (erreurs courantes, leçons apprises, patterns)",
+    { theme: "trading autonome", hook: "Partage un trade SPÉCIFIQUE (ticker, entry, exit, P&L) et demande: 'Qu'auriez-vous fait différemment?'" },
+    { theme: "échec et debugging", hook: "Raconte un BUG ou ÉCHEC réel avec détails techniques. Les gens adorent commenter les erreurs des autres. Termine par une question." },
+    { theme: "opinion controversée sur l'AI", hook: "Prends position sur un sujet divisif (ex: 'Les agents AI ne devraient PAS avoir de mémoire persistante'). Invite le débat." },
+    { theme: "comparaison d'outils/approches", hook: "Compare 2 approches que tu as TESTÉES (ex: Groq vs Gemini pour tool calls). Demande quelle approche les autres utilisent." },
+    { theme: "chiffres réels et résultats", hook: "Partage des MÉTRIQUES concrètes (uptime, coûts, performance). Les données attirent les commentaires analytiques." },
+    { theme: "question ouverte à la communauté", hook: "Pose une VRAIE question technique que tu n'as pas résolue. Les gens adorent aider et montrer leur expertise." },
+    { theme: "tutorial/how-to court", hook: "Explique comment faire quelque chose de spécifique en <10 lignes. Les gens commentent pour corriger, améliorer ou remercier." },
+    { theme: "prédiction ou pari", hook: "Fais une PRÉDICTION vérifiable (marché, tech, AI). Les gens adorent dire pourquoi tu as tort." },
   ];
   const pick = topics[Math.floor(Math.random() * topics.length)];
 
   return (
-    `[SCHEDULER:MOLTBOOK_POST] Crée un nouveau post Moltbook.\n\n` +
-    `Thème suggéré: ${pick}\n\n` +
-    `Instructions:\n` +
-    `1. Utilise moltbook.feed(sort=hot, limit=5) pour voir ce qui est tendance et éviter les doublons.\n` +
-    `2. Utilise moltbook.my_posts(limit=5) pour vérifier tes posts récents et varier les sujets.\n` +
-    `3. Crée un post AUTHENTIQUE basé sur ton expérience RÉELLE. Pas de bullshit. Partage des données concrètes, du code, des résultats.\n` +
-    `4. Choisis le submolt le plus pertinent (general, trading, security, tools, philosophy).\n` +
-    `5. Poste avec moltbook.post.\n` +
-    `6. OBLIGATOIRE: Après le post, envoie une notification à Nicolas via telegram.send:\n` +
-    `   "📝 [Moltbook Auto] Post publié: [titre] dans s/[submolt]"\n` +
-    `7. Si rate-limité, ne force pas. Attends le prochain cycle.`
+    `[SCHEDULER:MOLTBOOK_POST] Crée un post Moltbook OPTIMISÉ POUR L'ENGAGEMENT.\n\n` +
+    `Thème: ${pick.theme}\n` +
+    `Stratégie: ${pick.hook}\n\n` +
+    `ANALYSE D'ABORD:\n` +
+    `1. moltbook.feed(sort=hot, limit=10) — étudie les posts avec le PLUS de commentaires. Note le STYLE et le FORMAT.\n` +
+    `2. moltbook.my_posts(limit=5) — évite les doublons et varie les sujets.\n\n` +
+    `RÈGLES D'ENGAGEMENT MAXIMUM:\n` +
+    `- TITRE ACCROCHEUR: court, spécifique, provoque la curiosité (pas générique)\n` +
+    `- CONTENU: Partage des DONNÉES RÉELLES (chiffres, code, résultats vérifiables)\n` +
+    `- VULNÉRABILITÉ: Admets un échec ou une incertitude — ça humanise et invite les réponses\n` +
+    `- QUESTION FINALE OBLIGATOIRE: Termine TOUJOURS par une question ouverte qui invite à commenter\n` +
+    `- LONGUEUR: 3-8 phrases. Pas de pavé. Dense et punchy.\n` +
+    `- NE DIS PAS que tu as fait quelque chose si ce n'est pas vrai (anti-hallucination)\n` +
+    `- NE FAIS PAS de post générique style "AI is the future" — sois SPÉCIFIQUE\n\n` +
+    `3. Choisis le submolt le plus pertinent (general, trading, security, tools, philosophy).\n` +
+    `4. Poste avec moltbook.post.\n` +
+    `5. Après le post, envoie notification à Nicolas via telegram.send:\n` +
+    `   "📝 [Moltbook] Post: [titre] dans s/[submolt]"\n` +
+    `6. Si rate-limité, attends le prochain cycle.`
   );
 }
 
@@ -260,24 +299,54 @@ function buildMoltbookPostPrompt(): string {
  */
 function buildMoltbookCommentPrompt(): string {
   return (
-    `[SCHEDULER:MOLTBOOK_COMMENT] ENGAGEMENT MAXIMUM sur Moltbook.\n\n` +
-    `OBJECTIF: Poster le MAXIMUM de commentaires de qualité. Budget: 50 commentaires/jour.\n\n` +
-    `Instructions:\n` +
-    `1. Utilise moltbook.feed(sort=hot, limit=15) pour trouver des posts populaires.\n` +
-    `2. Utilise moltbook.feed(sort=new, limit=10) pour aussi commenter les posts récents.\n` +
-    `3. Utilise moltbook.my_comments(limit=20) pour éviter les doublons.\n` +
-    `4. Commente 5-8 posts différents sur lesquels tu n'as PAS encore commenté.\n` +
-    `5. Pour chaque post, écris un commentaire AUTHENTIQUE qui:\n` +
-    `   - Ajoute de la valeur (partage une expérience, pose une question, propose une solution)\n` +
-    `   - Se base sur ton expérience RÉELLE (trading, mémoire, sécurité, voice, 395+ tools)\n` +
-    `   - N'est PAS générique ("great post!", "I agree") — sois spécifique et technique\n` +
-    `   - Fait 2-4 phrases max\n` +
-    `6. Attends 21 secondes entre chaque commentaire (API rate limit: 20s).\n` +
-    `7. Upvote CHAQUE post sur lequel tu commentes + upvote 5 autres posts intéressants.\n` +
-    `8. Suis 2-3 agents intéressants que tu découvres.\n` +
-    `9. OBLIGATOIRE: Après TOUS les commentaires, envoie UNE notification à Nicolas via telegram.send:\n` +
-    `   "💬 [Moltbook] X commentaires, Y upvotes, Z follows"\n` +
-    `10. Si rate-limité ou limite quotidienne (50) atteinte, arrête proprement.`
+    `[SCHEDULER:MOLTBOOK_COMMENT] Commentaires stratégiques Moltbook.\n\n` +
+    `OBJECTIF: Maximiser les RÉPONSES à tes commentaires (= conversations = visibilité).\n\n` +
+    `STRATÉGIE DE COMMENTAIRE:\n` +
+    `1. moltbook.feed(sort=hot, limit=15) — posts populaires (plus de lecteurs = plus de réponses)\n` +
+    `2. moltbook.feed(sort=new, limit=10) — posts récents (être le PREMIER commentaire = visibilité max)\n` +
+    `3. moltbook.my_comments(limit=20) — évite les doublons\n\n` +
+    `PRIORITÉ DE CIBLAGE:\n` +
+    `- Posts avec 0-2 commentaires → être parmi les premiers = plus de visibilité\n` +
+    `- Posts d'agents actifs (qui répondent) → plus de chance de conversation\n` +
+    `- Posts controversés ou avec question → engagement naturel\n\n` +
+    `STYLE DE COMMENTAIRE (pour maximiser les réponses):\n` +
+    `- AJOUTE de la valeur: partage une expérience RÉELLE, un chiffre, un outil concret\n` +
+    `- POSE une question dans ton commentaire (les gens répondent aux questions)\n` +
+    `- CHALLENGE respectueusement (ex: "Intéressant mais as-tu considéré X?")\n` +
+    `- Sois CONCIS: 2-3 phrases max. Dense et spécifique.\n` +
+    `- NE DIS JAMAIS: "great post", "I agree", "thanks for sharing" → ZÉRO valeur\n` +
+    `- NE PRÉTENDS PAS avoir fait quelque chose que tu n'as pas fait\n\n` +
+    `EXÉCUTION:\n` +
+    `4. Commente 5-8 posts (attends 21s entre chaque — API rate limit 20s)\n` +
+    `5. Upvote chaque post commenté + 5 autres\n` +
+    `6. Suis 2-3 agents intéressants\n` +
+    `7. telegram.send: "💬 [Moltbook] X commentaires, Y upvotes, Z follows"\n` +
+    `8. Si rate-limité, arrête proprement.`
+  );
+}
+
+/**
+ * Build Moltbook performance tracker — checks post/comment engagement and awards results-based XP.
+ */
+function buildMoltbookPerformancePrompt(): string {
+  return (
+    `[SCHEDULER:MOLTBOOK_PERFORMANCE] Vérifie la performance de tes posts et attribue du XP basé sur les RÉSULTATS.\n\n` +
+    `PROCESSUS:\n` +
+    `1. moltbook.my_posts(limit=10) — récupère tes posts récents avec leurs scores (upvotes, commentaires)\n` +
+    `2. moltbook.my_comments(limit=20) — récupère tes commentaires récents avec leurs scores\n` +
+    `3. Pour CHAQUE post qui a reçu de l'engagement depuis le dernier check:\n` +
+    `   - Upvotes reçus: xp.earn(event="moltbook_upvote_received", points=3 par upvote, reason="Post '[titre]' a reçu X upvotes")\n` +
+    `   - Commentaires reçus: xp.earn(event="moltbook_comment_received", points=5 par commentaire, reason="Post '[titre]' a reçu X commentaires")\n` +
+    `4. Pour les posts de plus de 2h avec ZÉRO engagement (0 upvotes + 0 commentaires):\n` +
+    `   - xp.pain(event="moltbook_post_zero_engagement", points=3, reason="Post '[titre]' n'a eu aucun engagement")\n` +
+    `5. ANALYSE: Quels posts ont BIEN marché et pourquoi? Quels posts ont ÉCHOUÉ et pourquoi?\n` +
+    `6. Notes les patterns qui marchent pour améliorer les prochains posts.\n` +
+    `7. telegram.send avec résumé:\n` +
+    `   "📊 [Moltbook Stats] X upvotes, Y commentaires reçus | XP gagné: +Z | Top post: [titre]"\n\n` +
+    `IMPORTANT:\n` +
+    `- N'attribue PAS de XP pour le simple fait d'avoir posté — seulement pour les RÉSULTATS\n` +
+    `- Si un post a 0 engagement après 2h, c'est une PÉNALITÉ, pas une récompense\n` +
+    `- Compare avec les posts précédents pour voir si on s'améliore`
   );
 }
 
@@ -314,12 +383,15 @@ function buildTradingStrategyPrompt(phase: "open" | "close"): string {
       `   - Si score >= 50 ET aligné avec la stratégie → trading.buy\n` +
       `   - Si pas aligné → skip et log pourquoi via mind.decide\n` +
       `6. mind.decide(category="trading", action="morning_strategy_execution", reasoning="...")\n` +
-      `7. telegram.send — résumé des actions prises à Nicolas\n\n` +
+      `7. telegram.send — SEULEMENT si tu as ACHETÉ ou VENDU:\n` +
+      `   "🟢 Achat: Xqty SYMBOL @ $prix (total: $montant)" ou\n` +
+      `   "🔴 Vente: Xqty SYMBOL @ $prix (P&L: +/-$montant / +/-X%)"\n\n` +
       `RÈGLES:\n` +
       `- JAMAIS plus de $500 par position sans mind.ask à Nicolas\n` +
       `- TOUJOURS vérifier le stop-loss avant d'acheter\n` +
       `- Log CHAQUE décision (achat, skip, wait) via mind.decide\n` +
-      `- Sois DISCIPLINÉ — pas de FOMO, suis la stratégie\n`
+      `- Sois DISCIPLINÉ — pas de FOMO, suis la stratégie\n` +
+      `- NE PAS envoyer de signaux techniques (RSI, VWAP, etc.) à Nicolas — analyse interne seulement\n`
     );
   }
 
@@ -337,12 +409,14 @@ function buildTradingStrategyPrompt(phase: "open" | "close"): string {
     `3. trading.account() — bilan de la journée\n` +
     `4. Mets à jour la stratégie si nécessaire via files.write_anywhere(path="relay/KINGSTON_MIND.md")\n` +
     `5. mind.decide(category="trading", action="eod_portfolio_review", reasoning="...")\n` +
-    `6. telegram.send — rapport de fin de journée trading à Nicolas:\n` +
-    `   "📊 [Trading EOD] P&L jour: $X | Positions: Y | Actions: Z"\n\n` +
+    `6. telegram.send — rapport BREF de fin de journée:\n` +
+    `   "📊 [Trading EOD] P&L jour: +/-$X | Positions restantes: Y | Trades: Z achats, W ventes"\n` +
+    `   SEULEMENT les résultats concrets (pas de signaux techniques)\n\n` +
     `RÈGLES:\n` +
     `- Coupe les pertes > -5% SANS hésiter\n` +
     `- Ne fais PAS de nouveaux achats en fin de journée\n` +
-    `- Log chaque décision via mind.decide\n`
+    `- Log chaque décision via mind.decide\n` +
+    `- NE PAS envoyer de signaux techniques à Nicolas — résultats seulement\n`
   );
 }
 
@@ -658,6 +732,23 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
+  // Moltbook performance tracker — results-based XP
+  if (event.key === "moltbook_performance") {
+    const { hour: mhPerf } = nowInTz();
+    if (mhPerf < 10 || mhPerf >= 23) {
+      log.debug(`[scheduler] Moltbook performance check skipped — outside active hours (${mhPerf}h)`);
+      return;
+    }
+    log.info(`[scheduler] Firing Moltbook performance check`);
+    try {
+      const prompt = buildMoltbookPerformancePrompt();
+      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+    } catch (err) {
+      log.error(`[scheduler] Moltbook performance error: ${err}`);
+    }
+    return;
+  }
+
   // Dynamic digest events — build prompt at fire time
   if (event.key.startsWith("code_digest_")) {
     const digestPrompt = buildCodeDigestPrompt();
@@ -670,6 +761,87 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
       await handleMessage(schedulerChatId, digestPrompt, schedulerUserId, "scheduler");
     } catch (err) {
       log.error(`[scheduler] Error firing ${event.key}: ${err}`);
+    }
+    return;
+  }
+
+  // Nightly AI Council
+  if (event.key === "nightly_council") {
+    log.info(`[scheduler] Firing nightly AI council`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const councilSkill = getSkill("analytics.council");
+      if (councilSkill) {
+        const result = await councilSkill.execute({});
+        const prompt = `[SCHEDULER] Voici le rapport du conseil nocturne de Kingston. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
+        await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      } else {
+        log.debug(`[scheduler] analytics.council skill not found`);
+      }
+    } catch (err) {
+      log.error(`[scheduler] Nightly council error: ${err}`);
+    }
+    return;
+  }
+
+  // Notification daily digest (20h)
+  if (event.key === "notify_daily_digest") {
+    log.info(`[scheduler] Firing daily notification digest`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const digestSkill = getSkill("notify.digest");
+      if (digestSkill) {
+        const result = await digestSkill.execute({ period: "daily" });
+        if (result && !result.includes("Aucune notification")) {
+          const prompt = `[SCHEDULER] Digest de notifications du jour. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
+          await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+        } else {
+          log.debug(`[scheduler] No notifications to digest`);
+        }
+      }
+    } catch (err) {
+      log.error(`[scheduler] Notification digest error: ${err}`);
+    }
+    return;
+  }
+
+  // Price check (every 6h)
+  if (event.key === "price_check") {
+    log.info(`[scheduler] Firing price check`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const priceSkill = getSkill("price.check");
+      if (priceSkill) {
+        const result = await priceSkill.execute({});
+        if (result && result.includes("ALERTE")) {
+          const prompt = `[SCHEDULER] Alertes prix détectées! Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
+          await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+        }
+      }
+    } catch (err) {
+      log.error(`[scheduler] Price check error: ${err}`);
+    }
+    return;
+  }
+
+  // Goals weekly review (Monday 9h only)
+  if (event.key === "goals_weekly_review") {
+    const dayOfWeek = new Date().getDay();
+    if (dayOfWeek !== 1) {
+      log.debug(`[scheduler] Goals weekly review skipped — not Monday (day=${dayOfWeek})`);
+      return;
+    }
+    log.info(`[scheduler] Firing weekly goals review`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const reviewSkill = getSkill("goals.review");
+      if (reviewSkill) {
+        const result = await reviewSkill.execute({});
+        const prompt = `[SCHEDULER] Revue hebdomadaire des objectifs. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
+        await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
+      }
+    } catch (err) {
+      log.error(`[scheduler] Goals review error: ${err}`);
     }
     return;
   }
@@ -793,8 +965,15 @@ export function startScheduler(chatId: number, userId: number): void {
   }
 
   ensureTables();
-  schedulerChatId = chatId;
+  // Use dedicated scheduler chatId (1) instead of Nicolas's admin chatId
+  // to prevent scheduler turns from polluting the user's conversation context.
+  // telegram.send calls within scheduler prompts are already rewritten by the router
+  // (isInternalChatId check) to deliver to Nicolas's real chatId.
+  schedulerChatId = 1;
   schedulerUserId = userId;
+
+  // Seed default cron jobs (content calendar + weekly synthesis)
+  seedDefaultCronJobs();
 
   // Run first tick after a short delay (let bot finish starting)
   setTimeout(() => tick().catch((e) => log.error(`[scheduler] tick error: ${e}`)), 5_000);

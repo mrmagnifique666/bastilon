@@ -274,3 +274,51 @@ function handleRetry(job: CronJob): void {
   ).run(newRetryCount, nextRetry, job.id);
   log.info(`[cron] Job "${job.name}" (${job.id}) retry ${newRetryCount}/${maxRetries} in ${backoffMs / 1000}s`);
 }
+
+// ── Seed default cron jobs (content calendar + weekly synthesis) ──
+
+export function seedDefaultCronJobs(): void {
+  const db = getDb();
+
+  // Check if jobs already exist (by name) to avoid duplicates
+  const existing = db.prepare("SELECT name FROM cron_jobs WHERE name IN (?, ?)").all(
+    "content-calendar-weekly", "weekly-synthesis"
+  ) as Array<{ name: string }>;
+  const existingNames = new Set(existing.map(r => r.name));
+
+  // Content calendar: every Monday at 9h — generate weekly content plan
+  if (!existingNames.has("content-calendar-weekly")) {
+    try {
+      addCronJob({
+        name: "content-calendar-weekly",
+        scheduleType: "cron",
+        scheduleValue: "0 9 * * 1", // Monday 9:00
+        prompt: "Utilise content.calendar avec create_drafts=true et posts_per_day=2 pour generer le calendrier de contenu de la semaine. Envoie le résultat à Nicolas via telegram.send.",
+        sessionTarget: "isolated",
+        deliveryMode: "announce",
+        modelOverride: "ollama",
+      });
+      log.info("[cron] Seeded: content-calendar-weekly (Monday 9h)");
+    } catch (err) {
+      log.debug(`[cron] Failed to seed content-calendar-weekly: ${err}`);
+    }
+  }
+
+  // Weekly synthesis: every Friday at 20h — comprehensive report
+  if (!existingNames.has("weekly-synthesis")) {
+    try {
+      addCronJob({
+        name: "weekly-synthesis",
+        scheduleType: "cron",
+        scheduleValue: "0 20 * * 5", // Friday 20:00
+        prompt: "Utilise content.weekly_synthesis pour generer le rapport hebdomadaire complet. Envoie le résultat à Nicolas via telegram.send.",
+        sessionTarget: "isolated",
+        deliveryMode: "announce",
+        modelOverride: "ollama",
+      });
+      log.info("[cron] Seeded: weekly-synthesis (Friday 20h)");
+    } catch (err) {
+      log.debug(`[cron] Failed to seed weekly-synthesis: ${err}`);
+    }
+  }
+}

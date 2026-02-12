@@ -34,7 +34,7 @@ function loadAutonomousPrompt(): string {
       _cachedAutonomous = fs.readFileSync(p, "utf-8");
       return _cachedAutonomous;
     }
-  } catch { /* ignore */ }
+  } catch (err) { log.debug(`[cli] AUTONOMOUS.md load failed: ${err instanceof Error ? err.message : String(err)}`); }
   _cachedAutonomous = "";
   return "";
 }
@@ -241,7 +241,7 @@ async function buildMemoryContext(chatId: number, userMessage?: string): Promise
       return db
         .prepare("SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 15")
         .all() as { id: number; text: string; created_at: number }[];
-    } catch { return []; }
+    } catch (err) { log.warn(`[cli] Notes query failed: ${err instanceof Error ? err.message : String(err)}`); return []; }
   });
 
   const semanticPromise = userMessage
@@ -260,7 +260,7 @@ async function buildMemoryContext(chatId: number, userMessage?: string): Promise
         parts.push(`Topics actifs: [${summary.topics.join(", ")}]`);
       }
     }
-  } catch { /* no summary */ }
+  } catch (err) { log.warn(`[cli] Summary query failed: ${err instanceof Error ? err.message : String(err)}`); }
 
   // 2. Recent notes
   if (notes.length > 0) {
@@ -296,7 +296,7 @@ async function buildMemoryContext(chatId: number, userMessage?: string): Promise
         parts.push(`[${timeStr}] ${content}`);
       }
     }
-  } catch { /* turns query failed */ }
+  } catch (err) { log.warn(`[cli] Recent turns query failed: ${err instanceof Error ? err.message : String(err)}`); }
 
   return parts.length > 0 ? parts.join("\n") : "";
 }

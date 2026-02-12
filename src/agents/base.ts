@@ -278,13 +278,15 @@ export class Agent {
     // Run quantitative pre-tick hook (no LLM cost)
     if (this.onTickHook) {
       try {
-        const sendAlert = async (msg: string) => {
+        // sendAlert is fire-and-forget — never blocks onTick or the chat queue
+        const sendAlert = (msg: string) => {
           const send = getBotSendFn();
           const targetChat = config.adminChatId || this.chatId;
           if (send) {
-            try { await send(targetChat, msg); } catch (e) {
+            // Fire-and-forget: don't await to avoid blocking the agent tick
+            send(targetChat, msg).catch((e: unknown) => {
               log.warn(`[agent:${this.id}] Alert send failed: ${e}`);
-            }
+            });
           }
         };
         await this.onTickHook(this.cycle, sendAlert);
@@ -314,9 +316,14 @@ export class Agent {
     await emitHook("agent:cycle:start", { agentId: this.id, cycle: this.cycle, chatId: this.chatId });
 
     try {
-      // Prefix prompt with agent identity so Claude knows who it is
+      // Prefix prompt with agent identity + global no-spam rule
       const agentPrompt =
         `[AGENT:${this.id.toUpperCase()}] (${this.name} — ${this.role})\n\n` +
+        `RÈGLE GLOBALE ANTI-SPAM (PRIORITÉ MAXIMALE):\n` +
+        `- NE PAS utiliser telegram.send pour des rapports de routine, heartbeats, ou résumés.\n` +
+        `- Utilise notes.add pour TOUT rapport interne, résumé, réflexion, log.\n` +
+        `- telegram.send UNIQUEMENT si Nicolas DOIT AGIR (décision requise, erreur critique, opportunité urgente).\n` +
+        `- Si tu n'es pas sûr → notes.add. Le doute = pas de notification.\n\n` +
         prompt;
 
       const result = await handleMessage(this.chatId, agentPrompt, this.userId, "scheduler");

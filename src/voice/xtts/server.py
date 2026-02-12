@@ -259,22 +259,24 @@ async def tts(
     start = time.time()
 
     # Prepare inputs
-    # For French, use [fr] tag. For English, [en].
-    lang_tag = {"fr": "[fr]", "en": "[en]", "es": "[es]", "de": "[de]"}.get(language, "")
-    tagged_text = f"{lang_tag} {text}" if lang_tag else text
+    tagged_text = text  # Bark presets handle language internally
 
-    # Use voice preset if available
+    # Check if voice_name is a Bark built-in preset (e.g. "v2/fr_speaker_0")
     voice_preset = None
-    if voice_name:
-        preset_data = get_voice_preset(voice_name)
-        if preset_data:
-            voice_preset = preset_data
-            log.info(f"Using cloned voice: {voice_name}")
-        else:
-            log.info(f"Voice '{voice_name}' has no preset — using default Bark voice")
-
-    # Process inputs
-    inputs = processor(tagged_text, voice_preset=voice_preset, return_tensors="pt").to(device)
+    if voice_name and voice_name.startswith("v2/"):
+        # Built-in Bark preset — pass as voice_preset string
+        log.info(f"Using Bark built-in preset: {voice_name}")
+        inputs = processor(tagged_text, voice_preset=voice_name, return_tensors="pt").to(device)
+    else:
+        # Custom cloned voice or default
+        if voice_name:
+            preset_data = get_voice_preset(voice_name)
+            if preset_data:
+                voice_preset = preset_data
+                log.info(f"Using cloned voice: {voice_name}")
+            else:
+                log.info(f"Voice '{voice_name}' has no preset — using default Bark voice")
+        inputs = processor(tagged_text, voice_preset=voice_preset, return_tensors="pt").to(device)
 
     # Generate
     with torch.no_grad():

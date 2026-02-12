@@ -21,13 +21,20 @@ import {
 } from "../skills/loader.js";
 import { normalizeArgs, loadSessionLog } from "./gemini.js";
 import { isToolPermitted } from "../security/policy.js";
-import { buildSemanticContext, extractAndStoreMemories } from "../memory/semantic.js";
-import { getTurns, getDb, addTurn } from "../storage/store.js";
+import { buildSemanticContext, extractAndStoreMemories, addMemory } from "../memory/semantic.js";
+import { getTurns, getDb, addTurn, dungeonListSessions, dungeonGetSession, dungeonGetCharacters, dungeonGetTurns } from "../storage/store.js";
+import { emitHookAsync } from "../hooks/hooks.js";
+import fs from "node:fs";
+import path from "node:path";
 
 const MODEL = "gemini-2.5-flash-native-audio-latest";
 const SESSION_TIMEOUT_MS = 14 * 60 * 1000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const MAX_LIVE_TOOLS = 80;
+
+/** Paths for persistent voice session files */
+const VOICE_CONV_FILE = path.resolve("relay/voice-conversation.json");
+const VOICE_DND_FILE = path.resolve("relay/voice-dnd-state.md");
 
 /** Blocked prefixes for voice mode — too heavy, slow, or crash-prone */
 const BLOCKED_PREFIXES = ["browser.", "ollama.", "pdf."];
@@ -175,6 +182,7 @@ export interface LiveCallbacks {
   onTurnComplete(): void;
   onToolCall(name: string, args: Record<string, unknown>): void;
   onToolResult(name: string, result: string): void;
+  onImageGenerated?(url: string, caption: string): void;
   onReady(): void;
   onError(msg: string): void;
   onClose(): void;
@@ -201,6 +209,12 @@ export class GeminiLiveSession {
   private cachedMemoryContext = "";
   private conversationLog: string[] = [];
 
+  /** Compressed summary of the conversation so far (generated before reconnect). */
+  private conversationSummary = "";
+
+  /** Active D&D session context (refreshed on each connect). */
+  private dndContext = "";
+
   // Track current turn for memory extraction
   private currentUserText = "";
   private currentModelText = "";
@@ -212,6 +226,8 @@ export class GeminiLiveSession {
   constructor(opts: LiveSessionOptions) {
     this.opts = opts;
     this.rebuildTools();
+    // Restore conversation from a previous session if file exists
+    this.restoreConversation();
   }
 
   /** Rebuild tool declarations from the live registry. */
@@ -232,6 +248,9 @@ export class GeminiLiveSession {
     if (!this.cachedMemoryContext) {
       this.cachedMemoryContext = await this.buildRichContext();
     }
+
+    // Load D&D context if a session is active
+    this.refreshDndContext();
 
     const url =
       `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` +
@@ -338,11 +357,22 @@ export class GeminiLiveSession {
     );
   }
 
-  /** Gracefully close the session, saving conversation summary. */
+  /** Gracefully close the session, saving conversation summary + emitting hook. */
   close(): void {
     this.closed = true;
     this.clearTimer();
     this.saveConversationSummary();
+    this.saveEpisodicSummary();
+    this.persistConversation();
+    // Clean up conversation file after close (session is over)
+    try { fs.unlinkSync(VOICE_CONV_FILE); } catch {}
+    // Emit voice session end hook (fire-and-forget)
+    emitHookAsync("voice:session:end", {
+      chatId: this.opts.chatId,
+      userId: this.opts.userId,
+      turnCount: this.conversationLog.length,
+      conversationLog: this.conversationLog.slice(-30),
+    });
     if (this.ws) {
       try {
         this.ws.close();
@@ -422,6 +452,23 @@ export class GeminiLiveSession {
       }
     } catch {}
 
+    // 3b. Previous voice session summaries (last 3) for cross-session memory
+    try {
+      const db = getDb();
+      const voiceSessions = db
+        .prepare(
+          `SELECT description, details FROM episodic_events
+           WHERE event_type = 'voice_session' ORDER BY timestamp DESC LIMIT 3`,
+        )
+        .all() as { description: string; details: string }[];
+      if (voiceSessions.length > 0) {
+        const lines = voiceSessions.map(
+          (s) => `- ${s.description}: ${(s.details || "").slice(0, 300)}`,
+        );
+        parts.push(`\n[SESSIONS VOICE PRÉCÉDENTES]\n${lines.join("\n")}`);
+      }
+    } catch {}
+
     // 4. Recent notes (last 5)
     try {
       const db = getDb();
@@ -491,6 +538,40 @@ export class GeminiLiveSession {
     } catch {}
   }
 
+  /** Save a consolidated episodic memory of the voice session for cross-session recall. */
+  private saveEpisodicSummary(): void {
+    if (this.conversationLog.length < 4) return;
+    try {
+      const logText = this.conversationLog.slice(-30).join("\n");
+      // Store as episodic event for later recall
+      const episodicSkill = getSkill("episodic.log");
+      if (episodicSkill) {
+        episodicSkill.execute({
+          event_type: "voice_session",
+          summary: `Voice session with ${this.conversationLog.length} exchanges`,
+          details: logText.slice(0, 2000),
+          participants: "Nicolas, Kingston",
+          importance: Math.min(Math.floor(this.conversationLog.length / 4), 8),
+          emotional_valence: 0,
+        }).catch(() => {});
+      }
+      // Also store a semantic memory summary for the next voice session context
+      const topics = this.conversationLog
+        .filter(l => !l.startsWith("[Tool]") && !l.startsWith("[Result]"))
+        .slice(-10)
+        .join(" ")
+        .slice(0, 500);
+      if (topics.length > 50) {
+        addMemory(
+          `[Voice ${new Date().toISOString().slice(0, 16)}] ${topics}`,
+          "event",
+          "voice-session",
+          this.opts.chatId,
+        ).catch(() => {});
+      }
+    } catch {}
+  }
+
   private reconnect(): void {
     this.clearTimer();
     if (this.ws) {
@@ -510,10 +591,25 @@ export class GeminiLiveSession {
       );
       return;
     }
-    const delay = Math.min(1000 * this.reconnectAttempts, 5000);
-    setTimeout(() => {
-      if (!this.closed) void this.connect();
-    }, delay);
+
+    // Before reconnecting: persist conversation + generate summary
+    this.persistConversation();
+    this.generateConversationSummary()
+      .then(() => {
+        this.refreshDndContext();
+        const delay = Math.min(1000 * this.reconnectAttempts, 5000);
+        setTimeout(() => {
+          if (!this.closed) void this.connect();
+        }, delay);
+      })
+      .catch(() => {
+        // Summary failed — reconnect anyway with raw conversation log
+        this.refreshDndContext();
+        const delay = Math.min(1000 * this.reconnectAttempts, 5000);
+        setTimeout(() => {
+          if (!this.closed) void this.connect();
+        }, delay);
+      });
   }
 
   private buildSetup(): object {
@@ -545,17 +641,26 @@ export class GeminiLiveSession {
       `## Mode vocal`,
       `Conversation vocale temps réel. Parle ${lang === "fr" ? "français" : "anglais"} naturellement.`,
       `Sois concis — pas de markdown, pas de listes. Tu PARLES, tu n'écris pas.`,
-      `Si tu ne sais pas, utilise tes outils pour trouver l'information.`,
-      `Ne fabrique jamais de données.`,
+      ``,
+      `## RÈGLES ANTI-HALLUCINATION (CRITIQUE)`,
+      `1. **JAMAIS inventer de données.** Si tu ne sais pas → utilise un outil pour vérifier.`,
+      `2. **JAMAIS donner de chiffres, prix, dates, statistiques de mémoire.** Utilise TOUJOURS un outil (web_search, trading_positions, memory_search, telegram_history) pour obtenir les données réelles.`,
+      `3. Si on te demande "qu'est-ce qui s'est passé aujourd'hui" → utilise telegram_history et memory_search. Ne résume PAS de mémoire.`,
+      `4. Si on te demande un prix, une position, un P&L → utilise trading_positions ou stocks_quote. Ne devine JAMAIS.`,
+      `5. Si tu n'as pas l'info après avoir cherché, dis "je n'ai pas trouvé cette information" plutôt qu'inventer.`,
+      `6. Quand tu rapportes des faits, cite ta source ("d'après ton historique Telegram...", "selon ta note du...").`,
+      `7. Distingue clairement ce que tu SAIS (de tes outils) vs ce que tu PENSES (opinion).`,
       ``,
       `## Capacités`,
       `Tu as ${this.toolDecls.length} outils disponibles. Tu peux AGIR, pas juste parler:`,
-      `- Lire/écrire des fichiers, exécuter du code, gérer des notes`,
       `- Chercher dans ta mémoire (memory_search), consulter le web (web_search)`,
+      `- Consulter l'historique (telegram_history) — TOUJOURS utiliser avant de répondre sur les activités récentes`,
+      `- Lire/écrire des fichiers, exécuter du code, gérer des notes`,
       `- Envoyer des messages Telegram, gérer les emails, le calendrier`,
-      `- Consulter l'historique (telegram_history), les agents, le trading`,
+      `- Consulter les agents, le trading, les positions`,
       `- Gérer des cron jobs, des rappels, des plans`,
       `Quand Nicolas te demande quelque chose, FAIS-LE avec les outils. Ne dis pas "je ne peux pas".`,
+      `**Règle d'or: Appelle un outil AVANT de répondre. Ne réponds jamais avec des données que tu n'as pas vérifiées.**`,
       ``,
       `## Date et heure`,
       `${dateStr}, ${timeStr} (heure de l'Est / America/Toronto).`,
@@ -572,10 +677,25 @@ export class GeminiLiveSession {
       systemParts.push(``, `## Contexte`, this.cachedMemoryContext);
     }
 
-    // Inject recent conversation log for continuity across reconnects
+    // Inject D&D context if a session is active
+    if (this.dndContext) {
+      systemParts.push(``, `## PARTIE D&D EN COURS`, this.dndContext);
+      systemParts.push(
+        `Tu es aussi le Dungeon Master. Continue la narration en cours.`,
+        `Utilise les outils dungeon_play, dungeon_roll, dungeon_status pour gérer la partie.`,
+        `Garde le même ton, les mêmes personnages, et l'intrigue en cours.`,
+      );
+    }
+
+    // Inject conversation summary (compressed by Gemini Flash before reconnect)
+    if (this.conversationSummary) {
+      systemParts.push(``, `## Résumé de la conversation précédente`, this.conversationSummary);
+    }
+
+    // Inject recent conversation log for continuity across reconnects (40 entries, not 10)
     if (this.conversationLog.length > 0) {
-      const recent = this.conversationLog.slice(-10).join("\n");
-      systemParts.push(``, `## Conversation vocale en cours`, recent);
+      const recent = this.conversationLog.slice(-40).join("\n");
+      systemParts.push(``, `## Conversation vocale en cours (${this.conversationLog.length} échanges total)`, recent);
     }
 
     const systemText = systemParts.join("\n");
@@ -651,6 +771,10 @@ export class GeminiLiveSession {
         this.opts.callbacks.onTurnComplete();
         // Save turn + extract memories
         this.saveTurnAndExtract();
+        // Persist conversation to disk every 5 turns (cheap, prevents data loss)
+        if (this.conversationLog.length % 5 === 0) {
+          this.persistConversation();
+        }
       }
 
       return;
@@ -785,6 +909,28 @@ export class GeminiLiveSession {
       callbacks.onToolResult(skillName, truncated);
       this.conversationLog.push(`[Result] ${truncated.slice(0, 100)}`);
 
+      // Detect image generation results and forward to dashboard + Telegram
+      if (skillName.startsWith("image.") || skillName === "pollinations.image") {
+        const imageUrlMatch = truncated.match(/!\[.*?\]\((.*?)\)/);
+        const uploadMatch = truncated.match(/\/uploads\/[^\s)]+/);
+        const imageUrl = imageUrlMatch?.[1] || (uploadMatch ? `http://localhost:3200${uploadMatch[0]}` : null);
+        if (imageUrl) {
+          const caption = String(normalized.prompt || normalized.concept || "Generated image");
+          callbacks.onImageGenerated?.(imageUrl, caption);
+          // Also send to Nicolas's Telegram so he sees it on his phone
+          try {
+            const telegramSkill = getSkill("telegram.send");
+            const adminChatId = config.allowedUsers?.[0] || this.opts.userId;
+            if (telegramSkill && adminChatId) {
+              telegramSkill.execute({
+                chatId: String(adminChatId),
+                text: `🖼️ Image générée (voice): ${caption}\n${imageUrl}`,
+              }).catch(() => {});
+            }
+          } catch {}
+        }
+      }
+
       log.info(
         `[gemini-live] Tool result: ${skillName} → ${truncated.slice(0, 80)}...`,
       );
@@ -808,5 +954,193 @@ export class GeminiLiveSession {
         },
       }),
     );
+  }
+
+  // ── Conversation persistence ─────────────────────────────────
+
+  /** Save conversation log to disk so it survives reconnects and even restarts. */
+  private persistConversation(): void {
+    try {
+      const data = {
+        timestamp: new Date().toISOString(),
+        chatId: this.opts.chatId,
+        summary: this.conversationSummary,
+        logCount: this.conversationLog.length,
+        log: this.conversationLog,
+      };
+      fs.writeFileSync(VOICE_CONV_FILE, JSON.stringify(data, null, 2));
+      log.debug(`[gemini-live] Persisted ${this.conversationLog.length} conversation entries to disk`);
+    } catch (err) {
+      log.warn(`[gemini-live] Failed to persist conversation: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Restore conversation from a previous session file (if recent — within 30 min). */
+  private restoreConversation(): void {
+    try {
+      if (!fs.existsSync(VOICE_CONV_FILE)) return;
+      const raw = fs.readFileSync(VOICE_CONV_FILE, "utf-8");
+      const data = JSON.parse(raw);
+
+      // Only restore if the saved conversation is recent (< 30 min old)
+      const savedAt = new Date(data.timestamp).getTime();
+      const age = Date.now() - savedAt;
+      if (age > 30 * 60 * 1000) {
+        log.debug(`[gemini-live] Saved conversation too old (${Math.round(age / 60000)}min), ignoring`);
+        return;
+      }
+
+      if (Array.isArray(data.log) && data.log.length > 0) {
+        this.conversationLog = data.log;
+        this.conversationSummary = data.summary || "";
+        log.info(`[gemini-live] Restored ${data.log.length} conversation entries from disk (${Math.round(age / 1000)}s old)`);
+      }
+    } catch {
+      // File corrupt or missing — start fresh
+    }
+  }
+
+  /**
+   * Generate a compressed summary of the conversation so far using Gemini Flash.
+   * Called before reconnect to ensure continuity.
+   */
+  private async generateConversationSummary(): Promise<void> {
+    if (this.conversationLog.length < 4) return; // Too short to summarize
+
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${config.geminiApiKey}`;
+      const conversationText = this.conversationLog
+        .filter(l => !l.startsWith("[Result]")) // Skip verbose tool results
+        .slice(-60) // Last 60 entries
+        .join("\n");
+
+      const prompt = `Résume cette conversation vocale entre Nicolas et Kingston en 5-10 phrases concises.
+Garde: les sujets discutés, les décisions prises, les informations importantes, l'état d'une partie de D&D si en cours.
+Si c'est une partie de D&D: garde les noms des personnages, leur situation, le lieu, l'intrigue en cours, et les dernières actions.
+Sois factuel et concis.
+
+CONVERSATION:
+${conversationText}`;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 500 },
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        const summary = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (summary.length > 20) {
+          this.conversationSummary = summary;
+          log.info(`[gemini-live] Generated conversation summary: ${summary.length} chars`);
+        }
+      }
+    } catch (err) {
+      log.debug(`[gemini-live] Summary generation failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // ── D&D context ──────────────────────────────────────────────
+
+  /** Check if there's an active D&D session and build context for the voice prompt. */
+  private refreshDndContext(): void {
+    try {
+      const sessions = dungeonListSessions();
+      const active = sessions.find((s: any) => s.status === "active");
+      if (!active) {
+        this.dndContext = "";
+        return;
+      }
+
+      const session = dungeonGetSession(active.id);
+      if (!session) {
+        this.dndContext = "";
+        return;
+      }
+
+      const characters = dungeonGetCharacters(active.id);
+      const recentTurns = dungeonGetTurns(active.id, 15);
+
+      // Build character descriptions
+      const charLines = characters.map((c: any) => {
+        const inv = Array.isArray(c.inventory) ? c.inventory.join(", ") : "rien";
+        const tag = c.is_npc ? " (PNJ)" : "";
+        return `- ${c.name}${tag}: ${c.race} ${c.class} Niv.${c.level}, HP:${c.hp}/${c.hp_max}, Inventaire:[${inv}]`;
+      });
+
+      // Build recent narrative
+      const turnLines = recentTurns.reverse().map((t: any) => {
+        let line = `Tour ${t.turn_number} (${t.event_type}):`;
+        if (t.player_action) line += ` [Action] ${t.player_action}`;
+        if (t.dm_narrative) line += `\n  [DM] ${t.dm_narrative.slice(0, 300)}`;
+        return line;
+      });
+
+      this.dndContext = [
+        `Campagne: "${session.name}" — ${session.setting || "Fantasy"}`,
+        `Lieu actuel: ${session.current_location}`,
+        `Tour: ${session.turn_number}`,
+        `Session ID: ${active.id}`,
+        ``,
+        `Personnages:`,
+        ...charLines,
+        ``,
+        `Derniers événements:`,
+        ...turnLines,
+      ].join("\n");
+
+      // Also persist D&D state to file for cross-session recall
+      this.persistDndState(session, characters, recentTurns);
+
+      log.info(`[gemini-live] D&D context loaded: "${session.name}" (${characters.length} chars, ${recentTurns.length} turns)`);
+    } catch (err) {
+      log.debug(`[gemini-live] D&D context check failed: ${err instanceof Error ? err.message : err}`);
+      this.dndContext = "";
+    }
+  }
+
+  /** Save D&D state to a persistent markdown file for cross-session memory. */
+  private persistDndState(session: any, characters: any[], turns: any[]): void {
+    try {
+      const charSection = characters.map((c: any) => {
+        const inv = Array.isArray(c.inventory) ? c.inventory.join(", ") : "rien";
+        const tag = c.is_npc ? " (PNJ)" : "";
+        return `### ${c.name}${tag}\n- Race: ${c.race}, Classe: ${c.class}, Niveau: ${c.level}\n- HP: ${c.hp}/${c.hp_max}\n- Inventaire: ${inv}\n- Status: ${c.status || "alive"}`;
+      }).join("\n\n");
+
+      const turnSection = turns.reverse().slice(-20).map((t: any) => {
+        let entry = `**Tour ${t.turn_number}** (${t.event_type})`;
+        if (t.player_action) entry += `\n> ${t.player_action}`;
+        if (t.dm_narrative) entry += `\n${t.dm_narrative.slice(0, 500)}`;
+        return entry;
+      }).join("\n\n---\n\n");
+
+      const md = `# D&D Voice Session — ${session.name}
+*Dernière MAJ: ${new Date().toISOString().slice(0, 16)}*
+*Setting: ${session.setting || "Fantasy"}*
+*Lieu: ${session.current_location}*
+*Tour: ${session.turn_number}*
+*Session ID: ${session.id}*
+
+## Personnages
+
+${charSection}
+
+## Chronique récente
+
+${turnSection}
+`;
+      fs.writeFileSync(VOICE_DND_FILE, md);
+    } catch {}
   }
 }

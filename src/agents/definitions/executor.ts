@@ -169,7 +169,7 @@ function buildExecutorPrompt(cycle: number): string | null {
     `   - POST: Appelle moltbook.post/content.publish pour publier\n` +
     `   - RESEARCH: Appelle web.search/memory.search et stocke via notes.add\n` +
     `   - NOTIFY: Appelle telegram.send\n` +
-    `5. Après chaque tâche, envoie un résumé à Nicolas via telegram.send\n` +
+    `5. Après chaque tâche, log le résumé dans notes.add — telegram.send UNIQUEMENT si Nicolas doit agir\n` +
     `6. Log via analytics.log(skill='executor.process', outcome='success/fail')\n\n` +
     `RÈGLES:\n` +
     `- Si un tool échoue, essaie une alternative (INGÉNIOSITÉ)\n` +

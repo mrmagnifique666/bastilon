@@ -43,63 +43,51 @@ interface AlertLevel {
   note?: string;
 }
 
-const POSITIONS: AlertLevel[] = [
-  {
-    symbol: "TSLA",
-    entryPrice: 410.19,
-    stopLoss: 385,
-    takeProfit1: 450,
-    takeProfit2: 480,
-  },
-  {
-    symbol: "VST",
-    entryPrice: 155.62,
-    stopLoss: 140,
-    takeProfit1: 180,
-    takeProfit2: 210,
-    note: "Earnings 26 fev 2026",
-  },
-  {
-    symbol: "NVST",
-    entryPrice: 0, // will be filled at market open
-    stopLoss: 0,
-    takeProfit1: 0,
-    takeProfit2: 0,
-    note: "Grok pick - Healthcare/Dental - Conviction 4/5",
-  },
-  {
-    symbol: "BBVA",
-    entryPrice: 0,
-    stopLoss: 0,
-    takeProfit1: 0,
-    takeProfit2: 0,
-    note: "Grok pick - Banking/Financials - Conviction 4/5",
-  },
-  {
-    symbol: "AVXL",
-    entryPrice: 0,
-    stopLoss: 0,
-    takeProfit1: 0,
-    takeProfit2: 0,
-    note: "Grok pick - Biotech - Conviction 3/5 speculatif",
-  },
-  {
-    symbol: "DVA",
-    entryPrice: 0,
-    stopLoss: 0,
-    takeProfit1: 0,
-    takeProfit2: 0,
-    note: "Grok pick - Healthcare scanner",
-  },
-  {
-    symbol: "ADNT",
-    entryPrice: 0,
-    stopLoss: 0,
-    takeProfit1: 0,
-    takeProfit2: 0,
-    note: "Grok pick - Auto Parts scanner",
-  },
-];
+// Dynamic positions — loaded from Alpaca API on each tick
+let POSITIONS: AlertLevel[] = [];
+let lastPositionSync = 0;
+const POSITION_SYNC_INTERVAL_MS = 60_000; // Re-sync every 60s
+
+async function syncPositionsFromAlpaca(): Promise<void> {
+  const now = Date.now();
+  if (now - lastPositionSync < POSITION_SYNC_INTERVAL_MS) return;
+
+  try {
+    const positions = await alpacaGet("/v2/positions");
+    const newPositions: AlertLevel[] = [];
+
+    for (const p of positions) {
+      const entry = Number(p.avg_entry_price);
+      const symbol = p.symbol as string;
+
+      // Check if we already have this position (preserve custom levels)
+      const existing = POSITIONS.find((pos) => pos.symbol === symbol);
+      if (existing) {
+        // Update entry price if it changed
+        existing.entryPrice = entry;
+        newPositions.push(existing);
+      } else {
+        // New position — auto-calculate SL (5%) and TP (10%, 20%)
+        newPositions.push({
+          symbol,
+          entryPrice: entry,
+          stopLoss: Math.round(entry * 0.95 * 100) / 100,
+          takeProfit1: Math.round(entry * 1.10 * 100) / 100,
+          takeProfit2: Math.round(entry * 1.20 * 100) / 100,
+        });
+      }
+    }
+
+    POSITIONS = newPositions;
+    lastPositionSync = now;
+
+    if (newPositions.length > 0) {
+      log.debug(`[trading-monitor] Synced ${newPositions.length} positions from Alpaca: ${newPositions.map(p => p.symbol).join(", ")}`);
+    }
+  } catch (err) {
+    log.warn(`[trading-monitor] Failed to sync positions: ${err}`);
+  }
+}
 
 // ── Alpaca intraday data ──
 
@@ -607,33 +595,7 @@ function logTrade(entry: TradeEntry): void {
   log.info(`[trading-monitor] TRADE: ${entry.side} ${entry.qty}x ${entry.symbol} @ $${entry.price} — ${entry.reason}`);
 }
 
-// ── Auto-fill entry prices from Alpaca positions ──
-
-let entryPricesFilled = false;
-
-async function syncEntryPricesFromAlpaca(): Promise<string[]> {
-  if (entryPricesFilled) return [];
-  const changes: string[] = [];
-  try {
-    const positions = await alpacaGet("/v2/positions");
-    for (const p of positions) {
-      const pos = POSITIONS.find((pos) => pos.symbol === p.symbol);
-      if (pos && pos.entryPrice === 0) {
-        const entry = Number(p.avg_entry_price);
-        pos.entryPrice = entry;
-        // Auto-calculate stop-loss (5%) and take-profits (10%, 20%)
-        pos.stopLoss = Math.round(entry * 0.95 * 100) / 100;
-        pos.takeProfit1 = Math.round(entry * 1.10 * 100) / 100;
-        pos.takeProfit2 = Math.round(entry * 1.20 * 100) / 100;
-        changes.push(`${p.symbol}: entry=$${entry.toFixed(2)}, SL=$${pos.stopLoss}, TP1=$${pos.takeProfit1}, TP2=$${pos.takeProfit2}`);
-      }
-    }
-    if (changes.length > 0) entryPricesFilled = true;
-  } catch (err) {
-    log.warn(`[trading-monitor] Failed to sync entry prices: ${err}`);
-  }
-  return changes;
-}
+// syncEntryPricesFromAlpaca removed — replaced by syncPositionsFromAlpaca() above
 
 // ── Risk management ──
 
@@ -688,6 +650,32 @@ function calculatePositionSize(price: number, stopLoss: number): number {
   const riskPerShare = Math.abs(price - stopLoss);
   if (riskPerShare <= 0) return 1;
   return Math.max(1, Math.floor(riskAmount / riskPerShare));
+}
+
+// ── Clean summary formatting for Nicolas ──
+
+function formatCleanSummary(
+  action: "buy" | "sell",
+  symbol: string,
+  qty: number,
+  price: number,
+  reason: string,
+  entryPrice?: number,
+): string {
+  if (action === "buy") {
+    const total = (qty * price).toFixed(0);
+    return `🟢 Achat: ${qty}x ${symbol} @ ${price.toFixed(2)}$ (total: ${total}$)`;
+  }
+  // Sell — compute P&L if we have entry price
+  if (entryPrice && entryPrice > 0) {
+    const pnl = (price - entryPrice) * qty;
+    const pnlPct = ((price - entryPrice) / entryPrice) * 100;
+    const pnlSign = pnl >= 0 ? "+" : "";
+    const emoji = reason.includes("stop-loss") ? "🚨" : reason.includes("take-profit") ? "💰" : "🔴";
+    const label = reason.includes("stop-loss") ? "Stop-Loss" : reason.includes("take-profit") ? "Take-Profit" : "Vente";
+    return `${emoji} ${label}: ${qty}x ${symbol} @ ${price.toFixed(2)}$ (P&L: ${pnlSign}${pnl.toFixed(2)}$ / ${pnlSign}${pnlPct.toFixed(1)}%)`;
+  }
+  return `🔴 Vente: ${qty}x ${symbol} @ ${price.toFixed(2)}$`;
 }
 
 // ── Auto-execution engine ──
@@ -772,16 +760,16 @@ function evaluateAutoTrade(
     sellScore += 15; signals.push(`Mouvement +${techData.changePct.toFixed(1)}% aujourd'hui`);
   }
 
-  // Determine action — need confidence > 60 to act
+  // Determine action — need confidence > 50 to act (lowered for more autonomy)
   const confidence = Math.max(buyScore, sellScore);
-  if (sellScore >= 60) {
+  if (sellScore >= 50) {
     return { action: "SELL", symbol: pos.symbol, qty: 1, reason: signals.join(", "), confidence, signals };
   }
   // Don't auto-buy for existing positions (only for new scanner opportunities)
   return { action: "HOLD", symbol: pos.symbol, qty: 0, reason: signals.join(", ") || "Pas de signal fort", confidence, signals };
 }
 
-async function executeDecision(decision: TradeDecision, sendAlert: (msg: string) => void): Promise<void> {
+async function executeDecision(decision: TradeDecision, sendAlert: (msg: string) => void, entryPrice?: number): Promise<void> {
   if (decision.action === "HOLD") return;
 
   const check = await canTrade();
@@ -791,46 +779,58 @@ async function executeDecision(decision: TradeDecision, sendAlert: (msg: string)
   }
 
   try {
-    const order = await placeOrder(decision.symbol, decision.qty, decision.action === "BUY" ? "buy" : "sell");
+    const side = decision.action === "BUY" ? "buy" as const : "sell" as const;
+    const order = await placeOrder(decision.symbol, decision.qty, side);
     dailyTradeCount++;
+
+    // Estimate fill price from order or latest snapshot
+    const fillPrice = Number(order.filled_avg_price) || Number(order.limit_price) || 0;
+
+    // Compute P&L for sells
+    let pnl: number | undefined;
+    let pnlPct: number | undefined;
+    if (side === "sell" && entryPrice && entryPrice > 0 && fillPrice > 0) {
+      pnl = (fillPrice - entryPrice) * decision.qty;
+      pnlPct = ((fillPrice - entryPrice) / entryPrice) * 100;
+      dailyPnL += pnl;
+    }
 
     // Log to journal
     logTrade({
       timestamp: new Date().toISOString(),
       symbol: decision.symbol,
-      side: decision.action === "BUY" ? "buy" : "sell",
+      side,
       qty: decision.qty,
-      price: 0, // will be filled
+      price: fillPrice,
       reason: decision.reason,
       signals: decision.signals,
+      pnl,
+      pnlPct,
     });
 
-    const emoji = decision.action === "BUY" ? "🟢" : "🔴";
-    sendAlert(
-      `${emoji} **AUTO-TRADE** ${decision.action} ${decision.qty}x ${decision.symbol}\n` +
-      `Raison: ${decision.reason}\n` +
-      `Confiance: ${decision.confidence}%\n` +
-      `Order ID: ${order.id} (${order.status})`
-    );
+    // Send clean summary to Nicolas (no technical noise)
+    const summary = formatCleanSummary(side, decision.symbol, decision.qty, fillPrice, decision.reason, entryPrice);
+    sendAlert(summary);
   } catch (err) {
     log.error(`[trading-monitor] Auto-trade failed: ${err}`);
-    sendAlert(`**AUTO-TRADE ECHEC** ${decision.action} ${decision.symbol}: ${err}`);
+    sendAlert(`🚫 Trade échoué: ${decision.action} ${decision.symbol} — ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
 // ── Intraday tick — runs every heartbeat, no LLM cost ──
 
 let lastAlertKey = ""; // avoid duplicate alerts within same minute
+const signalCooldowns: Map<string, number> = new Map(); // symbol → last signal timestamp
+const SIGNAL_COOLDOWN_MS = 15 * 60 * 1000; // 15 min cooldown for SIGNAL-type alerts
 
 async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<void> {
   if (!isMarketHours()) return;
 
-  // Auto-fill entry prices on first tick (after orders fill at market open)
-  if (!entryPricesFilled && cycle > 2) {
-    const filled = await syncEntryPricesFromAlpaca();
-    if (filled.length > 0) {
-      log.info(`[trading-monitor] Entry prices synced: ${filled.join(", ")}`);
-    }
+  // Sync positions from Alpaca (dynamic — no hardcoded symbols)
+  await syncPositionsFromAlpaca();
+  if (POSITIONS.length === 0) {
+    if (cycle % 60 === 0) log.debug("[trading-monitor] No open positions — skipping tick");
+    return;
   }
 
   const symbols = POSITIONS.map((p) => p.symbol);
@@ -842,7 +842,40 @@ async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<
     return;
   }
 
-  const allSignals: Signal[] = [];
+  // Fetch Alpaca positions once (reused for qty calculation in auto-execution)
+  let alpacaPositions: any[] = [];
+  try {
+    alpacaPositions = await alpacaGet("/v2/positions");
+  } catch { /* non-critical — use default qty */ }
+
+  // Parallelize VWAP + Bollinger fetches for all positions at once
+  const vwapMap = new Map<string, number | null>();
+  const bollingerMap = new Map<string, BollingerBands | null>();
+  if (cycle % 5 === 0) {
+    const vwapPromises = POSITIONS.map(async (pos) => {
+      try {
+        const bars = await fetchIntradayBars(pos.symbol, "5Min", 78);
+        vwapMap.set(pos.symbol, calculateVWAP(bars));
+      } catch { vwapMap.set(pos.symbol, null); }
+    });
+    await Promise.all(vwapPromises);
+  }
+  if (cycle % 15 === 0) {
+    const techPromises = POSITIONS.map(async (pos) => {
+      try {
+        const dailyTech = await fetchTechnicals(pos.symbol);
+        if (dailyTech && dailyTech.closes.length >= 20) {
+          bollingerMap.set(pos.symbol, calculateBollinger(dailyTech.closes));
+          // Store RSI/SMA for later use
+          bollingerMap.set(pos.symbol + "_tech", dailyTech as any);
+        }
+      } catch { /* skip */ }
+    });
+    await Promise.all(techPromises);
+  }
+
+  let signalCount = 0;
+  let alertCount = 0;
 
   for (const pos of POSITIONS) {
     const snap = snapshots[pos.symbol];
@@ -851,12 +884,9 @@ async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<
     const livePrice = snap.latestTrade?.p || snap.minuteBar?.c || 0;
     if (livePrice === 0) continue;
 
-    // Calculate VWAP from today's minute bars (every 5th cycle to save API calls)
-    let vwap: number | null = null;
-    if (cycle % 5 === 0) {
-      const bars = await fetchIntradayBars(pos.symbol, "5Min", 78);
-      vwap = calculateVWAP(bars);
-    }
+    const vwap = vwapMap.get(pos.symbol) ?? null;
+    const bollinger = bollingerMap.get(pos.symbol) as BollingerBands | null ?? null;
+    const dailyTech = bollingerMap.get(pos.symbol + "_tech") as TechnicalData | null;
 
     // Build TechnicalData from snapshot
     const prevClose = snap.prevDailyBar?.c || snap.dailyBar?.o || livePrice;
@@ -867,12 +897,12 @@ async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<
       changePct: prevClose > 0 ? ((livePrice - prevClose) / prevClose) * 100 : 0,
       volume: snap.dailyBar?.v || 0,
       avgVolume: snap.prevDailyBar?.v || 1,
-      rsi14: null,
-      sma20: null,
-      sma50: null,
+      rsi14: dailyTech?.rsi14 ?? null,
+      sma20: dailyTech?.sma20 ?? null,
+      sma50: dailyTech?.sma50 ?? null,
       high: snap.dailyBar?.h || livePrice,
       low: snap.dailyBar?.l || livePrice,
-      closes: [],
+      closes: dailyTech?.closes ?? [],
     };
 
     // Trailing stop update
@@ -881,101 +911,49 @@ async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<
       trailing = updateTrailingStop(pos.symbol, livePrice);
     }
 
-    // Bollinger Bands (need daily closes — fetch every 15 min to save API)
-    let bollinger: BollingerBands | null = null;
-    if (cycle % 15 === 0) {
-      const dailyTech = await fetchTechnicals(pos.symbol);
-      if (dailyTech && dailyTech.closes.length >= 20) {
-        bollinger = calculateBollinger(dailyTech.closes);
-        // Also update RSI and SMAs in techData
-        techData.rsi14 = dailyTech.rsi14;
-        techData.sma20 = dailyTech.sma20;
-        techData.sma50 = dailyTech.sma50;
-        techData.closes = dailyTech.closes;
-      }
-    }
-
-    // Generate alert signals
+    // Generate signals (for logging only — NO sending to Nicolas)
     const signals = generateSignals(techData, pos, vwap, snap);
     const important = signals.filter((s) => s.type === "ALERT" || s.type === "SIGNAL");
-    allSignals.push(...important);
+    signalCount += important.length;
 
-    // Bollinger signal
-    if (bollinger) {
-      if (livePrice <= bollinger.lower) {
-        allSignals.push({ type: "SIGNAL", emoji: "📉", message: `${pos.symbol} touche Bollinger bas $${bollinger.lower.toFixed(2)} — rebond potentiel` });
-      }
-      if (livePrice >= bollinger.upper) {
-        allSignals.push({ type: "SIGNAL", emoji: "📈", message: `${pos.symbol} touche Bollinger haut $${bollinger.upper.toFixed(2)} — correction potentielle` });
-      }
-      if (bollinger.bandwidth < 2) {
-        allSignals.push({ type: "INFO", emoji: "🔧", message: `${pos.symbol} Bollinger squeeze (BW=${bollinger.bandwidth.toFixed(1)}%) — breakout imminent` });
-      }
+    // Log all signals internally (never send to Nicolas)
+    for (const sig of important) {
+      if (sig.type === "ALERT") alertCount++;
+      log.info(`[trading-monitor] ${sig.type}: ${sig.emoji} ${sig.message}`);
     }
 
-    // Trailing stop signal
-    if (trailing?.triggered) {
-      allSignals.push({ type: "ALERT", emoji: "🛑", message: `${pos.symbol} TRAILING STOP @ $${trailing.stopPrice.toFixed(2)} (HWM: $${trailingStops.get(pos.symbol)?.highWaterMark.toFixed(2)})` });
-    }
-
-    // Auto-execution — evaluate and execute trade decisions
-    if (pos.entryPrice > 0) { // only for positions we own
+    // Auto-execution — the bot decides autonomously, only sends clean summary on EXECUTION
+    if (pos.entryPrice > 0) {
       const decision = evaluateAutoTrade(pos, techData, vwap, snap, bollinger, trailing);
-      if (decision.action !== "HOLD" && decision.confidence >= 60) {
-        await executeDecision(decision, sendAlert);
+      if (decision.action !== "HOLD" && decision.confidence >= 50) {
+        // Get qty from pre-fetched Alpaca positions
+        const alpacaPos = alpacaPositions.find((p: any) => p.symbol === pos.symbol);
+        if (alpacaPos) {
+          decision.qty = Math.abs(Number(alpacaPos.qty));
+          // TP1 partial (50%), everything else = full position
+          if (decision.reason.includes("TP1")) {
+            decision.qty = Math.max(1, Math.floor(decision.qty / 2));
+          }
+        }
+        // executeDecision sends clean summary to Nicolas via sendAlert (fire-and-forget)
+        await executeDecision(decision, sendAlert, pos.entryPrice);
       }
     }
   }
 
-  // Log signals to notes only — don't spam Nicolas's Telegram
-  // He only wants notifications when an actual trade is executed (handled in executeDecision)
-  if (allSignals.length > 0) {
-    const alertKey = allSignals.map((s) => s.message).join("|");
-    if (alertKey !== lastAlertKey) {
-      lastAlertKey = alertKey;
-      log.debug(`[trading-monitor] ${allSignals.length} signals (logged, not sent): ${allSignals.map(s => s.message).join("; ").slice(0, 200)}`);
-    }
+  if (signalCount > 0 || alertCount > 0) {
+    log.debug(`[trading-monitor] Tick done: ${alertCount} alerts, ${signalCount} signals (all handled autonomously)`);
   }
 }
 
 // ── Prompt builder (for LLM analysis cycles) ──
 
 function buildTradingMonitorPrompt(cycle: number): string | null {
-  if (!isMarketHours()) return null;
-
-  const rotation = cycle % 3;
-  const positionList = POSITIONS.map(
-    (p) =>
-      `${p.symbol} (entry: $${p.entryPrice || "pending"}, SL: $${p.stopLoss || "N/A"}, TP: $${p.takeProfit1 || "N/A"}/$${p.takeProfit2 || "N/A"})${p.note ? " — " + p.note : ""}`
-  ).join("\n");
-
-  if (rotation === 0) {
-    return (
-      `[MODEL:ollama]\n` +
-      `Tu es TradingMonitor. Voici les positions du portfolio:\n\n` +
-      `${positionList}\n\n` +
-      `Les vérifications quantitatives (RSI, VWAP, stop-loss, take-profit) sont faites automatiquement chaque minute par le code.\n` +
-      `Réponds simplement: "Monitoring actif. Aucune alerte." si tout est normal.`
-    );
-  }
-
-  if (rotation === 1) {
-    return (
-      `[MODEL:ollama]\n` +
-      `Tu es TradingMonitor. Résume l'état du marché.\n` +
-      `Positions:\n${positionList}\n` +
-      `Réponds en 2-3 phrases max.`
-    );
-  }
-
-  return (
-    `[MODEL:ollama]\n` +
-    `Tu es TradingMonitor, analyste quantitatif.\n\n` +
-    `Portfolio:\n${positionList}\n\n` +
-    `Stratégie: Day/swing trading, RSI + VWAP based\n` +
-    `Données intraday: snapshots Alpaca chaque minute, VWAP calculé toutes les 5 min\n\n` +
-    `Donne une analyse brève (3-4 phrases) sur la stratégie et les risques.`
-  );
+  // LLM cycles disabled — all monitoring is done by onTick (zero LLM cost).
+  // The onTick function handles position sync, signal generation, auto-execution,
+  // and sends clean buy/sell summaries to Nicolas via sendAlert.
+  // No need for redundant LLM analysis that generates noisy alerts.
+  return null;
 }
 
 export function createTradingMonitorConfig(): AgentConfig {
@@ -993,10 +971,47 @@ export function createTradingMonitorConfig(): AgentConfig {
   };
 }
 
+// ── Portfolio summary for dashboard/analytics ──
+
+interface PortfolioSummary {
+  timestamp: string;
+  positions: Array<{ symbol: string; price: number; changePct: number; pnlPct: number; signals: number }>;
+  totalSignals: number;
+  alertCount: number;
+  dailyTrades: number;
+  dailyPnL: number;
+}
+
+async function getPortfolioSummary(): Promise<PortfolioSummary> {
+  await syncPositionsFromAlpaca(); // Ensure positions are fresh
+  const symbols = POSITIONS.map(p => p.symbol);
+  const snapshots = symbols.length > 0 ? await fetchAlpacaSnapshots(symbols) : {};
+
+  const positions = POSITIONS.map(pos => {
+    const snap = snapshots[pos.symbol];
+    const livePrice = snap?.latestTrade?.p || snap?.minuteBar?.c || 0;
+    const pnlPct = pos.entryPrice > 0 && livePrice > 0
+      ? ((livePrice - pos.entryPrice) / pos.entryPrice) * 100
+      : 0;
+    const prevClose = snap?.prevDailyBar?.c || snap?.dailyBar?.o || livePrice;
+    const changePct = prevClose > 0 ? ((livePrice - prevClose) / prevClose) * 100 : 0;
+    return { symbol: pos.symbol, price: livePrice, changePct, pnlPct, signals: 0 };
+  });
+
+  return {
+    timestamp: new Date().toISOString(),
+    positions,
+    totalSignals: 0,
+    alertCount: 0,
+    dailyTrades: dailyTradeCount,
+    dailyPnL,
+  };
+}
+
 // ── Exported for use by trading skills ──
 export {
   fetchTechnicals, generateSignals, calculateRollingRsi, detectRsiDivergence,
   fetchAlpacaSnapshots, fetchIntradayBars, calculateVWAP, calculateBollinger,
-  placeOrder, loadJournal, POSITIONS, RISK_RULES,
+  placeOrder, loadJournal, POSITIONS, RISK_RULES, getPortfolioSummary,
 };
-export type { TechnicalData, Signal, AlertLevel, IntradayBar, AlpacaSnapshot, BollingerBands, TradeEntry };
+export type { TechnicalData, Signal, AlertLevel, IntradayBar, AlpacaSnapshot, BollingerBands, TradeEntry, PortfolioSummary };

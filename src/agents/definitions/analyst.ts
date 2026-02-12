@@ -44,10 +44,10 @@ function buildAnalystPrompt(cycle: number): string | null {
     return (
       `Tu es Analyst, agent de reporting de Kingston.\n` +
       AGENT_RULES +
-      `Mission: Rapport marché du jour.\n\n` +
+      `Mission: Rapport marché du jour — LOG INTERNE.\n\n` +
       `1. Utilise market.report pour le rapport marché\n` +
       `2. Si le marché est fermé (weekend), dis-le brièvement\n` +
-      `3. Envoie le rapport à Nicolas via telegram.send`
+      `3. Log le rapport dans notes.add avec tag "analyst-daily" — PAS de telegram.send sauf mouvement extrême (>3% indices)`
     );
   }
 
@@ -64,7 +64,7 @@ function buildAnalystPrompt(cycle: number): string | null {
       `   - Wins de la semaine\n` +
       `   - Métriques (skills, erreurs, temps)\n` +
       `   - Améliorations possibles\n` +
-      `4. Envoie le rapport via telegram.send`
+      `4. Log le rapport dans notes.add avec tag "analyst-weekly" — PAS de telegram.send`
     );
   }
 
@@ -77,7 +77,7 @@ function buildAnalystPrompt(cycle: number): string | null {
       `1. Utilise analytics.report avec timeframe="today"\n` +
       `2. Vérifie les métriques: taux d'erreur, skills populaires\n` +
       `3. Log via analytics.log(skill="analyst.snapshot", outcome="success")\n` +
-      `4. Envoie un résumé concis (3-4 lignes) via telegram.send`
+      `4. Log dans notes.add avec tag "analyst-snapshot" — PAS de telegram.send`
     );
   }
 

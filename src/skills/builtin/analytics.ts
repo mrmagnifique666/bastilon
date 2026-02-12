@@ -5,7 +5,7 @@
 import { registerSkill } from "../loader.js";
 import { getDb } from "../../storage/store.js";
 import { log } from "../../utils/log.js";
-import { getTodayUsage, getUsageSummary } from "../../llm/tokenTracker.js";
+import { getTodayUsage, getUsageSummary, getUsageTrend, PRICING_TABLE } from "../../llm/tokenTracker.js";
 
 function ensureTable(): void {
   const db = getDb();
@@ -256,4 +256,123 @@ registerSkill({
   },
 });
 
-log.debug("Registered 5 analytics.* skills");
+// ── Cost Intelligence ──
+
+registerSkill({
+  name: "analytics.costs",
+  description: "Cost report by provider with daily trend. Shows theoretical cost (most providers are free-tier).",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      days: { type: "number", description: "Number of days to analyze (default: 7)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const days = Number(args.days) || 7;
+    const trend = getUsageTrend(days);
+    if (trend.length === 0) return `Pas de données de coûts pour les ${days} derniers jours.`;
+
+    // Aggregate by provider
+    const byProvider: Record<string, { input: number; output: number; reqs: number; cost: number }> = {};
+    const byDate: Record<string, number> = {};
+
+    for (const row of trend) {
+      if (!byProvider[row.provider]) byProvider[row.provider] = { input: 0, output: 0, reqs: 0, cost: 0 };
+      byProvider[row.provider].input += row.input_tokens;
+      byProvider[row.provider].output += row.output_tokens;
+      byProvider[row.provider].reqs += row.requests;
+      byProvider[row.provider].cost += row.cost;
+      byDate[row.date] = (byDate[row.date] || 0) + row.cost;
+    }
+
+    const lines = [`**Rapport de coûts — ${days} derniers jours**\n`];
+    lines.push(`| Provider | Requests | Input | Output | Coût théorique |`);
+    lines.push(`|----------|----------|-------|--------|----------------|`);
+
+    let totalCost = 0;
+    for (const [prov, stats] of Object.entries(byProvider).sort((a, b) => b[1].cost - a[1].cost)) {
+      totalCost += stats.cost;
+      lines.push(
+        `| ${prov} | ${stats.reqs} | ${(stats.input / 1000).toFixed(1)}K | ${(stats.output / 1000).toFixed(1)}K | $${stats.cost.toFixed(4)} |`
+      );
+    }
+
+    lines.push(`\n**Total théorique**: $${totalCost.toFixed(4)} (coût réel: $0 — free tiers + Max plan)\n`);
+
+    lines.push(`**Tendance journalière:**`);
+    for (const [date, cost] of Object.entries(byDate).sort()) {
+      const bar = "█".repeat(Math.min(20, Math.round(cost * 100)));
+      lines.push(`  ${date}: $${cost.toFixed(4)} ${bar}`);
+    }
+
+    return lines.join("\n");
+  },
+});
+
+registerSkill({
+  name: "analytics.optimize",
+  description: "Suggest token usage optimizations: flag expensive providers, tasks that could use cheaper models.",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    const trend = getUsageTrend(7);
+    if (trend.length === 0) return "Pas assez de données pour optimiser (besoin d'au moins 1 jour).";
+
+    const byProvider: Record<string, { reqs: number; tokens: number; cost: number }> = {};
+    let totalReqs = 0;
+
+    for (const row of trend) {
+      if (!byProvider[row.provider]) byProvider[row.provider] = { reqs: 0, tokens: 0, cost: 0 };
+      byProvider[row.provider].reqs += row.requests;
+      byProvider[row.provider].tokens += row.input_tokens + row.output_tokens;
+      byProvider[row.provider].cost += row.cost;
+      totalReqs += row.requests;
+    }
+
+    const suggestions: string[] = [];
+
+    // Flag providers with >25% of total requests
+    for (const [prov, stats] of Object.entries(byProvider)) {
+      const pct = totalReqs > 0 ? (stats.reqs / totalReqs) * 100 : 0;
+      if (pct > 25 && prov !== "ollama") {
+        suggestions.push(
+          `**${prov}** utilise ${pct.toFixed(0)}% des requêtes (${stats.reqs}). ` +
+          `Considérer migrer plus de tâches vers Ollama (gratuit, local).`
+        );
+      }
+    }
+
+    // Check if expensive providers handle many small requests
+    for (const [prov, stats] of Object.entries(byProvider)) {
+      const pricing = PRICING_TABLE[prov as keyof typeof PRICING_TABLE];
+      if (!pricing) continue;
+      const avgTokens = stats.reqs > 0 ? stats.tokens / stats.reqs : 0;
+      if (pricing.inputPer1M > 1 && avgTokens < 500 && stats.reqs > 10) {
+        suggestions.push(
+          `**${prov}** traite ${stats.reqs} requêtes avec avg ${Math.round(avgTokens)} tokens/req. ` +
+          `Petites requêtes → utiliser Groq ou Ollama au lieu de ${prov}.`
+        );
+      }
+    }
+
+    // Check Ollama utilization
+    const ollamaStats = byProvider["ollama"];
+    if (ollamaStats) {
+      const ollamaPct = totalReqs > 0 ? (ollamaStats.reqs / totalReqs) * 100 : 0;
+      if (ollamaPct > 60) {
+        suggestions.push(`Ollama gère ${ollamaPct.toFixed(0)}% du trafic — excellente utilisation du modèle local.`);
+      }
+    } else {
+      suggestions.push(`Ollama n'est pas utilisé. Activer le routing Ollama-first pour réduire les coûts API.`);
+    }
+
+    if (suggestions.length === 0) {
+      return "Utilisation optimale — aucune suggestion d'amélioration.";
+    }
+
+    return `**Suggestions d'optimisation (7 derniers jours):**\n\n` + suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n\n");
+  },
+});
+
+log.debug("Registered 7 analytics.* skills");
