@@ -63,6 +63,43 @@ README_MOLTBOOK.md
 README_PROSPECTS.md
 PROMPT_FOR_CLI.md
 
+# Temp scripts & debug artifacts (root-level)
+*.cjs
+*.mjs
+tmp_*
+test_*.cjs
+check_*.cjs
+generate_*.cjs
+send_*.cjs
+
+# Screenshots & images (root-level debug)
+*.png
+*.gif
+!src/**/*.png
+!src/**/*.gif
+
+# JSON dumps (root-level)
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Misc temp files
+*.err
+*.txt
+!LICENSE.txt
+check_mem.js
+data/
+relay/voices/
+
+# Report docs (root-level)
+*_SOLUTION.md
+*_SUMMARY_*.md
+AUDIT_*.md
+SCHEDULER_*.md
+BRIEFING_*.md
+EMILE_*.md
+
 # Generated/personal files
 V1/
 scripts/
