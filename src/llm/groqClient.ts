@@ -10,13 +10,11 @@ import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { logTokens, enforceRateDelay, markCallComplete } from "./tokenTracker.js";
 import { getTurns } from "../storage/store.js";
-import { isToolPermitted } from "../security/policy.js";
-import { getSkill, validateArgs } from "../skills/loader.js";
 import { getSkillsForOllama } from "../skills/loader.js";
-import { buildSystemInstruction, normalizeArgs } from "./gemini.js";
+import { buildSystemInstruction } from "./gemini.js";
+import { executeToolCall } from "./shared/toolExecutor.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MAX_TOOL_RESULT_LENGTH = 4000;
 
 // --- Types ---
 
@@ -63,14 +61,6 @@ export interface GroqChatOptions {
   isAdmin: boolean;
   userId: number;
   onToolProgress?: (chatId: number, msg: string) => Promise<void>;
-}
-
-// --- Placeholder detection ---
-const PLACEHOLDER_RE = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
-
-function truncateResult(result: string): string {
-  if (result.length <= MAX_TOOL_RESULT_LENGTH) return result;
-  return result.slice(0, MAX_TOOL_RESULT_LENGTH) + `\n... [truncated, ${result.length} chars total]`;
 }
 
 // --- Convert Ollama tool format to OpenAI format ---
@@ -224,82 +214,16 @@ export async function runGroqChat(options: GroqChatOptions): Promise<string> {
       tool_calls: msg.tool_calls,
     });
 
-    // Process each tool call
+    // Process each tool call via shared executor
     for (const tc of msg.tool_calls) {
-      const toolName = tc.function.name;
       let rawArgs: Record<string, unknown> = {};
-      try {
-        rawArgs = JSON.parse(tc.function.arguments || "{}");
-      } catch {
-        rawArgs = {};
-      }
+      try { rawArgs = JSON.parse(tc.function.arguments || "{}"); } catch { rawArgs = {}; }
 
-      log.info(`[groq-chat] Tool call (step ${step + 1}): ${toolName}(${JSON.stringify(rawArgs).slice(0, 200)})`);
-
-      // Progress callback (only for real Telegram chats)
-      if (onToolProgress && chatId > 1000) {
-        onToolProgress(chatId, `🔧 ${toolName}...`).catch(() => {});
-      }
-
-      // Validate tool exists
-      const skill = getSkill(toolName);
-      if (!skill) {
-        log.warn(`[groq-chat] Unknown tool "${toolName}" — feeding error back`);
-        messages.push({ role: "tool", content: `Error: Unknown tool "${toolName}".`, tool_call_id: tc.id });
-        continue;
-      }
-
-      // Security: block browser.* for internal chatIds
-      const AGENT_BROWSER_ALLOWED = ["browser.navigate", "browser.snapshot", "browser.extract", "browser.status"];
-      if ((chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.") && !AGENT_BROWSER_ALLOWED.includes(toolName)) {
-        messages.push({ role: "tool", content: `Error: Tool "${toolName}" is blocked for agents.`, tool_call_id: tc.id });
-        continue;
-      }
-
-      // Permission check
-      if (!isToolPermitted(toolName, userId)) {
-        messages.push({ role: "tool", content: `Error: Tool "${toolName}" not permitted.`, tool_call_id: tc.id });
-        continue;
-      }
-
-      // Normalize and validate args
-      const safeArgs = normalizeArgs(toolName, rawArgs, chatId, skill);
-
-      // Rewrite telegram chatId for internal sessions
-      if ((chatId === 1 || chatId >= 100 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
-        safeArgs.chatId = String(config.adminChatId);
-      }
-
-      const validationError = validateArgs(safeArgs, skill.argsSchema);
-      if (validationError) {
-        log.warn(`[groq-chat] Arg validation failed for ${toolName}: ${validationError}`);
-        messages.push({ role: "tool", content: `Error: ${validationError}`, tool_call_id: tc.id });
-        continue;
-      }
-
-      // Block placeholder hallucinations
-      const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
-      if (outboundTools.includes(toolName)) {
-        const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
-        if (PLACEHOLDER_RE.test(textArg)) {
-          log.warn(`[groq-chat] Blocked ${toolName} — placeholder detected`);
-          messages.push({ role: "tool", content: `Error: Replace placeholders with real data.`, tool_call_id: tc.id });
-          continue;
-        }
-      }
-
-      // Execute the tool
-      try {
-        log.info(`[groq-chat] Executing tool (step ${step + 1}/${config.maxToolChain}): ${toolName}`);
-        const result = await skill.handler(safeArgs);
-        const resultStr = truncateResult(typeof result === "string" ? result : JSON.stringify(result));
-        log.debug(`[groq-chat] Tool result (${toolName}): ${resultStr.slice(0, 200)}`);
-        messages.push({ role: "tool", content: resultStr, tool_call_id: tc.id });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        log.warn(`[groq-chat] Tool ${toolName} failed: ${errMsg}`);
-        messages.push({ role: "tool", content: `Error: ${errMsg}`, tool_call_id: tc.id });
-      }
+      const result = await executeToolCall(
+        { toolName: tc.function.name, rawArgs, callId: tc.id },
+        { chatId, userId, provider: "groq-chat", onToolProgress, step, maxSteps: config.maxToolChain }
+      );
+      messages.push({ role: "tool", content: result.content, tool_call_id: result.tool_call_id });
     }
   }
 

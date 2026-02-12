@@ -92,11 +92,12 @@ export function selectModel(
     return "opus";
   }
 
-  // Deep conversation: very long summary + long message → opus
-  if (chatId && message.length > 200) {
+  // Deep conversation: very long message + very long summary → opus
+  // Only trigger for genuinely complex requests, not normal conversation
+  if (chatId && message.length > 500) {
     try {
       const summary = getSummary(chatId);
-      if (summary?.summary && summary.summary.length > 800) {
+      if (summary?.summary && summary.summary.length > 2000) {
         log.debug(`[model] Deep conversation (summary ${summary.summary.length} chars + msg ${message.length} chars) → opus`);
         return "opus";
       }

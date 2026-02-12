@@ -11,10 +11,9 @@
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { getTurns } from "../storage/store.js";
-import { isToolPermitted } from "../security/policy.js";
-import { getSkill, validateArgs } from "../skills/loader.js";
 import { getSkillsForOllama } from "../skills/loader.js";
-import { buildSystemInstruction, normalizeArgs } from "./gemini.js";
+import { buildSystemInstruction } from "./gemini.js";
+import { executeToolCall } from "./shared/toolExecutor.js";
 import { logEstimatedTokens } from "./tokenTracker.js";
 
 const SYSTEM_PROMPT = [
@@ -126,20 +125,6 @@ interface OllamaChatResponse {
   done?: boolean;
 }
 
-const MAX_TOOL_RESULT_LENGTH = 8000;
-
-/** Detect bracket placeholders like [RÉSUMÉ], [PLACEHOLDER], [DATA HERE] in text */
-const PLACEHOLDER_RE = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
-
-function containsPlaceholders(text: string): boolean {
-  return PLACEHOLDER_RE.test(text);
-}
-
-function truncateResult(result: string): string {
-  if (result.length <= MAX_TOOL_RESULT_LENGTH) return result;
-  return result.slice(0, MAX_TOOL_RESULT_LENGTH) + `\n... [truncated, ${result.length} chars total]`;
-}
-
 /**
  * Run Ollama with full tool chain support via /api/chat.
  * Modelled on runGemini() — handles the complete tool loop internally.
@@ -212,105 +197,11 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
     });
 
     for (const tc of msg.tool_calls) {
-      const toolName = tc.function.name;
-      const rawArgs = tc.function.arguments || {};
-
-      log.info(`[ollama-chat] Tool call (step ${step + 1}): ${toolName}(${JSON.stringify(rawArgs).slice(0, 200)})`);
-
-      // Anti-hallucination: validate tool exists
-      const skill = getSkill(toolName);
-      if (!skill) {
-        log.warn(`[ollama-chat] Unknown tool "${toolName}" — feeding error back`);
-        messages.push({
-          role: "tool",
-          content: `Error: Unknown tool "${toolName}". Check the tool catalog and try again.`,
-        });
-        continue;
-      }
-
-      // Hard block: agents/cron (internal chatIds) cannot use browser.*
-      if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
-        log.warn(`[ollama-chat] Internal session chatId=${chatId} tried to call ${toolName} — blocked`);
-        messages.push({
-          role: "tool",
-          content: `Error: Tool "${toolName}" is blocked for agents/cron — use web.search instead.`,
-        });
-        continue;
-      }
-
-      // Security check
-      if (!isToolPermitted(toolName, userId)) {
-        const errMsg = `Error: Tool "${toolName}" is not permitted${skill.adminOnly ? " (admin only)" : ""}.`;
-        log.warn(`[ollama-chat] ${errMsg}`);
-        messages.push({ role: "tool", content: errMsg });
-        continue;
-      }
-
-      // Normalize args (snake_case → camelCase, auto-inject chatId, type coercion)
-      const safeArgs = normalizeArgs(toolName, rawArgs, chatId, skill);
-
-      // Agent/cron chatId fix: internal chatIds (100-106 agents, 200-249 cron) use fake IDs for session isolation.
-      // Rewrite telegram.* targets to the real admin chatId so messages actually deliver.
-      if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
-        safeArgs.chatId = String(config.adminChatId);
-        log.debug(`[ollama-chat] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
-      }
-
-      // Validate args
-      const validationError = validateArgs(safeArgs, skill.argsSchema);
-      if (validationError) {
-        log.warn(`[ollama-chat] Arg validation failed for ${toolName}: ${validationError}`);
-        messages.push({
-          role: "tool",
-          content: `Error: ${validationError}. Fix the arguments and try again.`,
-        });
-        continue;
-      }
-
-      // Block placeholder hallucinations in outbound messages
-      const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
-      if (outboundTools.includes(toolName)) {
-        const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
-        if (containsPlaceholders(textArg)) {
-          log.warn(`[ollama-chat] Blocked ${toolName} — placeholder detected: "${textArg.slice(0, 120)}"`);
-          messages.push({
-            role: "tool",
-            content: `Error: Your message contains placeholder brackets like [RÉSUMÉ] instead of real data. Use tools (trading.positions, client.list, etc.) to get REAL data first, then compose the message with actual values. NEVER use [BRACKETS] as placeholders.`,
-          });
-          continue;
-        }
-      }
-
-      // Execute skill
-      let toolResult: string;
-      try {
-        log.info(`[ollama-chat] Executing tool (step ${step + 1}/${config.maxToolChain}): ${toolName}`);
-        toolResult = await skill.execute(safeArgs);
-      } catch (err) {
-        const errorMsg = `Tool "${toolName}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
-        log.error(`[ollama-chat] ${errorMsg}`);
-        messages.push({
-          role: "tool",
-          content: `Error: ${errorMsg}\n\nBe RESOURCEFUL: Don't give up. Try an alternative tool or approach to achieve the same goal. For example:\n- web.search failed? Try api.call or web.fetch directly.\n- trading.* failed? Try api.call to the Alpaca API.\n- A tool doesn't exist? Use shell.exec or api.call as a workaround.`,
-        });
-        continue;
-      }
-
-      log.debug(`[ollama-chat] Tool result (${toolName}): ${toolResult.slice(0, 200)}`);
-
-      // Progress callback
-      if (onToolProgress) {
-        const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
-        try {
-          await onToolProgress(chatId, `⚙️ **${toolName}**\n\`\`\`\n${preview}\n\`\`\``);
-        } catch { /* ignore progress errors */ }
-      }
-
-      // Feed result back as tool response
-      messages.push({
-        role: "tool",
-        content: truncateResult(toolResult),
-      });
+      const result = await executeToolCall(
+        { toolName: tc.function.name, rawArgs: tc.function.arguments || {} },
+        { chatId, userId, provider: "ollama-chat", onToolProgress, step, maxSteps: config.maxToolChain }
+      );
+      messages.push({ role: "tool", content: result.content });
     }
     // Loop continues — Ollama processes tool results
   }
