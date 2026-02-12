@@ -157,6 +157,17 @@ async function duckDuckGoSearch(query: string, count: number): Promise<string> {
 
 const BRAVE_TIMEOUT_MS = 10_000;
 const MAX_RESULTS = 8;
+let _lastBraveCall = 0;
+const BRAVE_MIN_DELAY_MS = 1100; // Free plan: 1 req/sec
+
+async function enforceBraveRateLimit(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - _lastBraveCall;
+  if (elapsed < BRAVE_MIN_DELAY_MS) {
+    await new Promise(r => setTimeout(r, BRAVE_MIN_DELAY_MS - elapsed));
+  }
+  _lastBraveCall = Date.now();
+}
 
 interface BraveWebResult {
   title: string;
@@ -200,6 +211,7 @@ registerSkill({
     const url = `https://api.search.brave.com/res/v1/web/search?${params}`;
 
     try {
+      await enforceBraveRateLimit();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), BRAVE_TIMEOUT_MS);
 
@@ -215,6 +227,10 @@ registerSkill({
       clearTimeout(timer);
 
       if (!res.ok) {
+        // On 429 rate limit, fallback to DuckDuckGo instead of returning error
+        if (res.status === 429) {
+          return duckDuckGoSearch(query, count);
+        }
         const body = await res.text().catch(() => "");
         return `Error: Brave API ${res.status}: ${body.slice(0, 200)}`;
       }
