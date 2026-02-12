@@ -373,9 +373,10 @@ async function handleMessageInner(
     }
   }
 
-  // First pass: Claude
-  log.info(`[router] ${modelLabel(tier)} Sending to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
-  let result = await runClaude(chatId, userMessage, userIsAdmin, model);
+  // First pass: Claude — always use a Claude model (tier may be groq/ollama if fallback reached here)
+  const claudeModel = (tier === "groq" || tier === "ollama") ? getModelId("sonnet") : model;
+  log.info(`[router] ${modelLabel(tier)} Sending to Claude (admin=${userIsAdmin}, model=${claudeModel}): ${userMessage.slice(0, 100)}...`);
+  let result = await runClaude(chatId, userMessage, userIsAdmin, claudeModel);
   log.info(`[router] Claude responded with type: ${result.type}`);
 
   if (result.type === "message") {
@@ -843,12 +844,14 @@ async function handleMessageStreamingInner(
     }
   }
 
-  log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
+  // Always use a Claude model for streaming (tier may be groq/ollama if fallback reached here)
+  const streamClaudeModel = (tier === "groq" || tier === "ollama") ? getModelId("sonnet") : model;
+  log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}, model=${streamClaudeModel}): ${userMessage.slice(0, 100)}...`);
 
   // First pass: try streaming (with safety timeout to prevent hanging)
   let streamResult: StreamResult;
   try {
-    const streamPromise = runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, model);
+    const streamPromise = runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, streamClaudeModel);
     const safetyTimeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error("Stream response safety timeout")), config.cliTimeoutMs + 10_000)
     );

@@ -77,17 +77,9 @@ export function selectModel(
     }
   }
 
-  // Opus only via explicit [MODEL:opus] override — never auto-selected
-  // Groq handles everything else fast and free
-
-  // Everything else → Groq (fast, free, with tools) → fallback to sonnet if Groq unavailable
-  if (config.groqApiKey) {
-    log.debug(`[model] User message → groq (fast, $0)`);
-    return "groq";
-  }
-
-  // Groq not available — use sonnet
-  log.debug(`[model] User message → sonnet (groq unavailable)`);
+  // Everything else → Sonnet (reliable tool calling via Claude CLI streaming)
+  // Groq/Ollama are kept as fallbacks only — their tool calling is unreliable
+  log.debug(`[model] User message → sonnet (Claude streaming)`);
   return "sonnet";
 }
 
