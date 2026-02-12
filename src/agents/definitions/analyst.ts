@@ -34,8 +34,8 @@ function buildAnalystPrompt(cycle: number): string | null {
 
   const AGENT_RULES =
     `RÈGLES STRICTES:\n` +
-    `- INTERDIT: N'utilise JAMAIS browser.* — ça ouvre Chrome sur l'écran de Nicolas.\n` +
-    `- Utilise: market.*, analytics.*, notes.*, telegram.send, web.search, api.call, trading.*, files.*\n` +
+    `- BROWSER: Tu peux utiliser browser.snapshot et browser.extract pour lire des pages web (headless, isolé). INTERDIT: browser.click, browser.type, browser.computer_use.\n` +
+    `- Utilise: market.*, analytics.*, notes.*, telegram.send, web.search, api.call, trading.*, files.*, browser.snapshot, browser.extract\n` +
     `- INGÉNIOSITÉ: Si market.report échoue, utilise trading.account + trading.positions + web.search pour construire le rapport toi-même.\n` +
     `- Ne rapporte jamais "impossible" — trouve un autre chemin.\n\n`;
 

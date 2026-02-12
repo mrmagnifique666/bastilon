@@ -194,7 +194,7 @@ const TIER2_KEYWORDS: Array<{ keywords: string[]; prefix: string }> = [
   { keywords: ["moltbook", "agent social"], prefix: "moltbook." },
   { keywords: ["stripe", "paiement", "payment", "facture"], prefix: "stripe." },
   { keywords: ["hubspot", "crm", "client"], prefix: "hubspot." },
-  { keywords: ["browser", "navigateur", "page web", "screenshot", "puppeteer"], prefix: "browser." },
+  { keywords: ["browser", "navigateur", "page web", "screenshot", "playwright"], prefix: "browser." },
   { keywords: ["analytics", "analyse", "statistique"], prefix: "analytics." },
   { keywords: ["optimize", "optimis", "a/b test"], prefix: "optimize." },
   { keywords: ["learn", "apprendre", "api", "documentation"], prefix: "learn." },

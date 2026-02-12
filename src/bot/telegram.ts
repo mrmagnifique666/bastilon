@@ -14,7 +14,7 @@ import { clearTurns, clearSession, getTurns, getSession, logError } from "../sto
 import { setBotSendFn, setBotVoiceFn, setBotPhotoFn } from "../skills/builtin/telegram.js";
 import { log } from "../utils/log.js";
 import { debounce } from "./debouncer.js";
-import { enqueueAdmin } from "./chatLock.js";
+import { enqueueAdmin, interruptCurrent, isAdminBusy } from "./chatLock.js";
 import { sendFormatted } from "./formatting.js";
 import { createDraftController } from "./draftMessage.js";
 import { compactContext } from "../orchestrator/compaction.js";
@@ -318,10 +318,20 @@ export function createBot(): Bot {
       return; // Another message will carry the combined payload
     }
 
+    // INTERRUPT: If Kingston is currently processing a user message, interrupt it
+    // so the new message gets handled promptly instead of waiting in queue
+    if (isAdminBusy()) {
+      const wasInterrupted = interruptCurrent();
+      if (wasInterrupted) {
+        log.info(`[telegram] Interrupted current processing — new message from user ${userId}`);
+      }
+    }
+
     // Enqueue via global admin lock — serializes user messages, scheduler, agents
+    // Type "user" = interruptible by new user messages
     enqueueAdmin(async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
-      await reaction.ack();
+      try { await Promise.race([reaction.ack(), new Promise((_, r) => setTimeout(r, 5000))]); } catch { /* timeout ok */ }
 
       // Show typing indicator
       try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
@@ -431,7 +441,7 @@ export function createBot(): Bot {
           await ctx.reply("Désolé, une erreur s'est produite. Réessaie.");
         } catch { /* if even this fails, we can't do more */ }
       }
-    });
+    }, "user");
   });
 
   // --- Photo handler ---
@@ -455,7 +465,7 @@ export function createBot(): Bot {
 
     enqueueAdmin(async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
-      await reaction.ack();
+      try { await Promise.race([reaction.ack(), new Promise((_, r) => setTimeout(r, 5000))]); } catch { /* timeout ok */ }
       try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
 
       let localPath: string | undefined;
@@ -489,7 +499,7 @@ export function createBot(): Bot {
       } finally {
         // Don't delete — keep for image.edit. Files are cleaned up on next upload cycle.
       }
-    });
+    }, "user");
   });
 
   // --- Document handler ---
@@ -514,7 +524,7 @@ export function createBot(): Bot {
 
     enqueueAdmin(async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
-      await reaction.ack();
+      try { await Promise.race([reaction.ack(), new Promise((_, r) => setTimeout(r, 5000))]); } catch { /* timeout ok */ }
       try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
 
       let localPath: string | undefined;
@@ -537,7 +547,7 @@ export function createBot(): Bot {
           fs.unlinkSync(localPath);
         }
       }
-    });
+    }, "user");
   });
 
   // --- Voice message handler ---

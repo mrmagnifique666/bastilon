@@ -28,9 +28,7 @@
     "googleapis": "^171.4.0",
     "grammy": "^1.30.0",
     "msedge-tts": "^2.0.4",
-    "puppeteer": "^24.37.2",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "playwright": "^1.51.0",
     "ws": "^8.19.0",
     "youtube-transcript": "^1.2.1"
   },

@@ -20,6 +20,7 @@ import { selectModel, getModelId, modelLabel, type ModelTier } from "../llm/mode
 import { isClaudeRateLimited, detectAndSetRateLimit, clearRateLimit, rateLimitRemainingMinutes, shouldProbeRateLimit, markProbeAttempt } from "../llm/rateLimitState.js";
 import { isProviderCoolingDown, markProviderCooldown, clearProviderCooldown, providerCooldownSeconds } from "../llm/providerCooldown.js";
 import { emitHook } from "../hooks/hooks.js";
+import { isInterrupted } from "../bot/chatLock.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
 /**
@@ -410,6 +411,14 @@ async function handleMessageInner(
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
+    // CHECK INTERRUPT: if a new user message arrived, stop processing
+    if (isInterrupted()) {
+      const msg = "[Traitement interrompu — nouveau message reçu]";
+      log.info(`[router] Tool chain interrupted at step ${step + 1} — new user message`);
+      addTurn(chatId, { role: "assistant", content: msg });
+      return msg;
+    }
+
     const { tool, args } = result;
 
     // Guard against malformed tool calls
@@ -459,9 +468,11 @@ async function handleMessageInner(
       return textContent;
     }
 
-    // Hard block: agents/cron (internal chatIds) cannot use browser.* tools — they open visible windows
-    if (isInternalChatId(chatId) && tool.startsWith("browser.")) {
-      const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
+    // Agents can use read-only browser skills (snapshot, extract, navigate, status)
+    // but destructive skills (click, type, computer_use, etc.) are blocked
+    const AGENT_BROWSER_ALLOWED = ["browser.navigate", "browser.snapshot", "browser.extract", "browser.status"];
+    if (isInternalChatId(chatId) && tool.startsWith("browser.") && !AGENT_BROWSER_ALLOWED.includes(tool)) {
+      const msg = `Tool "${tool}" is blocked for agents — use browser.snapshot or web.search instead.`;
       log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
       addTurn(chatId, { role: "assistant", content: `[blocked ${tool}]` });
@@ -904,6 +915,14 @@ async function handleMessageStreamingInner(
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
+    // CHECK INTERRUPT: if a new user message arrived, stop processing
+    if (isInterrupted()) {
+      const msg = "[Traitement interrompu — nouveau message reçu]";
+      log.info(`[router-stream] Tool chain interrupted at step ${step + 1} — new user message`);
+      addTurn(chatId, { role: "assistant", content: msg });
+      return msg;
+    }
+
     // Safety: check tool chain timeout
     if (Date.now() - toolChainStart > TOOL_CHAIN_TIMEOUT_MS) {
       const msg = `La chaîne d'outils a pris trop de temps (${Math.round((Date.now() - toolChainStart) / 1000)}s). Réessaie.`;
@@ -941,10 +960,11 @@ async function handleMessageStreamingInner(
       log.debug(`[router-stream] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
-    // Hard block: agents/cron cannot use browser.* tools
-    if (isInternalChatId(chatId) && tool.startsWith("browser.")) {
-      const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
-      log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
+    // Agents can use read-only browser skills but destructive ones are blocked
+    const AGENT_BROWSER_ALLOWED_STREAM = ["browser.navigate", "browser.snapshot", "browser.extract", "browser.status"];
+    if (isInternalChatId(chatId) && tool.startsWith("browser.") && !AGENT_BROWSER_ALLOWED_STREAM.includes(tool)) {
+      const msg = `Tool "${tool}" is blocked for agents — use browser.snapshot or web.search instead.`;
+      log.warn(`[router-stream] Agent chatId=${chatId} tried to call ${tool} — blocked`);
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
       addTurn(chatId, { role: "assistant", content: `[blocked ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });

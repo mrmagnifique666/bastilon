@@ -1,9 +1,9 @@
 /**
  * Built-in skills: browser.*
- * Puppeteer-based browser automation — admin only.
+ * Playwright-based browser automation — admin only (migrated from Puppeteer).
  */
 import { registerSkill } from "../loader.js";
-import { browserManager } from "../../browser/manager.js";
+import { browserManager, type Page } from "../../browser/manager.js";
 import { config } from "../../config/env.js";
 import { log } from "../../utils/log.js";
 import { getBotPhotoFn } from "./telegram.js";
@@ -47,11 +47,12 @@ async function takeAndSendScreenshot(chatId: number, selector?: string): Promise
 
   let buffer: Buffer;
   if (selector) {
-    const el = await page.$(selector);
-    if (!el) return `Error: element not found for selector "${selector}".`;
-    buffer = (await el.screenshot()) as Buffer;
+    const el = page.locator(selector).first();
+    const count = await el.count();
+    if (count === 0) return `Error: element not found for selector "${selector}".`;
+    buffer = Buffer.from(await el.screenshot());
   } else {
-    buffer = (await page.screenshot({ fullPage: false })) as Buffer;
+    buffer = Buffer.from(await page.screenshot({ fullPage: false }));
   }
 
   const currentUrl = page.url();
@@ -65,13 +66,13 @@ async function takeAndSendScreenshot(chatId: number, selector?: string): Promise
   }
 }
 
-// ── Existing Skills ─────────────────────────────────────────
+// ── Skills ───────────────────────────────────────────────────
 
 registerSkill({
   name: "browser.navigate",
   description:
     "Navigate to a URL. Returns page title and text content. Optionally takes a screenshot.",
-  adminOnly: true,
+  adminOnly: false,
   argsSchema: {
     type: "object",
     properties: {
@@ -142,7 +143,7 @@ registerSkill({
     type: "object",
     properties: {
       selector: { type: "string", description: "CSS selector to click" },
-      text: { type: "string", description: "Visible text to find and click (uses XPath)" },
+      text: { type: "string", description: "Visible text to find and click" },
     },
   },
   async execute(args): Promise<string> {
@@ -155,18 +156,14 @@ registerSkill({
 
     try {
       if (selector) {
-        await page.waitForSelector(selector, { timeout: config.browserTimeoutMs });
-        await page.click(selector);
+        await page.locator(selector).first().click({ timeout: config.browserTimeoutMs });
       } else {
-        // Find by visible text via XPath
-        const escaped = text!.replace(/'/g, "\\'");
-        const [el] = await page.$$(`xpath/.//a[contains(text(),"${escaped}")] | .//button[contains(text(),"${escaped}")] | .//*[contains(text(),"${escaped}")]`);
-        if (!el) return `Error: no element found with text "${text}".`;
-        await el.click();
+        // Playwright native text-based click — much better than XPath
+        await page.getByText(text!, { exact: false }).first().click({ timeout: config.browserTimeoutMs });
       }
 
-      // Wait for page to settle after click, then report what's visible
-      await new Promise((r) => setTimeout(r, 1500));
+      // Wait for page to settle after click
+      await page.waitForTimeout(1500);
       const url = page.url();
       const title = await page.title();
       const visibleText = await page.evaluate(() => {
@@ -201,16 +198,15 @@ registerSkill({
     const page = await browserManager.getPage();
 
     try {
-      await page.waitForSelector(selector, { timeout: config.browserTimeoutMs });
+      const locator = page.locator(selector).first();
+      await locator.waitFor({ timeout: config.browserTimeoutMs });
 
       if (clear) {
-        await page.click(selector, { count: 3 }); // select all
-        await page.keyboard.press("Backspace");
+        await locator.fill(""); // Playwright's fill() clears first
       }
 
-      await page.type(selector, text);
+      await locator.fill(text); // fill() is more reliable than type() for forms
 
-      // Report page state after typing
       const url = page.url();
       const title = await page.title();
       return `Typed "${text.length > 50 ? text.slice(0, 50) + "..." : text}" into ${selector}.\n\nPage: ${url} — ${title}\nTIP: Use browser.click() to submit the form, or browser.screenshot() to see the current state.`;
@@ -224,7 +220,7 @@ registerSkill({
   name: "browser.extract",
   description:
     "Extract content from the current page, optionally from a specific element.",
-  adminOnly: true,
+  adminOnly: false,
   argsSchema: {
     type: "object",
     properties: {
@@ -239,20 +235,15 @@ registerSkill({
     const page = await browserManager.getPage();
 
     try {
-      const el = await page.$(selector);
-      if (!el) return `Error: element not found for selector "${selector}".`;
+      const locator = page.locator(selector).first();
+      const count = await locator.count();
+      if (count === 0) return `Error: element not found for selector "${selector}".`;
 
       let content: string;
       if (format === "html") {
-        content = await page.evaluate(
-          (el) => el.outerHTML,
-          el
-        );
+        content = await locator.evaluate(el => el.outerHTML);
       } else {
-        content = await page.evaluate(
-          (el) => (el as HTMLElement).innerText || el.textContent || "",
-          el
-        );
+        content = await locator.innerText();
       }
 
       return `Extracted from ${selector} (${format}):\n${truncate(content)}`;
@@ -288,7 +279,7 @@ registerSkill({
   },
 });
 
-// ── Phase 2: Computer Use ───────────────────────────────────
+// ── Computer Use (Vision-based) ─────────────────────────────
 
 const VISION_PROMPT = `You are controlling a browser to accomplish a goal. You see a screenshot.
 Respond with EXACTLY ONE JSON action, nothing else. Available actions:
@@ -313,7 +304,6 @@ type CUAction =
 
 function parseCUAction(raw: string): CUAction | null {
   try {
-    // Extract JSON from potential markdown fences or surrounding text
     const jsonMatch = raw.match(/\{[^{}]*"action"\s*:\s*"[^"]+?"[^{}]*\}/);
     if (!jsonMatch) return null;
     return JSON.parse(jsonMatch[0]) as CUAction;
@@ -325,7 +315,7 @@ function parseCUAction(raw: string): CUAction | null {
 registerSkill({
   name: "browser.computer_use",
   description:
-    "Autonomous browser control via screenshot analysis. Give a goal and the bot takes screenshots, analyzes them with Gemini vision, and clicks/types at coordinates to achieve the goal. Requires GEMINI_API_KEY.",
+    "Autonomous browser control via screenshot analysis. Give a goal and the bot takes screenshots, analyzes them with Gemini vision, and clicks/types at coordinates to achieve the goal.",
   adminOnly: true,
   argsSchema: {
     type: "object",
@@ -352,7 +342,6 @@ registerSkill({
 
     const page = await browserManager.getPage();
 
-    // Navigate to starting URL if provided
     if (url) {
       const urlError = validateUrl(url);
       if (urlError) return `Error: ${urlError}`;
@@ -369,14 +358,11 @@ registerSkill({
     const steps: string[] = [];
 
     for (let step = 1; step <= maxSteps; step++) {
-      // Take screenshot
-      const screenshotBuffer = (await page.screenshot({ fullPage: false })) as Buffer;
+      const screenshotBuffer = Buffer.from(await page.screenshot({ fullPage: false }));
       const base64 = screenshotBuffer.toString("base64");
 
-      // Send screenshot to Telegram
       await sendPhoto(chatId, screenshotBuffer, `Step ${step}/${maxSteps}`);
 
-      // Ask Gemini vision for next action
       let actionText: string;
       try {
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
@@ -416,7 +402,6 @@ registerSkill({
 
       log.info(`[browser.computer_use] Step ${step}: ${JSON.stringify(action)}`);
 
-      // Execute the action
       try {
         switch (action.action) {
           case "click":
@@ -425,7 +410,7 @@ registerSkill({
             break;
 
           case "double_click":
-            await page.mouse.click(action.x, action.y, { count: 2 });
+            await page.mouse.dblclick(action.x, action.y);
             steps.push(`Step ${step}: double_click(${action.x}, ${action.y})`);
             break;
 
@@ -440,14 +425,14 @@ registerSkill({
             break;
 
           case "key":
-            await page.keyboard.press(action.key as any);
+            await page.keyboard.press(action.key);
             steps.push(`Step ${step}: key(${action.key})`);
             break;
 
           case "scroll": {
             const delta = (action.direction === "down" ? 1 : -1) * (action.amount || 3) * 100;
             await page.mouse.move(action.x || 640, action.y || 360);
-            await page.mouse.wheel({ deltaY: delta });
+            await page.mouse.wheel(0, delta);
             steps.push(
               `Step ${step}: scroll(${action.direction}, amount=${action.amount || 3})`
             );
@@ -456,8 +441,7 @@ registerSkill({
 
           case "done":
             steps.push(`Step ${step}: DONE — ${action.summary}`);
-            // Send final screenshot
-            const finalBuffer = (await page.screenshot({ fullPage: false })) as Buffer;
+            const finalBuffer = Buffer.from(await page.screenshot({ fullPage: false }));
             await sendPhoto(chatId, finalBuffer, `Done: ${action.summary}`);
             return `Computer use completed in ${step} steps.\n\n${steps.join("\n")}\n\nResult: ${action.summary}`;
         }
@@ -468,15 +452,14 @@ registerSkill({
         break;
       }
 
-      // Brief pause between steps to let the page react
-      await new Promise((r) => setTimeout(r, 500));
+      await page.waitForTimeout(500);
     }
 
     return `Computer use finished after ${steps.length} steps.\n\n${steps.join("\n")}`;
   },
 });
 
-// ── Phase 3: Additional Skills ──────────────────────────────
+// ── Additional Skills ────────────────────────────────────────
 
 registerSkill({
   name: "browser.scroll",
@@ -498,21 +481,17 @@ registerSkill({
 
     try {
       if (selector) {
-        await page.evaluate(
-          (sel: string, dir: string, amt: number) => {
-            const el = document.querySelector(sel);
-            if (!el) throw new Error(`Element not found: ${sel}`);
-            el.scrollBy(0, dir === "down" ? amt : -amt);
+        await page.locator(selector).first().evaluate(
+          (el: HTMLElement, opts: { dir: string; amt: number }) => {
+            el.scrollBy(0, opts.dir === "down" ? opts.amt : -opts.amt);
           },
-          selector,
-          direction,
-          amount
+          { dir: direction, amt: amount }
         );
         return `Scrolled ${direction} ${amount}px within ${selector}`;
       }
 
       const delta = direction === "down" ? amount : -amount;
-      await page.mouse.wheel({ deltaY: delta });
+      await page.mouse.wheel(0, delta);
       return `Scrolled ${direction} ${amount}px`;
     } catch (err) {
       return `Error scrolling: ${err instanceof Error ? err.message : String(err)}`;
@@ -538,8 +517,8 @@ registerSkill({
     const page = await browserManager.getPage();
 
     try {
-      const result = await page.select(selector, value);
-      return `Selected value "${value}" in ${selector}. Selected: [${result.join(", ")}]`;
+      const result = await page.locator(selector).first().selectOption(value);
+      return `Selected value "${value}" in ${selector}. Selected: [${Array.isArray(result) ? result.join(", ") : result}]`;
     } catch (err) {
       return `Error selecting: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -568,21 +547,17 @@ registerSkill({
 
     try {
       if (delay > 0) {
-        await new Promise((r) => setTimeout(r, Math.min(delay, 30000)));
+        await page.waitForTimeout(Math.min(delay, 30000));
         return `Waited ${delay}ms.`;
       }
 
       if (selector) {
-        await page.waitForSelector(selector, { timeout });
+        await page.locator(selector).first().waitFor({ timeout });
         return `Element appeared: ${selector}`;
       }
 
       if (text) {
-        await page.waitForFunction(
-          (t: string) => document.body?.innerText?.includes(t),
-          { timeout },
-          text
-        );
+        await page.getByText(text).first().waitFor({ timeout });
         return `Text found: "${text}"`;
       }
 
@@ -614,11 +589,11 @@ registerSkill({
     const index = Number(args.index);
     const url = args.url as string | undefined;
 
-    const browser = browserManager.getBrowser();
-    if (!browser) return "Error: no browser instance active.";
+    const ctx = browserManager.getContext();
+    if (!ctx) return "Error: no browser context active.";
 
     try {
-      const pages = await browser.pages();
+      const pages = ctx.pages();
 
       switch (action) {
         case "list": {
@@ -652,7 +627,7 @@ registerSkill({
         }
 
         case "new": {
-          const newPage = await browser.newPage();
+          const newPage = await ctx.newPage();
           if (url) {
             const urlError = validateUrl(url);
             if (urlError) return `Error: ${urlError}`;
@@ -662,7 +637,7 @@ registerSkill({
             });
           }
           await newPage.bringToFront();
-          const updatedPages = await browser.pages();
+          const updatedPages = ctx.pages();
           return `Opened new tab (index ${updatedPages.length - 1}): ${newPage.url()}`;
         }
 
@@ -717,12 +692,15 @@ registerSkill({
     const name = args.name as string | undefined;
     const value = args.value as string | undefined;
     const domain = args.domain as string | undefined;
+    const ctx = browserManager.getContext();
     const page = await browserManager.getPage();
+
+    if (!ctx) return "Error: no browser context active.";
 
     try {
       switch (action) {
         case "get": {
-          const cookies = await page.cookies();
+          const cookies = await ctx.cookies();
           if (name) {
             const found = cookies.filter((c) => c.name === name);
             if (found.length === 0) return `No cookie found with name "${name}".`;
@@ -736,26 +714,18 @@ registerSkill({
             return "Error: name and value are required for set.";
           }
           const currentUrl = new URL(page.url());
-          await page.setCookie({
+          await ctx.addCookies([{
             name,
             value: value || "",
             domain: domain || currentUrl.hostname,
-          });
+            path: "/",
+          }]);
           return `Cookie set: ${name}=${value}`;
         }
 
         case "clear": {
-          if (name) {
-            const cookies = await page.cookies();
-            const toDelete = cookies.filter((c) => c.name === name);
-            if (toDelete.length === 0) return `No cookie found with name "${name}".`;
-            await page.deleteCookie(...toDelete);
-            return `Deleted ${toDelete.length} cookie(s) named "${name}".`;
-          }
-          const all = await page.cookies();
-          if (all.length === 0) return "No cookies to clear.";
-          await page.deleteCookie(...all);
-          return `Cleared ${all.length} cookie(s).`;
+          await ctx.clearCookies(name ? { name } : undefined);
+          return name ? `Cleared cookies named "${name}".` : "Cleared all cookies.";
         }
 
         default:
@@ -788,26 +758,8 @@ registerSkill({
     const page = await browserManager.getPage();
 
     try {
-      const parts = keys.split("+").map((k) => k.trim());
-
-      if (parts.length === 1) {
-        // Single key press
-        await page.keyboard.press(parts[0] as any);
-        return `Pressed: ${parts[0]}`;
-      }
-
-      // Key combo: hold modifiers, press last key, release modifiers
-      const modifiers = parts.slice(0, -1);
-      const mainKey = parts[parts.length - 1];
-
-      for (const mod of modifiers) {
-        await page.keyboard.down(mod as any);
-      }
-      await page.keyboard.press(mainKey as any);
-      for (const mod of modifiers.reverse()) {
-        await page.keyboard.up(mod as any);
-      }
-
+      // Playwright natively supports combos like "Control+a"
+      await page.keyboard.press(keys);
       return `Pressed: ${keys}`;
     } catch (err) {
       return `Error pressing keys: ${err instanceof Error ? err.message : String(err)}`;
@@ -815,7 +767,7 @@ registerSkill({
   },
 });
 
-// ── Phase 4: Semantic Snapshots (OpenClaw-inspired) ─────────
+// ── Semantic Snapshots (OpenClaw-inspired) ───────────────────
 
 registerSkill({
   name: "browser.snapshot",
@@ -829,7 +781,7 @@ Example output:
   [3] textbox "Search..." (focused)
   [4] button "Search"
   [5] link "Sign In"`,
-  adminOnly: true,
+  adminOnly: false,
   argsSchema: {
     type: "object",
     properties: {
@@ -860,39 +812,33 @@ Example output:
     }
 
     try {
-      // Inject data-bastilon-ref attributes and collect the tree
-      const snapshot = await page.evaluate((interactiveFlag: boolean) => {
-        const INTERACTIVE_ROLES = new Set([
-          "a", "button", "input", "select", "textarea", "details", "summary",
-          "[role=button]", "[role=link]", "[role=tab]", "[role=menuitem]",
-          "[role=checkbox]", "[role=radio]", "[role=switch]", "[role=slider]",
-          "[role=textbox]", "[role=combobox]", "[role=searchbox]",
-          "[role=option]", "[role=listbox]",
-        ]);
+      // Use Playwright's built-in accessibility tree API
+      const accessibilityTree = await page.accessibility.snapshot({ interestingOnly: interactiveOnly });
 
+      if (!accessibilityTree) {
+        return "Error: could not capture accessibility tree.";
+      }
+
+      // Also inject data-bastilon-ref for browser.act compatibility
+      const snapshot = await page.evaluate((interactiveFlag: boolean) => {
         const INTERACTIVE_SELECTOR = [
           "a[href]", "button", "input:not([type=hidden])", "select", "textarea",
-          "details", "summary",
-          "[role=button]", "[role=link]", "[role=tab]", "[role=menuitem]",
-          "[role=checkbox]", "[role=radio]", "[role=switch]", "[role=slider]",
+          "[role=button]", "[role=tab]", "[role=menuitem]",
+          "[role=checkbox]", "[role=radio]", "[role=slider]",
           "[role=textbox]", "[role=combobox]", "[role=searchbox]",
-          "[role=option]", "[role=listbox]",
-          "[onclick]", "[tabindex]",
+          "[role=option]", "[onclick]", "[tabindex]",
         ].join(",");
 
         const LANDMARK_SELECTOR = [
           "h1", "h2", "h3", "h4", "h5", "h6",
-          "nav", "main", "header", "footer", "aside", "section", "article", "form",
+          "nav", "main", "header", "footer", "aside", "section", "form",
           "[role=heading]", "[role=navigation]", "[role=main]", "[role=banner]",
-          "[role=contentinfo]", "[role=complementary]", "[role=form]", "[role=search]",
-          "[role=region]", "[role=dialog]", "[role=alert]", "[role=alertdialog]",
-          "img[alt]", "[role=img]",
+          "[role=dialog]", "[role=alert]", "img[alt]",
         ].join(",");
 
         function getRole(el: Element): string {
           const ariaRole = el.getAttribute("role");
           if (ariaRole) return ariaRole;
-
           const tag = el.tagName.toLowerCase();
           const type = (el as HTMLInputElement).type?.toLowerCase();
           switch (tag) {
@@ -913,9 +859,6 @@ Example output:
             case "main": return "main";
             case "header": return "banner";
             case "footer": return "contentinfo";
-            case "aside": return "complementary";
-            case "section": return "region";
-            case "article": return "article";
             case "form": return "form";
             case "details": return "group";
             case "summary": return "button";
@@ -924,29 +867,18 @@ Example output:
         }
 
         function getName(el: Element): string {
-          // aria-label takes priority
           const ariaLabel = el.getAttribute("aria-label");
           if (ariaLabel) return ariaLabel.trim();
-
-          // aria-labelledby
           const labelledBy = el.getAttribute("aria-labelledby");
           if (labelledBy) {
             const ref = document.getElementById(labelledBy);
             if (ref) return ref.textContent?.trim() || "";
           }
-
-          // alt for images
           if (el.tagName === "IMG") return (el as HTMLImageElement).alt || "";
-
-          // placeholder for inputs
           const placeholder = (el as HTMLInputElement).placeholder;
           if (placeholder) return placeholder;
-
-          // title attribute
           const title = el.getAttribute("title");
           if (title) return title.trim();
-
-          // innerText (limited)
           const text = (el as HTMLElement).innerText?.trim() || "";
           return text.length > 80 ? text.slice(0, 77) + "..." : text;
         }
@@ -959,7 +891,6 @@ Example output:
           if ((el as HTMLInputElement).readOnly) states.push("readonly");
           if (el.getAttribute("aria-expanded") === "true") states.push("expanded");
           if (el.getAttribute("aria-selected") === "true") states.push("selected");
-          if (el.getAttribute("aria-pressed") === "true") states.push("pressed");
           if ((el as HTMLInputElement).value) {
             const v = (el as HTMLInputElement).value;
             if (v.length > 0 && v.length <= 40) states.push(`value="${v}"`);
@@ -968,51 +899,33 @@ Example output:
           return states;
         }
 
-        // Collect elements
         const selector = interactiveFlag
           ? INTERACTIVE_SELECTOR + "," + LANDMARK_SELECTOR
           : "*";
         const elements = document.querySelectorAll(selector);
-
         const results: Array<{
-          ref: number;
-          role: string;
-          name: string;
-          states: string[];
-          depth: number;
-          selector: string;
+          ref: number; role: string; name: string; states: string[];
+          depth: number; selector: string;
         }> = [];
 
         let refCounter = 1;
-
         elements.forEach((el) => {
-          // Skip invisible elements
           const style = window.getComputedStyle(el);
           if (style.display === "none" || style.visibility === "hidden") return;
           if ((el as HTMLElement).offsetWidth === 0 && (el as HTMLElement).offsetHeight === 0) return;
-
           const role = getRole(el);
-          if (role === "generic") return; // skip non-semantic
-
+          if (role === "generic") return;
           const name = getName(el);
           const states = getState(el);
           const ref = refCounter++;
-
-          // Inject data attribute for later retrieval
           el.setAttribute("data-bastilon-ref", String(ref));
-
-          // Compute depth for hierarchy
           let depth = 0;
           let parent = el.parentElement;
           while (parent) {
             if (parent.hasAttribute("data-bastilon-ref")) depth++;
             parent = parent.parentElement;
           }
-
-          // Build a stable selector
-          const stableSelector = `[data-bastilon-ref="${ref}"]`;
-
-          results.push({ ref, role, name, states, depth, selector: stableSelector });
+          results.push({ ref, role, name, states, depth, selector: `[data-bastilon-ref="${ref}"]` });
         });
 
         return results;
@@ -1050,12 +963,12 @@ registerSkill({
   name: "browser.act",
   description:
     `Perform an action on a page element identified by its ref number from browser.snapshot.
-Actions: click, type, clear, hover, focus, select.
+Actions: click, type, fill, clear, hover, focus, select, check, uncheck.
 Much more reliable than CSS selectors — uses the ref from the last semantic snapshot.
 
 Examples:
   browser.act(ref=3, action=click)
-  browser.act(ref=5, action=type, text="hello world")
+  browser.act(ref=5, action=fill, text="hello world")
   browser.act(ref=8, action=select, value="option2")`,
   adminOnly: true,
   argsSchema: {
@@ -1064,10 +977,10 @@ Examples:
       ref: { type: "string", description: "Element ref number from browser.snapshot" },
       action: {
         type: "string",
-        description: "Action: click, type, clear, hover, focus, select, check, uncheck",
+        description: "Action: click, type, fill, clear, hover, focus, select, check, uncheck",
       },
-      text: { type: "string", description: "Text to type (for action=type)" },
-      value: { type: "string", description: "Value to select (for action=select)" },
+      text: { type: "string", description: "Text for action=type or action=fill" },
+      value: { type: "string", description: "Value for action=select" },
     },
     required: ["ref", "action"],
   },
@@ -1087,59 +1000,102 @@ Examples:
     const page = await browserManager.getPage();
 
     try {
-      const el = await page.$(selector);
-      if (!el) {
+      const locator = page.locator(selector).first();
+      const count = await locator.count();
+      if (count === 0) {
         return `Error: element [ref=${ref}] no longer exists in the DOM. The page may have changed — take a new browser.snapshot.`;
       }
 
       switch (action) {
         case "click":
-          await el.click();
+          await locator.click();
           return `Clicked [ref=${ref}]. Page: ${page.url()}`;
 
         case "type":
           if (!text) return "Error: 'text' is required for action=type.";
-          await el.click();
-          await el.type(text);
+          await locator.pressSequentially(text, { delay: 50 });
           return `Typed "${text.length > 50 ? text.slice(0, 50) + "..." : text}" into [ref=${ref}].`;
 
+        case "fill":
+          if (!text) return "Error: 'text' is required for action=fill.";
+          await locator.fill(text);
+          return `Filled "${text.length > 50 ? text.slice(0, 50) + "..." : text}" into [ref=${ref}].`;
+
         case "clear":
-          await el.click({ count: 3 }); // select all
-          await page.keyboard.press("Backspace");
+          await locator.fill("");
           return `Cleared [ref=${ref}].`;
 
         case "hover":
-          await el.hover();
+          await locator.hover();
           return `Hovering [ref=${ref}].`;
 
         case "focus":
-          await el.focus();
+          await locator.focus();
           return `Focused [ref=${ref}].`;
 
         case "select":
           if (!value) return "Error: 'value' is required for action=select.";
-          await page.select(selector, value);
+          await locator.selectOption(value);
           return `Selected "${value}" in [ref=${ref}].`;
 
         case "check":
-          await page.evaluate((s: string) => {
-            const el = document.querySelector(s) as HTMLInputElement;
-            if (el && !el.checked) el.click();
-          }, selector);
+          await locator.check();
           return `Checked [ref=${ref}].`;
 
         case "uncheck":
-          await page.evaluate((s: string) => {
-            const el = document.querySelector(s) as HTMLInputElement;
-            if (el && el.checked) el.click();
-          }, selector);
+          await locator.uncheck();
           return `Unchecked [ref=${ref}].`;
 
         default:
-          return `Error: unknown action "${action}". Use: click, type, clear, hover, focus, select, check, uncheck.`;
+          return `Error: unknown action "${action}". Use: click, type, fill, clear, hover, focus, select, check, uncheck.`;
       }
     } catch (err) {
       return `Error acting on [ref=${ref}]: ${err instanceof Error ? err.message : String(err)}`;
     }
+  },
+});
+
+// ── Browser Management ──────────────────────────────────────
+
+registerSkill({
+  name: "browser.restart",
+  description:
+    "Force restart the browser process. Use when the browser is hung, unresponsive, or in a bad state. The browser runs in an isolated process, so restart is safe.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {},
+  },
+  async execute(): Promise<string> {
+    try {
+      await browserManager.restart();
+      return "Browser server restarted successfully. Take a new browser.snapshot or browser.navigate to use it.";
+    } catch (err) {
+      return `Error restarting browser: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+registerSkill({
+  name: "browser.status",
+  description: "Check if the browser is running and connected.",
+  adminOnly: false,
+  argsSchema: {
+    type: "object",
+    properties: {},
+  },
+  async execute(): Promise<string> {
+    const alive = browserManager.isAlive();
+    if (alive) {
+      try {
+        const page = await browserManager.getPage();
+        const url = page.url();
+        const title = await page.title();
+        return `Browser: RUNNING (Playwright + Chromium, process isolated)\nCurrent page: ${url}\nTitle: ${title}`;
+      } catch {
+        return "Browser: CONNECTED but page error. Try browser.restart().";
+      }
+    }
+    return "Browser: NOT RUNNING (will auto-launch on next browser.* call)";
   },
 });

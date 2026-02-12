@@ -103,8 +103,8 @@ const ANTI_HALLUCINATION =
 
 const AGENT_RULES =
   `RÈGLES AGENT:\n` +
-  `- INTERDIT: N'utilise JAMAIS browser.* (ça ouvre Chrome sur l'écran de Nicolas)\n` +
-  `- Utilise: web.search, web.fetch, trading.*, client.*, revenue.*, content.*, mind.*\n` +
+  `- BROWSER: Tu peux utiliser browser.snapshot et browser.extract pour lire des pages web (headless, isolé). INTERDIT: browser.click, browser.type, browser.computer_use.\n` +
+  `- Utilise: web.search, web.fetch, trading.*, client.*, revenue.*, content.*, mind.*, browser.snapshot, browser.extract\n` +
   `- Chaque action importante → mind.decide pour la logger\n` +
   `- Questions pour Nicolas → mind.ask (pas telegram.send directement pour les questions)\n\n`;
 

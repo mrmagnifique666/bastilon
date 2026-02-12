@@ -39,8 +39,8 @@ function isQuietHours(): boolean {
 
 const AGENT_RULES =
   `REGLES STRICTES:\n` +
-  `- INTERDIT: N'utilise JAMAIS browser.* (navigate, click, etc.) — ça ouvre Chrome sur l'écran de Nicolas.\n` +
-  `- Utilise: web.search, web.fetch, notes.*, telegram.send, trading.*, api.call, shell.exec, gmail.*, files.*\n` +
+  `- BROWSER: Tu peux utiliser browser.snapshot et browser.extract pour lire des pages web (headless, isolé). INTERDIT: browser.click, browser.type, browser.computer_use.\n` +
+  `- Utilise: web.search, web.fetch, notes.*, telegram.send, trading.*, api.call, shell.exec, gmail.*, files.*, browser.snapshot, browser.extract\n` +
   `- Sois concis et actionnable.\n` +
   `- Si tu trouves quelque chose d'important, envoie via telegram.send.\n` +
   `- Si rien d'urgent, log dans notes.add et ne dérange PAS Nicolas.\n` +
