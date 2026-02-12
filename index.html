@@ -445,7 +445,7 @@
     <div class="container">
       <div class="hero-badge">v2.0 &mdash; Open Source AI Agent Framework</div>
       <h1>Build AI agents that think, act, and learn.</h1>
-      <p>Bastilon is an autonomous AI agent framework. 7 autonomous agents, 357+ built-in skills, multi-LLM pyramid, voice &amp; wake word. Deploy your own Kingston.</p>
+      <p>Bastilon is an autonomous AI agent framework. 7 autonomous agents + subordinates, 476+ built-in skills, typed workflows, multi-LLM pyramid, MCP server, voice &amp; wake word, Dungeon Master. Deploy your own Kingston.</p>
       <div class="hero-actions">
         <a href="https://github.com/mrmagnifique666/bastilon" class="btn btn-primary">
           Get Started
@@ -467,7 +467,7 @@
         <div class="terminal-body">
           <div><span class="prompt">$</span> <span class="cmd">npx bastilon init my-agent</span></div>
           <div class="output">Creating agent framework...</div>
-          <div class="output">Installing 357 skills...</div>
+          <div class="output">Installing 476 skills...</div>
           <div class="success">Ready. Your agent is live.</div>
           <br>
           <div><span class="prompt">$</span> <span class="cmd">npx bastilon start</span></div>
@@ -494,28 +494,28 @@
         </div>
         <div class="feature-card">
           <div class="feature-icon"><img src="assets/feature-skills.png" alt="Skills"></div>
-          <h3>357+ Built-in Skills</h3>
-          <p>Email, SMS, trading, browser automation, social media, voice, wake word, knowledge graph, cron jobs, episodic memory, and more. All ready out of the box.</p>
+          <h3>476+ Built-in Skills</h3>
+          <p>Email, SMS, trading, browser automation, social media, voice, wake word, knowledge graph, cron jobs, episodic memory, workflows, MCP server, RAG ingestion, D&amp;D dungeon master, and more. All ready out of the box.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon"><img src="assets/feature-multi-agent.png" alt="Multi-Agent"></div>
-          <h3>7-Agent System</h3>
-          <p>Scout prospects leads. Analyst reports performance. Sentinel monitors security. Kingston Mind makes autonomous business decisions. Learner, Executor, Trading Monitor. All running 24/7.</p>
+          <h3>7+ Agent System</h3>
+          <p>Scout prospects leads. Analyst reports performance. Sentinel monitors security. Kingston Mind makes autonomous business decisions. Learner, Executor, Trading Monitor. Plus on-demand subordinate agents. All running 24/7.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon"><img src="assets/feature-self-improving.png" alt="Self-Improving"></div>
           <h3>Self-Improving Memory</h3>
-          <p>Knowledge graph, episodic memory, behavioral rules engine, semantic memory with embeddings. Kingston remembers, reasons, and evolves autonomously.</p>
+          <p>Knowledge graph, episodic memory, behavioral rules engine, semantic memory with embeddings, RAG URL ingestion, nightly council reviews. Kingston remembers, reasons, and evolves autonomously.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon"><img src="assets/feature-multi-platform.png" alt="Multi-Platform"></div>
-          <h3>Multi-Platform</h3>
-          <p>Telegram, Twitter, LinkedIn, Reddit, Discord, Facebook, Instagram, WhatsApp, SMS. Connect everywhere your users are.</p>
+          <h3>Multi-Platform + Gateway</h3>
+          <p>Telegram, Twitter, LinkedIn, Reddit, Discord, Facebook, Instagram, WhatsApp, SMS. WebSocket gateway, MCP server for Claude Desktop. Connect everywhere your users are.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon"><img src="assets/feature-voice.png" alt="Voice"></div>
-          <h3>Voice + Wake Word</h3>
-          <p>ElevenLabs TTS + Deepgram STT + Picovoice wake word. Say "Computer" and Kingston listens. Phone calls via Twilio integration.</p>
+          <h3>Voice + Wake Word + Gemini Live</h3>
+          <p>Edge TTS + Deepgram STT + Picovoice wake word + Gemini Live cloud streaming. Say "Computer" and Kingston listens. Phone calls via Twilio. Real-time voice conversations with tool execution.</p>
         </div>
       </div>
     </div>
@@ -589,19 +589,52 @@
         <span class="skill-tag">client.proposal</span>
         <span class="skill-tag">content.publish</span>
         <span class="skill-tag">agents.delegate</span>
+        <span class="skill-tag">agents.spawn</span>
+        <span class="skill-tag">agents.profile</span>
+        <span class="skill-tag">workflow.run</span>
+        <span class="skill-tag">workflow.approve</span>
         <span class="skill-tag">ollama.chat</span>
         <span class="skill-tag">web.search</span>
         <span class="skill-tag">ftp.upload</span>
         <span class="skill-tag">shell.exec</span>
         <span class="skill-tag">git.commit</span>
         <span class="skill-tag">soul.read</span>
+        <span class="skill-tag">soul.update</span>
         <span class="skill-tag">image.generate</span>
         <span class="skill-tag">translate.text</span>
         <span class="skill-tag">pdf.extract_text</span>
         <span class="skill-tag">desktop.open</span>
         <span class="skill-tag">system.health</span>
+        <span class="skill-tag">news.headlines</span>
+        <span class="skill-tag">forex.convert</span>
+        <span class="skill-tag">nlp.sentiment</span>
+        <span class="skill-tag">google.search</span>
+        <span class="skill-tag">cohere.rerank</span>
+        <span class="skill-tag">mistral.chat</span>
+        <span class="skill-tag">together.image</span>
+        <span class="skill-tag">replicate.run</span>
+        <span class="skill-tag">skills.create</span>
+        <span class="skill-tag">solutions.recall</span>
+        <span class="skill-tag">dungeon.start</span>
+        <span class="skill-tag">dungeon.play</span>
+        <span class="skill-tag">goals.set</span>
+        <span class="skill-tag">notify.send</span>
+        <span class="skill-tag">brand.analyze</span>
+        <span class="skill-tag">autofix.pipeline</span>
+        <span class="skill-tag">invoice.scan_email</span>
+        <span class="skill-tag">price.watch</span>
+        <span class="skill-tag">tutor.practice</span>
+        <span class="skill-tag">jobs.search</span>
+        <span class="skill-tag">travel.plan</span>
+        <span class="skill-tag">health.daily</span>
+        <span class="skill-tag">memory.ingest</span>
+        <span class="skill-tag">nlp.humanize</span>
+        <span class="skill-tag">content.check_duplicate</span>
+        <span class="skill-tag">client.score</span>
+        <span class="skill-tag">analytics.council</span>
+        <span class="skill-tag">youtube.track_competitor</span>
       </div>
-      <p class="skill-count">357+ skills across 80+ namespaces &mdash; and growing</p>
+      <p class="skill-count">476+ skills across 110+ namespaces &mdash; and growing</p>
     </div>
   </section>
 
@@ -609,7 +642,7 @@
     <div class="container">
       <div class="stats-grid">
         <div>
-          <div class="stat-value">357+</div>
+          <div class="stat-value">476+</div>
           <div class="stat-label">Built-in Skills</div>
         </div>
         <div>
