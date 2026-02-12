@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bastilon — Autonomous AI Agent Framework</title>
   <meta name="description" content="Bastilon is an open-source autonomous AI agent framework. Build AI assistants that think, act, and learn independently.">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏰</text></svg>">
+  <link rel="icon" href="assets/logo.png" type="image/png">
   <style>
     :root {
       --bg: #0a0a0f;
@@ -62,6 +62,14 @@
       color: var(--accent2);
       text-decoration: none;
       letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .logo img {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
     }
     .logo span { color: var(--text2); font-weight: 400; }
     nav a {
@@ -77,6 +85,15 @@
     .hero {
       padding: 8rem 0 6rem;
       text-align: center;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: url('assets/hero-bg.png') center/cover no-repeat;
+      opacity: 0.3;
+      z-index: -1;
     }
     .hero-badge {
       display: inline-block;
@@ -87,6 +104,8 @@
       color: var(--accent2);
       margin-bottom: 2rem;
       font-family: var(--mono);
+      background: rgba(10,10,15,0.7);
+      backdrop-filter: blur(8px);
     }
     .hero h1 {
       font-size: clamp(2.5rem, 6vw, 4.5rem);
@@ -215,12 +234,16 @@
       transform: translateY(-2px);
     }
     .feature-icon {
-      font-size: 1.5rem;
+      width: 56px;
+      height: 56px;
       margin-bottom: 1rem;
-      display: inline-block;
-      padding: 0.5rem;
-      background: rgba(108,92,231,0.1);
-      border-radius: 8px;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .feature-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
     }
     .feature-card h3 {
       font-size: 1.1rem;
@@ -240,6 +263,16 @@
       text-align: center;
       font-size: 2rem;
       margin-bottom: 3rem;
+    }
+    .arch-illustration {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .arch-illustration img {
+      max-width: 600px;
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(108,92,231,0.2);
     }
     .arch-diagram {
       display: grid;
@@ -394,23 +427,27 @@
 
   <header>
     <div class="container header-inner">
-      <a href="/" class="logo">bastilon<span>.org</span></a>
+      <a href="/" class="logo">
+        <img src="assets/logo.png" alt="Bastilon">
+        bastilon<span>.org</span>
+      </a>
       <nav>
         <a href="#features">Features</a>
         <a href="#architecture">Architecture</a>
         <a href="#skills">Skills</a>
-        <a href="https://github.com/nicolasleveille/bastilon" target="_blank">GitHub</a>
+        <a href="shop.html">Shop</a>
+        <a href="https://github.com/mrmagnifique666/bastilon" target="_blank">GitHub</a>
       </nav>
     </div>
   </header>
 
   <section class="hero">
     <div class="container">
-      <div class="hero-badge">v1.0 &mdash; Open Source AI Agent Framework</div>
+      <div class="hero-badge">v2.0 &mdash; Open Source AI Agent Framework</div>
       <h1>Build AI agents that think, act, and learn.</h1>
-      <p>Bastilon is an autonomous AI agent framework. Dual-agent architecture, 65+ built-in skills, multi-platform integration. Deploy your own Kingston.</p>
+      <p>Bastilon is an autonomous AI agent framework. 7 autonomous agents + subordinates, 476+ built-in skills, typed workflows, multi-LLM pyramid, MCP server, voice &amp; wake word, Dungeon Master. Deploy your own Kingston.</p>
       <div class="hero-actions">
-        <a href="https://github.com/nicolasleveille/bastilon" class="btn btn-primary">
+        <a href="https://github.com/mrmagnifique666/bastilon" class="btn btn-primary">
           Get Started
         </a>
         <a href="#architecture" class="btn btn-secondary">
@@ -430,15 +467,16 @@
         <div class="terminal-body">
           <div><span class="prompt">$</span> <span class="cmd">npx bastilon init my-agent</span></div>
           <div class="output">Creating agent framework...</div>
-          <div class="output">Installing 65 skills...</div>
+          <div class="output">Installing 476 skills...</div>
           <div class="success">Ready. Your agent is live.</div>
           <br>
           <div><span class="prompt">$</span> <span class="cmd">npx bastilon start</span></div>
           <div class="output">Kingston online. Listening on Telegram.</div>
-          <div class="output">Scout agent started (30min heartbeat)</div>
-          <div class="output">Analyst agent started (60min heartbeat)</div>
-          <div class="output">Learner agent started (8h cycles)</div>
-          <div class="success">4 agents running. 0 errors. System healthy.</div>
+          <div class="output">Scout agent started (4h heartbeat)</div>
+          <div class="output">Analyst agent started (6h heartbeat)</div>
+          <div class="output">Sentinel agent started (30min heartbeat)</div>
+          <div class="output">Kingston Mind started (20min cycles)</div>
+          <div class="success">7 agents running. 0 errors. System healthy.</div>
         </div>
       </div>
     </div>
@@ -450,34 +488,34 @@
       <p class="subtitle">Not a chatbot. An agent framework that acts, learns, and evolves.</p>
       <div class="feature-grid">
         <div class="feature-card">
-          <div class="feature-icon">🧠</div>
+          <div class="feature-icon"><img src="assets/feature-dual-agent.png" alt="Dual-Agent"></div>
           <h3>Dual-Agent Architecture</h3>
           <p>Kingston (The Voice) handles user interaction, planning, and memory. Emile (The Hands) executes code, deploys, and builds. Together, they form a complete system.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🔧</div>
-          <h3>65+ Built-in Skills</h3>
-          <p>Email, SMS, trading, browser automation, social media, file management, databases, scheduling, and more. All ready out of the box.</p>
+          <div class="feature-icon"><img src="assets/feature-skills.png" alt="Skills"></div>
+          <h3>476+ Built-in Skills</h3>
+          <p>Email, SMS, trading, browser automation, social media, voice, wake word, knowledge graph, cron jobs, episodic memory, workflows, MCP server, RAG ingestion, D&amp;D dungeon master, and more. All ready out of the box.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🤖</div>
-          <h3>Multi-Agent System</h3>
-          <p>Scout prospects leads. Analyst monitors performance. Learner detects error patterns. Executor processes code requests. All running autonomously.</p>
+          <div class="feature-icon"><img src="assets/feature-multi-agent.png" alt="Multi-Agent"></div>
+          <h3>7+ Agent System</h3>
+          <p>Scout prospects leads. Analyst reports performance. Sentinel monitors security. Kingston Mind makes autonomous business decisions. Learner, Executor, Trading Monitor. Plus on-demand subordinate agents. All running 24/7.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🔄</div>
-          <h3>Self-Improving</h3>
-          <p>The Learner agent detects error patterns, graduates them into rules, and the system evolves. Zero manual intervention needed.</p>
+          <div class="feature-icon"><img src="assets/feature-self-improving.png" alt="Self-Improving"></div>
+          <h3>Self-Improving Memory</h3>
+          <p>Knowledge graph, episodic memory, behavioral rules engine, semantic memory with embeddings, RAG URL ingestion, nightly council reviews. Kingston remembers, reasons, and evolves autonomously.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🌐</div>
-          <h3>Multi-Platform</h3>
-          <p>Telegram, Twitter, LinkedIn, Reddit, Discord, Facebook, Instagram, WhatsApp, SMS. Connect everywhere your users are.</p>
+          <div class="feature-icon"><img src="assets/feature-multi-platform.png" alt="Multi-Platform"></div>
+          <h3>Multi-Platform + Gateway</h3>
+          <p>Telegram, Twitter, LinkedIn, Reddit, Discord, Facebook, Instagram, WhatsApp, SMS. WebSocket gateway, MCP server for Claude Desktop. Connect everywhere your users are.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🎙️</div>
-          <h3>Voice-Enabled</h3>
-          <p>ElevenLabs TTS + Deepgram STT. Your agent speaks and listens with natural voice. Phone calls via Twilio integration.</p>
+          <div class="feature-icon"><img src="assets/feature-voice.png" alt="Voice"></div>
+          <h3>Voice + Wake Word + Gemini Live</h3>
+          <p>Edge TTS + Deepgram STT + Picovoice wake word + Gemini Live cloud streaming. Say "Computer" and Kingston listens. Phone calls via Twilio. Real-time voice conversations with tool execution.</p>
         </div>
       </div>
     </div>
@@ -486,6 +524,9 @@
   <section class="architecture" id="architecture">
     <div class="container">
       <h2>Architecture</h2>
+      <div class="arch-illustration">
+        <img src="assets/architecture.png" alt="Kingston and Emile — Dual Agent Architecture">
+      </div>
       <div class="arch-diagram">
         <div class="arch-box">
           <h3>Kingston</h3>
@@ -520,47 +561,80 @@
       <p class="subtitle">Every skill is a self-contained module. Add your own or use what's built in.</p>
       <div class="skill-tags">
         <span class="skill-tag">telegram.send</span>
-        <span class="skill-tag">telegram.voice</span>
+        <span class="skill-tag">phone.call</span>
+        <span class="skill-tag">wakeword.start</span>
         <span class="skill-tag">gmail.send</span>
-        <span class="skill-tag">gmail.search</span>
         <span class="skill-tag">calendar.add</span>
         <span class="skill-tag">sms.send</span>
-        <span class="skill-tag">phone.call</span>
         <span class="skill-tag">trading.buy</span>
-        <span class="skill-tag">trading.sell</span>
-        <span class="skill-tag">trading.scan</span>
+        <span class="skill-tag">trading.autoscan</span>
         <span class="skill-tag">market.report</span>
         <span class="skill-tag">browser.navigate</span>
         <span class="skill-tag">browser.computer_use</span>
         <span class="skill-tag">twitter.post</span>
         <span class="skill-tag">linkedin.post</span>
         <span class="skill-tag">reddit.post</span>
-        <span class="skill-tag">discord.send</span>
+        <span class="skill-tag">moltbook.post</span>
         <span class="skill-tag">stripe.charge</span>
-        <span class="skill-tag">hubspot.create</span>
-        <span class="skill-tag">booking.create</span>
-        <span class="skill-tag">notes.add</span>
-        <span class="skill-tag">db.query</span>
-        <span class="skill-tag">scheduler.add</span>
-        <span class="skill-tag">agents.start</span>
-        <span class="skill-tag">agents.stop</span>
-        <span class="skill-tag">mood.check</span>
-        <span class="skill-tag">soul.read</span>
-        <span class="skill-tag">weather.get</span>
-        <span class="skill-tag">translate.text</span>
-        <span class="skill-tag">image.generate</span>
-        <span class="skill-tag">pdf.create</span>
+        <span class="skill-tag">mind.decide</span>
+        <span class="skill-tag">mind.ask</span>
+        <span class="skill-tag">kg.add</span>
+        <span class="skill-tag">kg.traverse</span>
+        <span class="skill-tag">episodic.log</span>
+        <span class="skill-tag">rules.add</span>
+        <span class="skill-tag">memory.search</span>
+        <span class="skill-tag">cron.add</span>
+        <span class="skill-tag">planner.create</span>
+        <span class="skill-tag">revenue.pipeline</span>
+        <span class="skill-tag">client.proposal</span>
+        <span class="skill-tag">content.publish</span>
+        <span class="skill-tag">agents.delegate</span>
+        <span class="skill-tag">agents.spawn</span>
+        <span class="skill-tag">agents.profile</span>
+        <span class="skill-tag">workflow.run</span>
+        <span class="skill-tag">workflow.approve</span>
+        <span class="skill-tag">ollama.chat</span>
         <span class="skill-tag">web.search</span>
-        <span class="skill-tag">web.fetch</span>
-        <span class="skill-tag">rss.read</span>
         <span class="skill-tag">ftp.upload</span>
         <span class="skill-tag">shell.exec</span>
         <span class="skill-tag">git.commit</span>
-        <span class="skill-tag">code.run</span>
+        <span class="skill-tag">soul.read</span>
+        <span class="skill-tag">soul.update</span>
+        <span class="skill-tag">image.generate</span>
+        <span class="skill-tag">translate.text</span>
+        <span class="skill-tag">pdf.extract_text</span>
+        <span class="skill-tag">desktop.open</span>
         <span class="skill-tag">system.health</span>
-        <span class="skill-tag">analytics.track</span>
+        <span class="skill-tag">news.headlines</span>
+        <span class="skill-tag">forex.convert</span>
+        <span class="skill-tag">nlp.sentiment</span>
+        <span class="skill-tag">google.search</span>
+        <span class="skill-tag">cohere.rerank</span>
+        <span class="skill-tag">mistral.chat</span>
+        <span class="skill-tag">together.image</span>
+        <span class="skill-tag">replicate.run</span>
+        <span class="skill-tag">skills.create</span>
+        <span class="skill-tag">solutions.recall</span>
+        <span class="skill-tag">dungeon.start</span>
+        <span class="skill-tag">dungeon.play</span>
+        <span class="skill-tag">goals.set</span>
+        <span class="skill-tag">notify.send</span>
+        <span class="skill-tag">brand.analyze</span>
+        <span class="skill-tag">autofix.pipeline</span>
+        <span class="skill-tag">invoice.scan_email</span>
+        <span class="skill-tag">price.watch</span>
+        <span class="skill-tag">tutor.practice</span>
+        <span class="skill-tag">jobs.search</span>
+        <span class="skill-tag">travel.plan</span>
+        <span class="skill-tag">health.daily</span>
+        <span class="skill-tag">memory.ingest</span>
+        <span class="skill-tag">nlp.humanize</span>
+        <span class="skill-tag">content.check_duplicate</span>
+        <span class="skill-tag">client.score</span>
+        <span class="skill-tag">analytics.council</span>
+        <span class="skill-tag">youtube.track_competitor</span>
       </div>
-      <p class="skill-count">65+ skills and growing</p>
+      <p class="skill-count">476+ skills across 110+ namespaces &mdash; and growing</p>
     </div>
   </section>
 
@@ -568,16 +642,16 @@
     <div class="container">
       <div class="stats-grid">
         <div>
-          <div class="stat-value">65+</div>
+          <div class="stat-value">476+</div>
           <div class="stat-label">Built-in Skills</div>
         </div>
         <div>
-          <div class="stat-value">4</div>
+          <div class="stat-value">7</div>
           <div class="stat-label">Autonomous Agents</div>
         </div>
         <div>
-          <div class="stat-value">0</div>
-          <div class="stat-label">Errors / 48h</div>
+          <div class="stat-value">5</div>
+          <div class="stat-label">LLM Tiers ($0/mo)</div>
         </div>
         <div>
           <div class="stat-value">24/7</div>
@@ -592,7 +666,7 @@
       <h2>Build your own autonomous agent.</h2>
       <p>Open source. Self-hosted. No vendor lock-in.</p>
       <div class="hero-actions">
-        <a href="https://github.com/nicolasleveille/bastilon" class="btn btn-primary">
+        <a href="https://github.com/mrmagnifique666/bastilon" class="btn btn-primary">
           View on GitHub
         </a>
         <a href="mailto:kingston.orchestrator@gmail.com" class="btn btn-secondary">
@@ -604,7 +678,7 @@
 
   <footer>
     <div class="container">
-      <p>Built by <a href="https://github.com/nicolasleveille">Nicolas Leveille</a> &amp; Kingston AI &mdash; Gatineau, QC</p>
+      <p>Built by <a href="https://github.com/mrmagnifique666">Nicolas Leveille</a> &amp; Kingston AI &mdash; Gatineau, QC</p>
       <p style="margin-top: 0.5rem">La Cite des Rois &mdash; "Ensemble, on batit."</p>
     </div>
   </footer>
