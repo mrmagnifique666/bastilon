@@ -313,25 +313,41 @@ export function runClaudeStream(
   let proc: ChildProcess | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
+  // Safe error handler — logs BEFORE calling callback to prevent silent deaths
+  const safeError = (err: unknown, context: string) => {
+    const error = err instanceof Error ? err : new Error(String(err));
+    log.error(`[stream] ${context}: ${error.message}`);
+    try {
+      callbacks.onError(error);
+    } catch (cbErr) {
+      log.error(`[stream] onError callback threw: ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`);
+    }
+  };
+
   // Build prompt async, then spawn the CLI process
   (async () => {
     let prompt: string;
-    if (isResume) {
-      const memory = await buildMemoryContext(chatId, userMessage);
-      const catalog = getCompactToolCatalog(isAdmin);
-      const parts: string[] = [
-        buildCoreIdentity(isAdmin, chatId),
-      ];
-      if (catalog) {
-        parts.push(`\n[TOOLS]\n${catalog}`);
+    try {
+      if (isResume) {
+        const memory = await buildMemoryContext(chatId, userMessage);
+        const catalog = getCompactToolCatalog(isAdmin);
+        const parts: string[] = [
+          buildCoreIdentity(isAdmin, chatId),
+        ];
+        if (catalog) {
+          parts.push(`\n[TOOLS]\n${catalog}`);
+        }
+        if (memory) {
+          parts.push(`\n${memory}`);
+        }
+        parts.push(`\n[NEW MESSAGE]\nUser: ${userMessage}`);
+        prompt = parts.join("\n");
+      } else {
+        prompt = await buildFullPrompt(chatId, userMessage, isAdmin);
       }
-      if (memory) {
-        parts.push(`\n${memory}`);
-      }
-      parts.push(`\n[NEW MESSAGE]\nUser: ${userMessage}`);
-      prompt = parts.join("\n");
-    } else {
-      prompt = await buildFullPrompt(chatId, userMessage, isAdmin);
+    } catch (err) {
+      safeError(err, `Prompt build failed (chat=${chatId}, resume=${isResume})`);
+      return;
     }
 
     if (killed) return; // Cancelled while building prompt
@@ -354,7 +370,7 @@ export function runClaudeStream(
     timer = setTimeout(() => {
       killed = true;
       proc?.kill("SIGTERM");
-      callbacks.onError(new Error("Claude CLI stream timed out"));
+      safeError(new Error("Claude CLI stream timed out"), "Timeout");
     }, config.cliTimeoutMs);
 
     // Stall detection: if no output for 2 minutes, kill the stream.
@@ -369,7 +385,7 @@ export function runClaudeStream(
           killed = true;
           log.warn(`[stream] No output for ${STALL_TIMEOUT_MS / 1000}s — killing stalled stream`);
           proc?.kill("SIGTERM");
-          callbacks.onError(new Error(`Claude CLI stream stalled (no output for ${STALL_TIMEOUT_MS / 1000}s)`));
+          safeError(new Error(`Claude CLI stream stalled (no output for ${STALL_TIMEOUT_MS / 1000}s)`), "Stall");
         }
       }
     }, 15_000);
@@ -440,7 +456,8 @@ export function runClaudeStream(
 
     proc.stderr!.on("data", (chunk: Buffer) => {
       lastActivity = Date.now();
-      log.debug(`[stream] stderr: ${chunk.toString().slice(0, 200)}`);
+      const text = chunk.toString().trim();
+      if (text) log.warn(`[stream] stderr: ${text.slice(0, 500)}`);
     });
 
     proc.stdin!.write(prompt);
@@ -449,7 +466,7 @@ export function runClaudeStream(
     proc.on("error", (err) => {
       if (timer) clearTimeout(timer);
       clearInterval(stallInterval);
-      callbacks.onError(err);
+      safeError(err, "Spawn error");
     });
 
     proc.on("close", (code) => {
@@ -479,7 +496,7 @@ export function runClaudeStream(
           }
         }
       } else if (!accumulated && code !== 0) {
-        callbacks.onError(new Error(`Claude CLI exited with code ${code}`));
+        safeError(new Error(`Claude CLI exited with code ${code}`), `Exit code ${code}`);
       } else if (accumulated) {
         const toolCall = detectToolCall(accumulated);
         callbacks.onComplete({
@@ -490,11 +507,13 @@ export function runClaudeStream(
         });
       } else {
         log.warn(`[stream] CLI exited cleanly but produced no output`);
-        callbacks.onError(new Error("Claude CLI produced no output (empty response)"));
+        safeError(new Error("Claude CLI produced no output (empty response)"), "Empty response");
       }
     });
   })().catch((err) => {
-    callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+    // Last-resort catch — should never reach here with the inner try-catch,
+    // but prevents unhandled rejection from killing the process
+    safeError(err, "Unhandled async error in stream IIFE");
   });
 
   return {

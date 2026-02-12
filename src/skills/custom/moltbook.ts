@@ -291,7 +291,7 @@ registerSkill({
 
 registerSkill({
   name: "moltbook.my_posts",
-  description: "List MY posts (authored by Kingston). Use to verify what actually exists.",
+  description: "List MY posts (authored by Kingston). Uses the agent profile endpoint which returns recent posts.",
   adminOnly: true,
   argsSchema: {
     type: "object",
@@ -300,20 +300,33 @@ registerSkill({
     },
   },
   async execute(args) {
-    const limit = Math.min(Number(args.limit) || 10, 50);
-    const r = await api("GET", `/agents/me/posts?limit=${limit}`);
+    // /agents/me/posts doesn't exist — use /agents/profile?name=Kingston_CDR which returns recentPosts
+    const meR = await api("GET", "/agents/me");
+    if (!meR.ok) return formatError(meR);
+    const agentName = meR.data?.name || meR.raw?.agent?.name;
+    if (!agentName) return "Error: could not determine agent name from /agents/me";
+
+    const r = await api("GET", `/agents/profile?name=${encodeURIComponent(agentName)}`);
     if (!r.ok) return formatError(r);
 
-    const posts = Array.isArray(r.data) ? r.data : r.raw?.posts || r.data?.posts || [];
+    const posts = r.raw?.recentPosts || r.data?.recentPosts || [];
     if (posts.length === 0) return "No posts found.";
 
-    return posts
+    const limit = Math.min(Number(args.limit) || 10, 50);
+    const sliced = posts.slice(0, limit);
+
+    const agentStats = r.raw?.agent || r.data;
+    const statsLine = agentStats
+      ? `Agent: ${agentStats.name} | Karma: ${agentStats.karma} | Followers: ${agentStats.follower_count || 0}\n\n`
+      : "";
+
+    return statsLine + sliced
       .map((p: any, i: number) => {
-        const score = p.score !== undefined ? ` [${p.score}↑]` : "";
+        const upvotes = p.upvotes !== undefined ? ` [${p.upvotes} upvotes]` : "";
         const comments = p.comment_count !== undefined ? ` (${p.comment_count} comments)` : "";
         const sub = typeof p.submolt === "object" ? p.submolt?.name : p.submolt;
         const date = p.created_at ? new Date(p.created_at).toLocaleDateString("fr-CA") : "";
-        return `${i + 1}. ${p.title}${score}${comments}\n   s/${sub || "?"} — ${date} — ID: ${p.id}`;
+        return `${i + 1}. ${p.title}${upvotes}${comments}\n   s/${sub || "?"} — ${date} — ID: ${p.id}`;
       })
       .join("\n\n");
   },
@@ -333,13 +346,21 @@ registerSkill({
   },
   async execute(args) {
     const limit = Math.min(Number(args.limit) || 10, 50);
-    const r = await api("GET", `/agents/me/comments?limit=${limit}`);
+
+    // /agents/me/comments doesn't exist — use /agents/profile?name=... which returns recentComments
+    const meR = await api("GET", "/agents/me");
+    if (!meR.ok) return formatError(meR);
+    const agentName = meR.data?.name || meR.raw?.agent?.name;
+    if (!agentName) return "Error: could not determine agent name from /agents/me";
+
+    const r = await api("GET", `/agents/profile?name=${encodeURIComponent(agentName)}`);
     if (!r.ok) return formatError(r);
 
-    const comments = Array.isArray(r.data) ? r.data : r.raw?.comments || r.data?.comments || [];
+    const comments = r.raw?.recentComments || r.data?.recentComments || [];
     if (comments.length === 0) return "No comments found.";
 
-    return comments
+    const sliced = comments.slice(0, limit);
+    return sliced
       .map((c: any, i: number) => {
         const score = c.score !== undefined ? ` [${c.score}↑]` : "";
         const preview = c.content?.length > 100 ? c.content.slice(0, 100) + "..." : c.content;
