@@ -9,7 +9,6 @@
  *   opus   — premium: content creation, strategic thinking, complex reasoning
  */
 import { config } from "../config/env.js";
-import { getSummary } from "../storage/store.js";
 import { log } from "../utils/log.js";
 
 export type ModelTier = "ollama" | "groq" | "haiku" | "sonnet" | "opus";
@@ -78,31 +77,8 @@ export function selectModel(
     }
   }
 
-  // Reflection/deep reasoning → opus (needs Claude's brain)
-  const reflectionPatterns = /\b(pourquoi|comment ça marche|explique-moi|explain|why|how does|réfléchis|think about|analyse ça|what do you think|en profondeur|deep dive)\b/i;
-  if (reflectionPatterns.test(message) && message.length > 60) {
-    log.debug(`[model] Reflection question → opus`);
-    return "opus";
-  }
-
-  // Creative writing / long content → opus
-  const creativePatterns = /\b(rédige|write|rédaction|compose|draft|article|essay|stratégie complète|plan détaillé)\b/i;
-  if (creativePatterns.test(message) && message.length > 100) {
-    log.debug(`[model] Creative/long-form → opus`);
-    return "opus";
-  }
-
-  // Deep conversation: very long message + very long summary → opus
-  // Only trigger for genuinely complex requests, not normal conversation
-  if (chatId && message.length > 500) {
-    try {
-      const summary = getSummary(chatId);
-      if (summary?.summary && summary.summary.length > 2000) {
-        log.debug(`[model] Deep conversation (summary ${summary.summary.length} chars + msg ${message.length} chars) → opus`);
-        return "opus";
-      }
-    } catch { /* no summary */ }
-  }
+  // Opus only via explicit [MODEL:opus] override — never auto-selected
+  // Groq handles everything else fast and free
 
   // Everything else → Groq (fast, free, with tools) → fallback to sonnet if Groq unavailable
   if (config.groqApiKey) {

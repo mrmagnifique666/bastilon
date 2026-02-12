@@ -106,7 +106,7 @@ export async function executeToolCall(tc: ToolCallInput, opts: ToolExecOptions):
   // 8. Execute
   try {
     log.info(`${tag} Executing tool (step ${step + 1}/${maxSteps}): ${toolName}`);
-    const result = await skill.handler(safeArgs);
+    const result = await skill.execute(safeArgs);
     const resultStr = truncateResult(typeof result === "string" ? result : JSON.stringify(result));
     log.debug(`${tag} Tool result (${toolName}): ${resultStr.slice(0, 200)}`);
     return { content: resultStr, tool_call_id: callId };
