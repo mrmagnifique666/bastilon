@@ -45,6 +45,14 @@ export function removeAgent(id: string): boolean {
   return true;
 }
 
+/** Trigger an immediate cycle on a specific agent (bypasses heartbeat timer) */
+export function triggerAgent(id: string): boolean {
+  const agent = agents.get(id);
+  if (!agent) return false;
+  agent.triggerNow();
+  return true;
+}
+
 /** Stop all agents */
 export function stopAllAgents(): void {
   for (const agent of agents.values()) {

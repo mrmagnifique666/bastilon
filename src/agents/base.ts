@@ -240,6 +240,25 @@ export class Agent {
     };
   }
 
+  /**
+   * Trigger an immediate execution cycle (bypasses heartbeat timer).
+   * Used when a goal is created and we want Mind to start working NOW.
+   */
+  triggerNow(): void {
+    if (!this.enabled) {
+      log.warn(`[agent:${this.id}] triggerNow — agent disabled`);
+      return;
+    }
+    if (this.running) {
+      log.info(`[agent:${this.id}] triggerNow — already running, will execute on next available slot`);
+      // Schedule for when current run finishes
+      setTimeout(() => this.triggerNow(), 5000);
+      return;
+    }
+    log.info(`[agent:${this.id}] triggerNow — immediate execution triggered`);
+    this.tick();
+  }
+
   /** Single heartbeat tick */
   private async tick(): Promise<void> {
     if (!this.enabled || this.running) return;

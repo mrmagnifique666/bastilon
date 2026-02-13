@@ -22,6 +22,33 @@ import { getDb } from "../../storage/store.js";
 import fs from "node:fs";
 import path from "node:path";
 import { log } from "../../utils/log.js";
+import { getBotSendFn } from "./telegram.js";
+import { config } from "../../config/env.js";
+
+/**
+ * Send a proactive update to Nicolas via Telegram.
+ * Fire-and-forget — never blocks goal execution.
+ */
+function notifyNicolas(message: string): void {
+  const send = getBotSendFn();
+  const chatId = config.adminChatId;
+  if (send && chatId) {
+    send(chatId, message).catch(() => {});
+  }
+}
+
+/**
+ * Trigger Mind agent to run immediately (bypasses 20min heartbeat).
+ * Lazy-imported to avoid circular dependencies.
+ */
+function triggerMindNow(): void {
+  import("../../agents/registry.js").then(({ triggerAgent }) => {
+    const triggered = triggerAgent("mind");
+    if (triggered) {
+      log.info("[goal-tree] Triggered immediate Mind cycle for new goal");
+    }
+  }).catch(() => {});
+}
 
 // ── DB Schema ──
 
@@ -345,6 +372,13 @@ registerSkill({
 
     log.info(`[goal-tree] Goal #${id} created: ${goal.slice(0, 60)} (depth=${depth}, parent=${parentId || "root"})`);
 
+    // ROOT goal created → trigger Mind agent immediately + notify Nicolas
+    if (!parentId) {
+      notifyNicolas(`🎯 Nouveau goal créé: ${goal.slice(0, 80)}\nJe commence à travailler dessus maintenant.`);
+      // Trigger Mind in 3 seconds (let current tool chain finish first)
+      setTimeout(() => triggerMindNow(), 3000);
+    }
+
     const strategyText = strategies.length > 0
       ? `\nStratégies: ${strategies.map((s, i) => `${String.fromCharCode(65 + i)}) ${s}`).join(", ")}`
       : "\n(Pas de stratégies définies — ajoute-en via la phase O)";
@@ -509,6 +543,9 @@ registerSkill({
 
     log.info(`[goal-tree] Goal #${goalId} advanced: ${currentPhase} → ${nextPhase}`);
 
+    // Notify Nicolas on phase transitions
+    notifyNicolas(`📊 Goal #${goalId}: ${PHASE_NAMES[currentPhase]} → ${PHASE_NAMES[nextPhase as Phase]}\n${node.goal.slice(0, 60)}`);
+
     return (
       `Goal #${goalId}: ${PHASE_NAMES[currentPhase]} → ${PHASE_NAMES[nextPhase as Phase]}\n\n` +
       `--- INSTRUCTIONS ---\n` +
@@ -547,6 +584,9 @@ registerSkill({
     ).run(result, goalId);
 
     log.info(`[goal-tree] Goal #${goalId} COMPLETED: ${result.slice(0, 80)}`);
+
+    // Notify Nicolas
+    notifyNicolas(`✅ Goal #${goalId} complété!\n${node.goal.slice(0, 60)}\n→ ${result.slice(0, 80)}`);
 
     // Check if parent can be auto-advanced
     if (node.parent_id) {
@@ -626,6 +666,9 @@ registerSkill({
       const nextName = strategies[nextStrategy];
       log.info(`[goal-tree] Goal #${goalId} strategy failed (${reason.slice(0, 50)}), trying: ${nextName}`);
 
+      // Notify Nicolas of strategy change
+      notifyNicolas(`🔄 Goal #${goalId}: Plan ${String.fromCharCode(65 + node.current_strategy)} échoué → Plan ${String.fromCharCode(65 + nextStrategy)}\n${node.goal.slice(0, 50)}\nRaison: ${reason.slice(0, 60)}`);
+
       return (
         `❌ Stratégie ${String.fromCharCode(65 + node.current_strategy)} échouée: ${reason.slice(0, 100)}\n\n` +
         `🔄 Passage au Plan ${String.fromCharCode(65 + nextStrategy)}: ${nextName}\n` +
@@ -643,6 +686,9 @@ registerSkill({
     ).run(`All strategies failed. Last: ${reason}`, goalId);
 
     log.info(`[goal-tree] Goal #${goalId} FAILED (all strategies exhausted): ${reason.slice(0, 50)}`);
+
+    // Alert Nicolas — all strategies failed
+    notifyNicolas(`❌ Goal #${goalId} ÉCHOUÉ — toutes les stratégies épuisées\n${node.goal.slice(0, 60)}\nDernière erreur: ${reason.slice(0, 80)}\n\nJ'ai besoin de ton aide.`);
 
     // Notify parent
     if (node.parent_id) {
