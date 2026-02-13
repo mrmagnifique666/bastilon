@@ -285,18 +285,27 @@ export function runClaudeStream(
     if (killed) return; // Cancelled while building prompt
 
     const model = modelOverride || config.claudeModel;
-    const cliArgs = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", model, "--dangerously-skip-permissions"];
+    const cliArgs = [
+      "-p", "-", "--output-format", "stream-json", "--verbose", "--model", model,
+      "--dangerously-skip-permissions",
+      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas.",
+    ];
     if (isResume) {
       cliArgs.push("--resume", existingSession);
     }
 
     log.debug(`[stream] Spawning Claude stream (resume=${isResume})`);
 
-    const { ANTHROPIC_API_KEY: _stripped, ...cliEnv } = process.env;
+    // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
+    // Strip CLAUDECODE to prevent "nested session" error when spawned from Claude Code
+    const { ANTHROPIC_API_KEY: _stripped, CLAUDECODE: _stripped2, ...cliEnv } = process.env;
     proc = spawn(config.claudeBin, cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: cliEnv,
       shell: false,
+      // Use a neutral cwd so the CLI won't load project-level memory files
+      // (which define "Émile" identity for the interactive CLI sessions).
+      cwd: os.tmpdir(),
     });
 
     timer = setTimeout(() => {

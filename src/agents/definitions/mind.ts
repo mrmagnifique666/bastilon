@@ -17,7 +17,7 @@
  */
 import type { AgentConfig } from "../base.js";
 import { config } from "../../config/env.js";
-import { getRecentDecisions, getPendingQuestions, getActiveGoals } from "../../storage/store.js";
+import { getRecentDecisions, getPendingQuestions, getDb } from "../../storage/store.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -91,13 +91,21 @@ const FREEDOM_RULES =
   `- trading.* échoue? → essaie api.call vers l'API Alpaca directement\n` +
   `- Avant de demander à Nicolas, fais 95% du travail toi-même. Sa contribution = minimale.\n` +
   `- Tu as 357+ tools. UTILISE-LES TOUS créativement.\n\n` +
-  `OBJECTIFS AUTONOMES:\n` +
-  `- Si tu as un objectif actif, essaie TOUJOURS au moins 2-3 approches avant d'abandonner\n` +
-  `- Utilise autonomous.goal() pour tracker tes objectifs multi-étapes\n` +
-  `- Utilise autonomous.attempt() pour logger chaque tentative\n` +
-  `- Si une tentative réussit, utilise autonomous.complete() pour finaliser\n` +
-  `- Si toutes les stratégies échouent, utilise autonomous.escalate() pour créer un code.request auto-exécuté\n` +
-  `- PRIORITÉ: Continue les objectifs actifs AVANT d'en créer de nouveaux\n\n`;
+  `GOAL TREE (SYSTÈME DE GOALS HIÉRARCHIQUE):\n` +
+  `- Tu utilises un ARBRE DE GOALS (pas une liste plate). Chaque goal a des sous-goals.\n` +
+  `- CHAQUE goal suit le cycle PEODC: P(lan) → E(xplore) → O(rganise) → D(irige) → C(ontrôle)\n` +
+  `- Au DÉBUT de chaque cycle: appelle goal.focus() pour savoir sur quoi travailler\n` +
+  `- WORKFLOW PAR PHASE:\n` +
+  `  P: Lis la doc existante, comprends le contexte → goal.advance(id, output)\n` +
+  `  E: Va chercher les infos manquantes (web.search, api.call) → goal.advance(id, output)\n` +
+  `  O: Décompose en sous-goals si nécessaire → goal.decompose(parent_id, subgoals) → goal.advance(id, output)\n` +
+  `  D: EXÉCUTE le travail (tool calls directs) → goal.advance(id, output)\n` +
+  `  C: VÉRIFIE les résultats → goal.complete(id, result) ou goal.fail(id, reason)\n` +
+  `- Si une stratégie ÉCHOUE → goal.fail() essaie automatiquement le Plan B, C, etc.\n` +
+  `- PRIORITÉ ABSOLUE: Continue les goals actifs AVANT d'en créer de nouveaux\n` +
+  `- Utilise goal.tree() pour voir la vue d'ensemble\n` +
+  `- Utilise goal.set(goal, parent_id) pour créer des sous-goals\n` +
+  `- JAMAIS abandonner: Plan A échoue → Plan B → Plan C → escalade via mind.ask\n\n`;
 
 const ANTI_HALLUCINATION =
   `ANTI-HALLUCINATION:\n` +
@@ -135,31 +143,60 @@ function buildMindPrompt(cycle: number): string | null {
   const recentDecisions = getRecentDecisions(5);
   const pendingQuestions = getPendingQuestions();
 
-  // Load active autonomous goals
+  // Load goal tree state for injection into prompt
   let goalsBlock = "";
-  const isAutoMode = (() => {
-    try { return fs.existsSync(path.resolve("relay/autonomous-mode.flag")); } catch { return false; }
-  })();
-  if (isAutoMode) {
-    const activeGoals = getActiveGoals();
-    if (activeGoals.length > 0) {
-      goalsBlock = `\n--- OBJECTIFS ACTIFS ---\n`;
-      for (const g of activeGoals) {
-        const remaining = g.strategies.filter(
-          (s) => !g.attempts.some((a) => a.strategy === s)
-        );
-        goalsBlock += `🎯 #${g.id}: ${g.goal}\n`;
-        goalsBlock += `   Tentatives: ${g.attempts.length} | `;
-        goalsBlock += remaining.length > 0
-          ? `Stratégies restantes: ${remaining.join(", ")}\n`
-          : `Toutes les stratégies essayées — ESCALADE si besoin\n`;
-        if (g.attempts.length > 0) {
-          const last = g.attempts[g.attempts.length - 1];
-          goalsBlock += `   Dernière: ${last.strategy} → ${last.success ? "OK" : "FAIL"}: ${last.result.slice(0, 80)}\n`;
+  try {
+    const goalDb = getDb();
+    // Check if goal_tree table exists
+    const tableExists = goalDb.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='goal_tree'"
+    ).get();
+
+    if (tableExists) {
+      const activeRoots = goalDb.prepare(
+        "SELECT * FROM goal_tree WHERE parent_id IS NULL AND status = 'active' ORDER BY updated_at DESC LIMIT 3"
+      ).all() as Array<any>;
+
+      if (activeRoots.length > 0) {
+        goalsBlock = `\n--- GOAL TREE (PRIORITÉ #1) ---\n`;
+        goalsBlock += `Tu as ${activeRoots.length} goal(s) actif(s). Appelle goal.focus() pour savoir quoi faire.\n\n`;
+
+        for (const root of activeRoots) {
+          // Count progress
+          const stats = goalDb.prepare(
+            `SELECT status, COUNT(*) as c FROM goal_tree WHERE (root_id = ? OR id = ?) GROUP BY status`
+          ).all(root.id, root.id) as Array<{ status: string; c: number }>;
+          const done = stats.find((s: any) => s.status === "completed")?.c || 0;
+          const total = stats.reduce((sum: number, s: any) => sum + s.c, 0);
+          const pct = total > 0 ? Math.round(done / total * 100) : 0;
+
+          goalsBlock += `🎯 ROOT #${root.id}: ${root.goal} — ${pct}% (${done}/${total})\n`;
+
+          // Find focus node
+          const focusNodes = goalDb.prepare(
+            `SELECT * FROM goal_tree
+             WHERE (root_id = ? OR id = ?) AND status = 'active'
+             ORDER BY depth DESC, sort_order, id LIMIT 1`
+          ).all(root.id, root.id) as Array<any>;
+
+          if (focusNodes.length > 0) {
+            const focus = focusNodes[0];
+            const phaseNames: Record<string, string> = { P: "Planification", E: "Exploration", O: "Organisation", D: "Direction", C: "Contrôle" };
+            const strategies = (() => { try { return JSON.parse(focus.strategies || "[]"); } catch { return []; } })();
+            const currentStrat = strategies[focus.current_strategy];
+
+            goalsBlock += `   👉 FOCUS: #${focus.id} — ${focus.goal}\n`;
+            goalsBlock += `   Phase: ${focus.peodc_phase} (${phaseNames[focus.peodc_phase] || focus.peodc_phase})`;
+            if (currentStrat) goalsBlock += ` | Stratégie: ${currentStrat}`;
+            goalsBlock += `\n`;
+            if (focus.last_error) goalsBlock += `   ⚠️ Dernière erreur: ${focus.last_error.slice(0, 80)}\n`;
+          }
         }
+        goalsBlock += `\nACTION REQUISE: Appelle goal.focus() MAINTENANT pour obtenir les instructions détaillées.\n---\n\n`;
       }
-      goalsBlock += `\nPRIORITÉ: Continue à travailler sur ces objectifs avant d'en créer de nouveaux.\n---\n\n`;
     }
+  } catch (e) {
+    // Goal tree not yet initialized — skip silently
   }
 
   const contextBlock =

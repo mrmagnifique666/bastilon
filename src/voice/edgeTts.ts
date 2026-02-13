@@ -8,15 +8,18 @@ import { log } from "../utils/log.js";
 
 // Voice presets for common languages
 const VOICE_MAP: Record<string, string> = {
-  "fr-male": "fr-FR-HenriNeural",
-  "fr-female": "fr-FR-DeniseNeural",
-  "en-male": "en-US-GuyNeural",
+  "fr-male": "fr-FR-RemyMultilingualNeural",
+  "fr-male-classic": "fr-FR-HenriNeural",
+  "fr-female": "fr-FR-VivienneMultilingualNeural",
+  "fr-female-classic": "fr-FR-DeniseNeural",
+  "en-male": "en-US-AndrewMultilingualNeural",
+  "en-male-classic": "en-US-GuyNeural",
   "en-female": "en-US-JennyNeural",
   "es-male": "es-ES-AlvaroNeural",
   "es-female": "es-ES-ElviraNeural",
 };
 
-const DEFAULT_VOICE = "fr-FR-HenriNeural";
+const DEFAULT_VOICE = "fr-FR-RemyMultilingualNeural";
 
 /**
  * Convert text to speech using Microsoft Edge TTS (free, unlimited).
@@ -41,7 +44,12 @@ export async function edgeTtsToMp3(
       chunks.push(chunk);
     });
     audioStream.on("end", () => {
-      resolve(Buffer.concat(chunks));
+      const result = Buffer.concat(chunks);
+      if (result.length === 0) {
+        reject(new Error("Edge TTS returned empty audio buffer"));
+      } else {
+        resolve(result);
+      }
     });
     audioStream.on("error", (err: Error) => {
       reject(err);

@@ -329,7 +329,11 @@ export async function runClaude(
 
   return new Promise<ParsedResult>((resolve) => {
     const model = modelOverride || config.claudeModel;
-    const args = ["-p", "-", "--output-format", "json", "--model", model, "--dangerously-skip-permissions"];
+    const args = [
+      "-p", "-", "--output-format", "json", "--model", model,
+      "--dangerously-skip-permissions",
+      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas.",
+    ];
 
     if (isResume) {
       args.push("--resume", existingSession);
@@ -339,11 +343,16 @@ export async function runClaude(
     log.debug(`Spawning: ${config.claudeBin} ${args.join(" ")}`);
 
     // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
-    const { ANTHROPIC_API_KEY: _stripped, ...cliEnv } = process.env;
+    // Strip CLAUDECODE to prevent "nested session" error when spawned from Claude Code
+    const { ANTHROPIC_API_KEY: _stripped, CLAUDECODE: _stripped2, ...cliEnv } = process.env;
     const proc = spawn(config.claudeBin, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: cliEnv,
       shell: false,
+      // Use a neutral cwd so the CLI won't load project-level memory files
+      // (which define "Émile" identity for the interactive CLI sessions).
+      // Kingston passes its own system prompt with full context via stdin.
+      cwd: os.tmpdir(),
     });
 
     let stdout = "";
