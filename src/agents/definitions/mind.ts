@@ -143,6 +143,21 @@ function buildMindPrompt(cycle: number): string | null {
   const recentDecisions = getRecentDecisions(5);
   const pendingQuestions = getPendingQuestions();
 
+  // Check if Goal Runner is active (handles goals autonomously)
+  // Uses globalThis to avoid async import in sync function
+  let runnerBlock = "";
+  try {
+    const runners = (globalThis as any).__activeGoalRunners as Map<number, { startedAt: number }> | undefined;
+    if (runners && runners.size > 0) {
+      const runnerList = Array.from(runners.entries())
+        .map(([id, r]) => `#${id} (${Math.round((Date.now() - r.startedAt) / 60000)}min)`)
+        .join(", ");
+      runnerBlock = `\n⚡ GOAL RUNNER ACTIF: ${runnerList}\n`;
+      runnerBlock += `Le Goal Runner exécute ces goals automatiquement. Ne travaille PAS dessus.\n`;
+      runnerBlock += `Concentre-toi sur tes tâches habituelles (stratégie, business, trading, comms).\n\n`;
+    }
+  } catch { /* ignore */ }
+
   // Load goal tree state for injection into prompt
   let goalsBlock = "";
   try {
@@ -205,6 +220,7 @@ function buildMindPrompt(cycle: number): string | null {
     FREEDOM_RULES +
     ANTI_HALLUCINATION +
     AGENT_RULES +
+    runnerBlock +
     goalsBlock +
     `--- STRATÉGIE ACTIVE ---\n${mindContent}\n--- FIN STRATÉGIE ---\n\n` +
     `--- DÉCISIONS RÉCENTES ---\n${formatDecisions(recentDecisions)}\n---\n\n` +

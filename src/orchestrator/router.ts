@@ -28,7 +28,7 @@ import type { DraftController } from "../bot/draftMessage.js";
  * Scheduler chatId: 1, Agent chatIds: 100-106, Cron chatIds: 200-249
  */
 export function isInternalChatId(chatId: number): boolean {
-  return chatId === 1 || (chatId >= 100 && chatId <= 106) || (chatId >= 200 && chatId <= 249);
+  return chatId === 1 || (chatId >= 100 && chatId <= 107) || (chatId >= 200 && chatId <= 249);
 }
 
 const GROQ_SYSTEM_PROMPT = [

@@ -182,7 +182,7 @@ const TIER1_PREFIXES = [
   "planner.", "revenue.", "client.", "selfimprove.", "content.", "dungeon.",
   "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
   "cohere.", "mistral.", "together.", "replicate.", "workflow.", "xp.",
-  "notify.", "goals.", "autofix.", "brand.", "invoice.", "price.",
+  "notify.", "goals.", "goal.", "autofix.", "brand.", "invoice.", "price.",
   "autonomous.",
 ];
 
@@ -323,7 +323,7 @@ const OLLAMA_TIER1_PREFIXES = [
   "contacts.", "errors.", "ftp.", "git.", "time.", "cron.", "mind.",
   "kg.", "episodic.", "rules.",
   "planner.", "selfimprove.", "client.", "revenue.", "content.", "nlp.",
-  "notify.", "goals.", "autofix.", "brand.",
+  "notify.", "goals.", "goal.", "autofix.", "brand.",
   "autonomous.",
 ];
 

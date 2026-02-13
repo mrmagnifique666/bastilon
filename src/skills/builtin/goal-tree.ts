@@ -372,11 +372,20 @@ registerSkill({
 
     log.info(`[goal-tree] Goal #${id} created: ${goal.slice(0, 60)} (depth=${depth}, parent=${parentId || "root"})`);
 
-    // ROOT goal created → trigger Mind agent immediately + notify Nicolas
+    // ROOT goal created → launch Goal Runner for autonomous execution
     if (!parentId) {
-      notifyNicolas(`🎯 Nouveau goal créé: ${goal.slice(0, 80)}\nJe commence à travailler dessus maintenant.`);
-      // Trigger Mind in 3 seconds (let current tool chain finish first)
-      setTimeout(() => triggerMindNow(), 3000);
+      notifyNicolas(`🎯 Nouveau goal créé: ${goal.slice(0, 80)}\nGoal Runner lancé — exécution autonome.`);
+      // Launch Goal Runner in 3 seconds (let current tool chain finish first)
+      setTimeout(() => {
+        import("../../goals/runner.js").then(({ startGoalRunner }) => {
+          const result = startGoalRunner(id as number);
+          log.info(`[goal-tree] Goal Runner: ${result.message}`);
+        }).catch(err => {
+          log.warn(`[goal-tree] Failed to start Goal Runner: ${err}`);
+          // Fallback: trigger Mind agent
+          triggerMindNow();
+        });
+      }, 3000);
     }
 
     const strategyText = strategies.length > 0
@@ -991,4 +1000,82 @@ registerSkill({
   },
 });
 
-log.info(`[goal-tree] 9 goal tree skills registered (set, focus, advance, complete, fail, tree, decompose, status, scratch)`);
+// ── goal.stop ──
+registerSkill({
+  name: "goal.stop",
+  description:
+    "Stop the Goal Runner for a specific root goal. Cancels autonomous execution. " +
+    "The goal remains in its current state (not deleted).",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      id: { type: "number", description: "Root goal ID to stop the runner for" },
+    },
+    required: ["id"],
+  },
+  async execute(args): Promise<string> {
+    const goalId = Number(args.id);
+    try {
+      const { stopGoalRunner } = await import("../../goals/runner.js");
+      const stopped = stopGoalRunner(goalId);
+      if (stopped) {
+        return `⏹️ Goal Runner arrêté pour goal #${goalId}. Le goal reste actif — tu peux le reprendre manuellement ou relancer avec goal.runners(action="start", id=${goalId}).`;
+      }
+      return `Aucun Goal Runner actif pour goal #${goalId}.`;
+    } catch (err) {
+      return `Erreur: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+// ── goal.runners ──
+registerSkill({
+  name: "goal.runners",
+  description:
+    "List active Goal Runners or manually start/stop one. " +
+    "Goal Runners execute goals autonomously in a continuous loop.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "'list' (default), 'start', or 'stop'" },
+      id: { type: "number", description: "Goal ID (required for start/stop)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const action = String(args.action || "list").toLowerCase();
+
+    try {
+      const runner = await import("../../goals/runner.js");
+
+      if (action === "start") {
+        if (!args.id) return "Erreur: id requis pour start.";
+        const result = runner.startGoalRunner(Number(args.id));
+        return result.message;
+      }
+
+      if (action === "stop") {
+        if (!args.id) return "Erreur: id requis pour stop.";
+        const stopped = runner.stopGoalRunner(Number(args.id));
+        return stopped ? `⏹️ Runner arrêté pour #${args.id}` : `Aucun runner actif pour #${args.id}`;
+      }
+
+      // List
+      const runners = runner.getActiveRunners();
+      if (runners.length === 0) {
+        return "Aucun Goal Runner actif.\nUtilise goal.runners(action=\"start\", id=X) pour en lancer un.";
+      }
+      const lines = [`⚡ Goal Runners actifs (${runners.length}):\n`];
+      for (const r of runners) {
+        const goal = getDb().prepare("SELECT goal FROM goal_tree WHERE id = ?").get(r.goalId) as { goal: string } | undefined;
+        lines.push(`  #${r.goalId}: ${goal?.goal.slice(0, 50) || "?"} — ${r.elapsed}`);
+      }
+      return lines.join("\n");
+    } catch (err) {
+      return `Erreur: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+log.info(`[goal-tree] 11 goal tree skills registered (set, focus, advance, complete, fail, tree, decompose, status, scratch, stop, runners)`);

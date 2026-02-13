@@ -393,9 +393,16 @@ export class Agent {
       log.info(`[agent:${this.id}] Cycle ${this.cycle} — completed (${durationMs}ms)`);
 
       // ── Multi-round execution for Mind with active goals ──
-      // If Mind has active goals, immediately run continuation rounds (up to 3)
-      // instead of waiting 20 minutes for the next heartbeat.
-      if (hasActiveGoals && this.id === "mind") {
+      // If Mind has active goals AND no Goal Runner is active, run continuation rounds.
+      // When a Goal Runner is handling goals, Mind focuses on its normal rotation.
+      const runnerActive = (() => {
+        try {
+          const runners = (globalThis as any).__activeGoalRunners as Map<number, unknown> | undefined;
+          return runners ? runners.size > 0 : false;
+        } catch { return false; }
+      })();
+
+      if (hasActiveGoals && this.id === "mind" && !runnerActive) {
         const MAX_CONTINUATION_ROUNDS = 3;
         for (let round = 1; round <= MAX_CONTINUATION_ROUNDS; round++) {
           // Re-check goals — maybe the goal was just completed
