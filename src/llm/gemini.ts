@@ -14,6 +14,7 @@ import { getSkill, validateArgs } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { getSkillsForGemini } from "../skills/loader.js";
+import { listAgents } from "../agents/registry.js";
 import { logEstimatedTokens, enforceRateDelay, markCallComplete } from "./tokenTracker.js";
 
 // --- Types ---
@@ -121,6 +122,74 @@ export function loadUserMd(): string {
 
 // --- System instruction ---
 
+/**
+ * Get agent-specific context for chatId 100-106.
+ * Ensures agents retain their identity even in Ollama/Gemini/Haiku fallback chains.
+ */
+function getAgentContextForChatId(chatId: number): string | null {
+  // Map chatId to agent identity
+  const agentMap: Record<number, { id: string; name: string; role: string }> = {
+    100: { id: "scout", name: "Scout", role: "Prospection & market intelligence — find leads, research markets, gather business intel" },
+    101: { id: "analyst", name: "Analyst", role: "Reporting & analytics — generate reports, analyze trends, summarize data" },
+    102: { id: "learner", name: "Learner", role: "Self-improvement — analyze errors, learn patterns, improve Kingston's capabilities" },
+    103: { id: "executor", name: "Executor", role: "Task execution — execute code requests, run delegated tasks from other agents" },
+    104: { id: "trading-monitor", name: "Trading Monitor", role: "Market monitoring — watch positions, detect signals, execute trades via Alpaca" },
+    105: { id: "sentinel", name: "Kingston Sentinel", role: "Security & presence — monitor Moltbook, trading, social, web for threats and opportunities" },
+    106: { id: "mind", name: "Kingston Mind", role: "Autonomous business brain — strategy, clients, trading decisions, communication" },
+  };
+
+  const agent = agentMap[chatId];
+  if (!agent) return null;
+
+  const lines = [
+    `## AGENT CONTEXT (CRITICAL — THIS DEFINES YOUR ROLE)`,
+    `You are operating as the **${agent.name}** agent (chatId ${chatId}).`,
+    `Role: ${agent.role}`,
+    `You are NOT a generic assistant — you are a specialized autonomous agent within the Kingston/Bastilon system.`,
+    `Your agent ID: ${agent.id}`,
+    ``,
+    `## AGENT RULES`,
+    `- You have FULL access to all tools. Use them autonomously.`,
+    `- browser.* is BLOCKED for agents — use API tools instead.`,
+    `- Log important decisions via mind.decide or notes.add.`,
+    `- To send messages to Nicolas: telegram.send (chatId auto-rewrites to admin).`,
+    `- To delegate work to other agents: agents.delegate.`,
+  ];
+
+  // Mind agent gets extra context: strategy document
+  if (chatId === 106) {
+    lines.push(
+      ``,
+      `## KINGSTON MIND — AUTONOMOUS BRAIN`,
+      `You are the strategic decision-maker for all of Kingston's business operations.`,
+      `You read/write relay/KINGSTON_MIND.md as your strategy document.`,
+      `4-cycle rotation: strategy → business → trading → communication.`,
+      `You can create autonomous goals via autonomous.goal.`,
+    );
+
+    try {
+      const mindFile = path.resolve("relay/KINGSTON_MIND.md");
+      if (fs.existsSync(mindFile)) {
+        const strategy = fs.readFileSync(mindFile, "utf-8").slice(0, 1500);
+        lines.push(``, `## CURRENT STRATEGY`, strategy);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Trading monitor gets market context
+  if (chatId === 104) {
+    lines.push(
+      ``,
+      `## TRADING MONITOR`,
+      `You monitor market positions and execute trades autonomously.`,
+      `Only send alerts to Nicolas on ACTUAL trades (buy/sell/stop-loss).`,
+      `Never spam technical signals — results only.`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
 export function buildSystemInstruction(isAdmin: boolean, chatId?: number): string {
   const lines = [
     `You are Kingston, an autonomous AI assistant operating through a Telegram relay on the user's machine.`,
@@ -198,6 +267,14 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     `- You can run shell commands with shell.exec`,
     `- After modifying code, the bot must be restarted to apply changes.`,
   ];
+
+  // Inject agent-specific context when chatId is an agent (100-106)
+  if (chatId && chatId >= 100 && chatId <= 106) {
+    const agentContext = getAgentContextForChatId(chatId);
+    if (agentContext) {
+      lines.push("", agentContext);
+    }
+  }
 
   // Inject learned rules from MISS/FIX
   const learnedRules = getLearnedRulesPrompt();

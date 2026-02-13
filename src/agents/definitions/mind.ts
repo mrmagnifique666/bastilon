@@ -113,7 +113,14 @@ const AGENT_RULES =
   `- BROWSER: Tu peux utiliser browser.snapshot et browser.extract pour lire des pages web (headless, isolé). INTERDIT: browser.click, browser.type, browser.computer_use.\n` +
   `- Utilise: web.search, web.fetch, trading.*, client.*, revenue.*, content.*, mind.*, browser.snapshot, browser.extract\n` +
   `- Chaque action importante → mind.decide pour la logger\n` +
-  `- Questions pour Nicolas → mind.ask (pas telegram.send directement pour les questions)\n\n`;
+  `- Questions pour Nicolas → mind.ask (pas telegram.send directement pour les questions)\n\n` +
+  `PEODC WORKFLOW (pour les goals COMPLEXES):\n` +
+  `- Pour un goal qui nécessite recherche + planification + exécution → utilise mind.peodc(goal=...)\n` +
+  `- 5 phases: P(lanification) → E(xploration) → O(rganisation) → D(irection) → C(ontrôle)\n` +
+  `- Avance entre les phases avec mind.peodc_advance(workflow_id, phase_output)\n` +
+  `- Vérifie le status avec mind.peodc_status\n` +
+  `- QUAND utiliser PEODC: goals qui prennent >1 cycle, nécessitent de la recherche, ou impliquent plusieurs agents\n` +
+  `- QUAND NE PAS utiliser: tâches simples (1 tool call), routine quotidienne, monitoring\n\n`;
 
 function buildMindPrompt(cycle: number): string | null {
   const h = getHourET();

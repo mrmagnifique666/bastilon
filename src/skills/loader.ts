@@ -541,6 +541,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/travel.js");
   await import("./builtin/health-wearable.js");
   await import("./builtin/autonomous.js");
+  await import("./builtin/peodc.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");
