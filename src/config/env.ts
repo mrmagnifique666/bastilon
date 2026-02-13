@@ -102,6 +102,10 @@ function buildConfig() {
     // Printful
     printfulApiToken: optional("PRINTFUL_API_TOKEN", ""),
 
+    // Shopify
+    shopifyStoreDomain: optional("SHOPIFY_STORE_DOMAIN", ""),
+    shopifyAccessToken: optional("SHOPIFY_ACCESS_TOKEN", ""),
+
     // Dashboard
     dashboardToken: optional("DASHBOARD_TOKEN", ""),
 

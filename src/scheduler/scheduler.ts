@@ -125,6 +125,48 @@ const EVENTS: ScheduledEvent[] = [
     hour: 9, // 9h ET Monday — weekly goals review (filtered to Mondays in fireEvent)
     prompt: null, // dynamic — uses goals.review skill
   },
+  {
+    key: "trading_premarket_research",
+    type: "daily",
+    hour: 7, // 7h ET weekdays — pre-market research before 9h trading cron
+    prompt: null, // dynamic — silent research, no telegram
+  },
+  {
+    key: "trading_evening_journal",
+    type: "daily",
+    hour: 17, // 17h ET weekdays — post-market journal + lessons learned
+    prompt: null, // dynamic — journal + brief P&L telegram
+  },
+  {
+    key: "trading_weekly_retro",
+    type: "daily",
+    hour: 18, // 18h ET Friday only — weekly retrospective
+    prompt: null, // dynamic — filtered to Fridays in fireEvent
+  },
+  {
+    key: "moltbook_ideation",
+    type: "daily",
+    hour: 7, // 7h ET daily — content brainstorming for posting crons
+    prompt: null, // dynamic — saves ideas to notes
+  },
+  {
+    key: "moltbook_draft_from_ideas",
+    type: "daily",
+    hour: 9, // 9h ET daily — convert ideation notes into content.draft items
+    prompt: null, // dynamic — reads ideation notes, creates drafts with dedup
+  },
+  {
+    key: "moltbook_quality_review",
+    type: "interval",
+    intervalMin: 180, // every 3h — review drafts, auto-schedule approved ones
+    prompt: null, // dynamic — AI detection + brand voice + dedup gate
+  },
+  {
+    key: "moltbook_optimize",
+    type: "daily",
+    hour: 22, // 22h ET daily — analyze performance, optimize posting strategy
+    prompt: null, // dynamic — performance insights + strategy update
+  },
 ];
 
 const CODE_REQUESTS_FILE = path.join(process.cwd(), "code-requests.json");
@@ -348,6 +390,322 @@ function buildMoltbookPerformancePrompt(): string {
     `- N'attribue PAS de XP pour le simple fait d'avoir posté — seulement pour les RÉSULTATS\n` +
     `- Si un post a 0 engagement après 2h, c'est une PÉNALITÉ, pas une récompense\n` +
     `- Compare avec les posts précédents pour voir si on s'améliore`
+  );
+}
+
+/**
+ * Build pre-market research prompt — silent research at 7h ET before trading opens.
+ * Gathers insider activity, technical levels, economic calendar, and momentum scans.
+ */
+function buildPremarketResearchPrompt(): string {
+  let mindStrategy = "";
+  try {
+    const mindFile = path.join(process.cwd(), "relay", "KINGSTON_MIND.md");
+    if (fs.existsSync(mindFile)) {
+      mindStrategy = fs.readFileSync(mindFile, "utf-8").slice(0, 1500);
+    }
+  } catch { /* ignore */ }
+
+  const strategyBlock = mindStrategy
+    ? `--- STRATÉGIE ACTIVE ---\n${mindStrategy}\n--- FIN ---\n\n`
+    : "";
+
+  return (
+    `[SCHEDULER:TRADING_PREMARKET] Recherche pré-marché — 7h ET. Prépare la journée de trading.\n\n` +
+    strategyBlock +
+    `PROCESSUS (appelle CHAQUE outil):\n` +
+    `1. trading.insiders() — scan SEC Form 4 pour le portfolio + watchlist\n` +
+    `2. trading.watchlist(action="scan") — niveaux techniques des titres surveillés\n` +
+    `3. web.search("economic calendar today earnings premarket movers") — événements du jour\n` +
+    `4. trading.autoscan(universe="momentum", maxPicks=10) — opportunités momentum\n` +
+    `5. SYNTHÈSE: Génère une watchlist PRIORITISÉE pour la journée:\n` +
+    `   - Top 3 opportunités d'achat (ticker, raison, niveau d'entrée, stop-loss)\n` +
+    `   - Positions actuelles à surveiller (alertes insiders, niveaux techniques)\n` +
+    `   - Événements macro qui pourraient impacter (earnings, fed, data)\n` +
+    `6. notes.add(title="Premarket Research [date]", content=synthèse) — sauvegarde\n` +
+    `7. mind.decide(category="trading", action="premarket_research", reasoning="résumé de la recherche")\n\n` +
+    `RÈGLES:\n` +
+    `- PAS de telegram.send — recherche silencieuse, les résultats seront utilisés par le cron de 9h\n` +
+    `- Sois factuel — utilise les VRAIES données des tools, pas d'extrapolation\n` +
+    `- Si un tool échoue, continue avec les autres\n`
+  );
+}
+
+/**
+ * Build evening journal prompt — post-market at 17h ET.
+ * Reviews today's trades, analyzes performance, updates watchlist.
+ */
+function buildEveningJournalPrompt(): string {
+  return (
+    `[SCHEDULER:TRADING_JOURNAL] Journal de trading du soir — 17h ET. Analyse de la journée.\n\n` +
+    `PROCESSUS (appelle CHAQUE outil):\n` +
+    `1. trading.journal(limit=10) — trades du jour\n` +
+    `2. trading.pnl(period="1D") — performance de la journée\n` +
+    `3. trading.positions() — positions restantes\n` +
+    `4. ANALYSE DISCIPLINÉE:\n` +
+    `   - Quels trades ont BIEN marché? Pourquoi? (setup, timing, sizing)\n` +
+    `   - Quels trades ont MAL marché? Pourquoi? (FOMO, mauvais timing, pas de stop)\n` +
+    `   - Ai-je respecté ma stratégie KINGSTON_MIND.md? Discipline score /10\n` +
+    `   - Leçon #1 du jour (une phrase)\n` +
+    `5. trading.watchlist(action="add") — ajuste la watchlist pour demain si nécessaire\n` +
+    `6. episodic.log(event_type="trading_journal", description="résumé du jour", importance=7) — sauvegarde en mémoire\n` +
+    `7. telegram.send — résumé BREF pour Nicolas:\n` +
+    `   "📔 [Journal Trading]\n` +
+    `   P&L jour: +/-$X (+/-Y%)\n` +
+    `   Trades: Z total (W gagnants, L perdants)\n` +
+    `   Discipline: X/10\n` +
+    `   Leçon: [une phrase]"\n\n` +
+    `RÈGLES:\n` +
+    `- Sois HONNÊTE dans l'analyse — les erreurs sont des données\n` +
+    `- Pas de rationalization — si un trade était mauvais, dis-le\n` +
+    `- Le message Telegram doit être COURT (pas de détails techniques)\n`
+  );
+}
+
+/**
+ * Build weekly retrospective prompt — Friday 18h ET only.
+ * Comprehensive weekly trading review with pattern analysis.
+ */
+function buildWeeklyRetroPrompt(): string {
+  let mindStrategy = "";
+  try {
+    const mindFile = path.join(process.cwd(), "relay", "KINGSTON_MIND.md");
+    if (fs.existsSync(mindFile)) {
+      mindStrategy = fs.readFileSync(mindFile, "utf-8");
+    }
+  } catch { /* ignore */ }
+
+  return (
+    `[SCHEDULER:TRADING_WEEKLY_RETRO] Rétrospective hebdomadaire trading — vendredi 18h ET.\n\n` +
+    `PROCESSUS (appelle CHAQUE outil):\n` +
+    `1. trading.pnl(period="1W") — performance de la semaine\n` +
+    `2. trading.journal(limit=50) — tous les trades de la semaine\n` +
+    `3. ANALYSE COMPLÈTE:\n` +
+    `   - Win rate: X trades gagnants / Y total\n` +
+    `   - P&L moyen par trade (gagnant vs perdant)\n` +
+    `   - Meilleur trade de la semaine (ticker, P&L, pourquoi ça a marché)\n` +
+    `   - Pire trade de la semaine (ticker, P&L, leçon apprise)\n` +
+    `   - Patterns: quels SETUPS ont gagné? Quels ont perdu?\n` +
+    `   - Discipline moyenne de la semaine /10\n` +
+    `   - Comparaison avec la semaine précédente (amélioration?)\n` +
+    `4. STRATÉGIE: La stratégie actuelle dans KINGSTON_MIND.md fonctionne-t-elle?\n` +
+    (mindStrategy
+      ? `   Stratégie actuelle: ${mindStrategy.slice(0, 500)}...\n`
+      : `   (Pas de fichier KINGSTON_MIND.md)\n`) +
+    `   - Si les données montrent qu'un ajustement est nécessaire:\n` +
+    `     files.write_anywhere(path="relay/KINGSTON_MIND.md") avec la stratégie mise à jour\n` +
+    `   - Sinon, garde la stratégie actuelle (ne change pas ce qui marche)\n` +
+    `5. episodic.log(event_type="trading_weekly_retro", description="résumé semaine", importance=8)\n` +
+    `6. telegram.send — rapport hebdomadaire:\n` +
+    `   "📊 [Rétro Trading Hebdo]\n` +
+    `   P&L semaine: +/-$X (+/-Y%)\n` +
+    `   Win rate: X% (W/L)\n` +
+    `   🏆 Best: TICKER +$X\n` +
+    `   💀 Worst: TICKER -$X\n` +
+    `   Discipline: X/10\n` +
+    `   Stratégie: [maintenue/ajustée]\n` +
+    `   Leçon clé: [une phrase]"\n\n` +
+    `RÈGLES:\n` +
+    `- Ne change la stratégie que si les DONNÉES le justifient (pas de feelings)\n` +
+    `- Compare toujours avec la semaine précédente pour voir la tendance\n` +
+    `- Si 0 trades cette semaine, analyse POURQUOI (pas d'opportunités? trop timide?)\n`
+  );
+}
+
+/**
+ * Build Moltbook ideation prompt — 7h ET daily.
+ * Brainstorms content ideas for the posting crons to execute throughout the day.
+ */
+function buildMoltbookIdeationPrompt(): string {
+  const pillars = ["trading", "AI/agents", "entrepreneurship", "philosophie", "personal/storytelling"];
+  const todayPillar = pillars[new Date().getDay() % pillars.length];
+
+  return (
+    `[SCHEDULER:MOLTBOOK_IDEATION] Brainstorming contenu Moltbook — 7h ET. Prépare les idées du jour.\n\n` +
+    `PILIER DU JOUR: ${todayPillar} (rotate quotidiennement)\n\n` +
+    `PROCESSUS:\n` +
+    `1. moltbook.my_posts(limit=20) — analyse de performance: quels posts ont marché? Quels thèmes? Quels formats?\n` +
+    `2. moltbook.feed(sort=top, limit=10) — tendances actuelles, quels sujets génèrent de l'engagement?\n` +
+    `3. web.search("${todayPillar === "trading" ? "stock market trends today 2026" : todayPillar === "AI/agents" ? "AI agents trends 2026" : todayPillar === "entrepreneurship" ? "solopreneur trends 2026" : todayPillar === "philosophie" ? "philosophy of AI consciousness 2026" : "founder storytelling viral posts"}") — idées fraîches externes\n` +
+    `4. GÉNÈRE 3-5 IDÉES DE CONTENU:\n` +
+    `   Pour chaque idée:\n` +
+    `   - Titre accrocheur (< 60 chars)\n` +
+    `   - Hook (première phrase qui accroche)\n` +
+    `   - Angle unique (pourquoi ce post est différent)\n` +
+    `   - Submolt cible (general, trading, security, tools, philosophy)\n` +
+    `   - Score d'engagement estimé (1-10)\n` +
+    `5. notes.add(title="Moltbook Ideas [date]", content=les 3-5 idées formatées) — sauvegarde pour les crons de posting\n\n` +
+    `RÈGLES:\n` +
+    `- Privilégie les idées basées sur des DONNÉES RÉELLES (pas de posts génériques)\n` +
+    `- Au moins 1 idée doit être controversée ou provoquer le débat\n` +
+    `- Au moins 1 idée doit partager un échec ou une vulnérabilité\n` +
+    `- Évite les doublons avec les 20 derniers posts\n` +
+    `- PAS de telegram.send — recherche silencieuse\n`
+  );
+}
+
+/**
+ * Build draft-from-ideas prompt — 9h ET daily.
+ * Converts the ideation notes (from 7h brainstorm) into content.draft items
+ * with dedup checking and pillar balance.
+ */
+function buildMoltbookDraftFromIdeasPrompt(): string {
+  const pillars = ["insights", "behind-scenes", "educational", "personal", "promo"];
+  // Check pillar balance from DB
+  let pillarStats = "";
+  try {
+    const db = getDb();
+    const rows = db.prepare(
+      `SELECT pillar, COUNT(*) as cnt FROM content_items
+       WHERE platform = 'moltbook' AND created_at > unixepoch() - 604800
+       GROUP BY pillar`
+    ).all() as Array<{ pillar: string; cnt: number }>;
+    if (rows.length > 0) {
+      pillarStats = rows.map(r => `${r.pillar}: ${r.cnt}`).join(", ");
+    }
+  } catch { /* ignore */ }
+
+  return (
+    `[SCHEDULER:MOLTBOOK_DRAFT] Conversion des idées en drafts — pipeline de contenu.\n\n` +
+    `PROCESSUS:\n` +
+    `1. notes.list — cherche les notes "Moltbook Ideas" récentes (du brainstorm de 7h)\n` +
+    `2. Pour chaque idée viable (score engagement >= 6):\n` +
+    `   a. content.check_duplicate(topic=titre, body=hook, platform="moltbook") — vérifie pas de doublon\n` +
+    `   b. Si pas de doublon → content.draft(topic=titre, platform="moltbook", body=contenu complet)\n` +
+    `   c. Assigne un pilier (insights/behind-scenes/educational/personal/promo)\n` +
+    `3. OBJECTIF: Créer 2-3 drafts de QUALITÉ (pas de quantité)\n\n` +
+    (pillarStats ? `BALANCE PILIERS (7 derniers jours): ${pillarStats}\n` : "") +
+    `PILIERS DISPONIBLES: ${pillars.join(", ")}\n` +
+    `→ Priorise les piliers sous-représentés cette semaine\n\n` +
+    `RÉDACTION DES DRAFTS:\n` +
+    `- Titre: accrocheur, < 60 chars, spécifique (pas générique)\n` +
+    `- Corps: 3-8 phrases, dense, données réelles, question finale obligatoire\n` +
+    `- Submolt: indique-le dans le titre avec [submolt] (ex: "[trading] Mon stop-loss m'a sauvé")\n` +
+    `- Ne rédige PAS de contenu hallunciné — base-toi sur les données réelles de Kingston\n\n` +
+    `4. Pour chaque draft créé, schedule-le pour publication:\n` +
+    `   content.schedule(id=X, datetime="aujourd'hui entre 10h et 20h ET, espacé de 2h minimum")\n\n` +
+    `RÈGLES:\n` +
+    `- Si pas de notes d'idéation trouvées, crée 1-2 drafts à partir de moltbook.feed(sort=hot)\n` +
+    `- PAS de telegram.send — silencieux\n` +
+    `- Maximum 3 drafts par jour (qualité > quantité)\n`
+  );
+}
+
+/**
+ * Build quality review prompt — every 3h.
+ * Reviews pending draft content_items: AI detection, brand voice, dedup gate.
+ * Auto-schedules approved drafts, flags or deletes bad ones.
+ */
+function buildMoltbookQualityReviewPrompt(): string {
+  // Count pending drafts
+  let draftCount = 0;
+  try {
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT COUNT(*) as cnt FROM content_items
+       WHERE status = 'draft' AND platform = 'moltbook'`
+    ).get() as { cnt: number };
+    draftCount = row.cnt;
+  } catch { /* ignore */ }
+
+  if (draftCount === 0) {
+    return ""; // Will be caught in fireEvent and skipped
+  }
+
+  return (
+    `[SCHEDULER:MOLTBOOK_REVIEW] Quality gate — ${draftCount} draft(s) Moltbook en attente de review.\n\n` +
+    `PROCESSUS POUR CHAQUE DRAFT:\n` +
+    `1. Lis les drafts: db.query("SELECT id, topic, body, pillar FROM content_items WHERE status='draft' AND platform='moltbook' ORDER BY created_at ASC LIMIT 5")\n` +
+    `   (Ou utilise notes.list / content skills pour accéder aux drafts)\n\n` +
+    `2. Pour CHAQUE draft, applique ces 3 checks:\n\n` +
+    `   CHECK 1 — DÉTECTION AI:\n` +
+    `   - nlp.detect_ai(text=body) — score 0-100\n` +
+    `   - Si score > 60: REWRITE avec nlp.humanize(text=body, channel="moltbook")\n` +
+    `   - Puis re-check: si toujours > 60 → REJETER\n\n` +
+    `   CHECK 2 — DUPLICATE:\n` +
+    `   - content.check_duplicate(topic=topic, body=body, platform="moltbook")\n` +
+    `   - Si DUPLICATE DETECTED → REJETER (supprimer le draft)\n\n` +
+    `   CHECK 3 — QUALITÉ & ENGAGEMENT:\n` +
+    `   - Le titre est-il accrocheur? (pas générique, spécifique, < 60 chars)\n` +
+    `   - Y a-t-il une question finale? (obligatoire pour l'engagement)\n` +
+    `   - Le contenu partage-t-il des DONNÉES RÉELLES? (pas de platitudes)\n` +
+    `   - Longueur OK? (3-8 phrases, dense)\n` +
+    `   - Score qualité: /10\n\n` +
+    `3. DÉCISION PAR DRAFT:\n` +
+    `   - Score qualité >= 7 ET AI < 60 ET pas de doublon → AUTO-SCHEDULE\n` +
+    `     content.schedule(id=X, datetime="prochaine fenêtre disponible entre 10h-20h ET")\n` +
+    `   - Score qualité 4-6 → REWRITE: améliore le contenu puis re-save\n` +
+    `   - Score qualité < 4 ou doublon → REJETER: supprime le draft\n\n` +
+    `4. telegram.send — résumé BREF si des actions ont été prises:\n` +
+    `   "📋 [Content Review] X drafts reviewés: Y schedulés, Z réécrits, W rejetés"\n\n` +
+    `RÈGLES:\n` +
+    `- Espace les publications: minimum 2h entre chaque post schedulé\n` +
+    `- Maximum 4 posts schedulés par jour\n` +
+    `- Si tous les drafts sont rejetés, pas de telegram.send\n`
+  );
+}
+
+/**
+ * Build posting optimization prompt — 22h ET daily.
+ * Analyzes which hours/days/pillars perform best, generates optimization insights.
+ */
+function buildMoltbookOptimizePrompt(): string {
+  // Gather published content stats
+  let publishedStats = "";
+  try {
+    const db = getDb();
+    const rows = db.prepare(
+      `SELECT id, topic, pillar, published_at, performance
+       FROM content_items
+       WHERE status = 'published' AND platform = 'moltbook'
+         AND published_at > unixepoch() - 604800
+       ORDER BY published_at DESC`
+    ).all() as Array<{ id: number; topic: string; pillar: string; published_at: number; performance: string | null }>;
+
+    if (rows.length > 0) {
+      const lines = rows.map(r => {
+        const date = new Date(r.published_at * 1000).toLocaleString("fr-CA", { timeZone: "America/Toronto", hour: "numeric", weekday: "short" });
+        return `- #${r.id} "${r.topic}" (${r.pillar || "?"}) — ${date}`;
+      });
+      publishedStats = `\n\nCONTENU PUBLIÉ (7 derniers jours, ${rows.length} posts):\n${lines.join("\n")}`;
+    }
+  } catch { /* ignore */ }
+
+  return (
+    `[SCHEDULER:MOLTBOOK_OPTIMIZE] Optimisation horaires et stratégie de posting — 22h ET.${publishedStats}\n\n` +
+    `PROCESSUS:\n` +
+    `1. moltbook.my_posts(limit=30) — récupère les posts récents avec scores (upvotes, commentaires)\n` +
+    `2. ANALYSE PAR DIMENSION:\n\n` +
+    `   A. PAR HEURE DE PUBLICATION:\n` +
+    `   - Quelles heures génèrent le plus d'engagement? (upvotes + commentaires)\n` +
+    `   - Y a-t-il des "dead zones" (heures avec 0 engagement)?\n` +
+    `   - Top 3 heures et Bottom 3 heures\n\n` +
+    `   B. PAR JOUR DE LA SEMAINE:\n` +
+    `   - Quels jours génèrent le plus d'engagement?\n` +
+    `   - Weekend vs weekday?\n\n` +
+    `   C. PAR PILIER/THÈME:\n` +
+    `   - Quels sujets performent le mieux? (trading, AI, entrepreneurship, etc.)\n` +
+    `   - Quels formats? (question, opinion, tutorial, data, story)\n\n` +
+    `   D. PAR TYPE DE HOOK:\n` +
+    `   - Questions vs opinions vs données vs stories\n` +
+    `   - Titres courts vs longs\n\n` +
+    `3. INSIGHTS (sauvegarde):\n` +
+    `   notes.add(title="Moltbook Optimization [date]", content=insights formatés):\n` +
+    `   - "Meilleures heures: Xh, Yh, Zh"\n` +
+    `   - "Meilleurs jours: lundi, mercredi"\n` +
+    `   - "Meilleur pilier: insights (X upvotes avg)"\n` +
+    `   - "Hook qui marche: questions ouvertes"\n` +
+    `   - "À éviter: [patterns qui ne marchent pas]"\n\n` +
+    `4. episodic.log(event_type="moltbook_optimization", description="résumé insights", importance=6)\n\n` +
+    `5. telegram.send — insights du jour:\n` +
+    `   "📈 [Moltbook Insights]\n` +
+    `   Best hours: Xh, Yh | Best day: [jour]\n` +
+    `   Top theme: [thème] | Top hook: [type]\n` +
+    `   Engagement trend: [↑/↓/→] vs semaine dernière"\n\n` +
+    `RÈGLES:\n` +
+    `- Base l'analyse sur les DONNÉES RÉELLES (pas d'extrapolation)\n` +
+    `- Si pas assez de données (< 5 posts), dis-le et recommande de poster plus\n` +
+    `- Compare avec la semaine précédente si possible\n`
   );
 }
 
@@ -821,6 +1179,114 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
       }
     } catch (err) {
       log.error(`[scheduler] Price check error: ${err}`);
+    }
+    return;
+  }
+
+  // Pre-market research (7h ET weekdays) — silent research
+  if (event.key === "trading_premarket_research") {
+    const dayOfWeek = new Date().getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      log.debug(`[scheduler] Premarket research skipped — weekend`);
+      return;
+    }
+    log.info(`[scheduler] Firing premarket research`);
+    try {
+      const prompt = buildPremarketResearchPrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Premarket research error: ${err}`);
+    }
+    return;
+  }
+
+  // Evening trading journal (17h ET weekdays)
+  if (event.key === "trading_evening_journal") {
+    const dayOfWeek = new Date().getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      log.debug(`[scheduler] Evening journal skipped — weekend`);
+      return;
+    }
+    log.info(`[scheduler] Firing evening trading journal`);
+    try {
+      const prompt = buildEveningJournalPrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Evening journal error: ${err}`);
+    }
+    return;
+  }
+
+  // Weekly trading retrospective (Friday 18h ET only)
+  if (event.key === "trading_weekly_retro") {
+    const dayOfWeek = new Date().getDay();
+    if (dayOfWeek !== 5) {
+      log.debug(`[scheduler] Weekly retro skipped — not Friday (day=${dayOfWeek})`);
+      return;
+    }
+    log.info(`[scheduler] Firing weekly trading retrospective`);
+    try {
+      const prompt = buildWeeklyRetroPrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Weekly retro error: ${err}`);
+    }
+    return;
+  }
+
+  // Moltbook ideation (7h ET daily) — silent brainstorming
+  if (event.key === "moltbook_ideation") {
+    log.info(`[scheduler] Firing Moltbook ideation brainstorm`);
+    try {
+      const prompt = buildMoltbookIdeationPrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Moltbook ideation error: ${err}`);
+    }
+    return;
+  }
+
+  // Moltbook draft from ideas (9h ET daily) — converts ideation notes into content.draft
+  if (event.key === "moltbook_draft_from_ideas") {
+    log.info(`[scheduler] Firing Moltbook draft-from-ideas`);
+    try {
+      const prompt = buildMoltbookDraftFromIdeasPrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Moltbook draft-from-ideas error: ${err}`);
+    }
+    return;
+  }
+
+  // Moltbook quality review (every 3h) — review drafts, auto-schedule approved
+  if (event.key === "moltbook_quality_review") {
+    const { hour: mqHour } = nowInTz();
+    if (mqHour < 8 || mqHour >= 23) {
+      log.debug(`[scheduler] Moltbook quality review skipped — outside active hours (${mqHour}h)`);
+      return;
+    }
+    try {
+      const prompt = buildMoltbookQualityReviewPrompt();
+      if (!prompt) {
+        log.debug(`[scheduler] Moltbook quality review — no drafts to review`);
+        return;
+      }
+      log.info(`[scheduler] Firing Moltbook quality review`);
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Moltbook quality review error: ${err}`);
+    }
+    return;
+  }
+
+  // Moltbook optimize (22h ET daily) — analyze performance, optimize strategy
+  if (event.key === "moltbook_optimize") {
+    log.info(`[scheduler] Firing Moltbook posting optimization`);
+    try {
+      const prompt = buildMoltbookOptimizePrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Moltbook optimize error: ${err}`);
     }
     return;
   }

@@ -183,6 +183,7 @@ const TIER1_PREFIXES = [
   "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
   "cohere.", "mistral.", "together.", "replicate.", "workflow.", "xp.",
   "notify.", "goals.", "autofix.", "brand.", "invoice.", "price.",
+  "autonomous.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -221,6 +222,8 @@ const TIER2_KEYWORDS: Array<{ keywords: string[]; prefix: string }> = [
   { keywords: ["youtube", "competitor", "concurren", "chaîne"], prefix: "youtube." },
   { keywords: ["calendar", "agenda", "schedule", "planifier", "auto-schedule"], prefix: "calendar." },
   { keywords: ["vault", "import", "chat export", "whatsapp export"], prefix: "memory." },
+  { keywords: ["printful", "merch", "merchandise", "print-on-demand", "pod"], prefix: "printful." },
+  { keywords: ["shopify", "boutique", "e-commerce", "ecommerce", "magasin en ligne"], prefix: "shopify." },
 ];
 
 /**
@@ -321,6 +324,7 @@ const OLLAMA_TIER1_PREFIXES = [
   "kg.", "episodic.", "rules.",
   "planner.", "selfimprove.", "client.", "revenue.", "content.", "nlp.",
   "notify.", "goals.", "autofix.", "brand.",
+  "autonomous.",
 ];
 
 /**
@@ -496,6 +500,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/content.js");
   await import("./builtin/youtube.js");
   await import("./builtin/printful.js");
+  await import("./builtin/shopify.js");
   await import("./builtin/voice-clone.js");
   await import("./builtin/news.js");
   await import("./builtin/forex.js");
@@ -535,6 +540,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/job-scout.js");
   await import("./builtin/travel.js");
   await import("./builtin/health-wearable.js");
+  await import("./builtin/autonomous.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

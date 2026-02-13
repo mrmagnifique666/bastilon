@@ -556,6 +556,23 @@ export function getDb(): Database.Database {
       `);
     } catch { /* table may already exist */ }
 
+    // Autonomous goals (multi-strategy goal execution)
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS autonomous_goals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          goal TEXT NOT NULL,
+          strategies TEXT DEFAULT '[]',
+          attempts TEXT DEFAULT '[]',
+          status TEXT DEFAULT 'active',
+          created_by TEXT DEFAULT 'mind',
+          created_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_auto_goals_status ON autonomous_goals(status, created_at DESC);
+      `);
+    } catch { /* table may already exist */ }
+
     // Job/opportunity tracking
     try {
       db.exec(`
@@ -1345,6 +1362,100 @@ export function dungeonGetTurns(sessionId: number, limit = 20): any[] {
   });
 }
 
+// --- Autonomous Goals ---
+
+export interface AutonomousGoal {
+  id: number;
+  goal: string;
+  strategies: string[];
+  attempts: Array<{ strategy: string; result: string; success: boolean; ts: number }>;
+  status: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+function parseGoalRow(row: any): AutonomousGoal {
+  let strategies: string[] = [];
+  let attempts: Array<{ strategy: string; result: string; success: boolean; ts: number }> = [];
+  try { strategies = JSON.parse(row.strategies || "[]"); } catch { /* */ }
+  try { attempts = JSON.parse(row.attempts || "[]"); } catch { /* */ }
+  return { ...row, strategies, attempts };
+}
+
+/** Create a new autonomous goal with optional strategy list */
+export function createGoal(goal: string, strategies: string[] = [], createdBy = "mind"): number {
+  const d = getDb();
+  const info = d.prepare(
+    "INSERT INTO autonomous_goals (goal, strategies, created_by) VALUES (?, ?, ?)"
+  ).run(goal, JSON.stringify(strategies), createdBy);
+  log.info(`[autonomous] Goal #${info.lastInsertRowid} created: ${goal.slice(0, 80)}`);
+  return info.lastInsertRowid as number;
+}
+
+/** Log an attempt on a goal */
+export function logGoalAttempt(goalId: number, strategy: string, result: string, success: boolean): void {
+  const d = getDb();
+  const row = d.prepare("SELECT attempts FROM autonomous_goals WHERE id = ?").get(goalId) as { attempts: string } | undefined;
+  if (!row) return;
+  let attempts: Array<{ strategy: string; result: string; success: boolean; ts: number }> = [];
+  try { attempts = JSON.parse(row.attempts || "[]"); } catch { /* */ }
+  attempts.push({ strategy, result, success, ts: Math.floor(Date.now() / 1000) });
+  d.prepare("UPDATE autonomous_goals SET attempts = ?, updated_at = unixepoch() WHERE id = ?")
+    .run(JSON.stringify(attempts), goalId);
+  log.info(`[autonomous] Goal #${goalId} attempt: ${strategy} → ${success ? "SUCCESS" : "FAIL"}`);
+}
+
+/** Mark a goal as succeeded */
+export function completeGoal(goalId: number, result: string): void {
+  const d = getDb();
+  // Add a final success attempt
+  logGoalAttempt(goalId, "final", result, true);
+  d.prepare("UPDATE autonomous_goals SET status = 'succeeded', updated_at = unixepoch() WHERE id = ?").run(goalId);
+  log.info(`[autonomous] Goal #${goalId} completed: ${result.slice(0, 80)}`);
+}
+
+/** Mark a goal as escalated (all strategies failed) */
+export function escalateGoal(goalId: number, reason: string): void {
+  const d = getDb();
+  d.prepare("UPDATE autonomous_goals SET status = 'escalated', updated_at = unixepoch() WHERE id = ?").run(goalId);
+  log.info(`[autonomous] Goal #${goalId} escalated: ${reason.slice(0, 80)}`);
+}
+
+/** Get all active goals, optionally filtered by agent */
+export function getActiveGoals(agent?: string): AutonomousGoal[] {
+  const d = getDb();
+  if (agent) {
+    return (d.prepare("SELECT * FROM autonomous_goals WHERE status = 'active' AND created_by = ? ORDER BY created_at DESC")
+      .all(agent) as any[]).map(parseGoalRow);
+  }
+  return (d.prepare("SELECT * FROM autonomous_goals WHERE status = 'active' ORDER BY created_at DESC")
+    .all() as any[]).map(parseGoalRow);
+}
+
+/** Get a single goal by ID */
+export function getGoal(id: number): AutonomousGoal | null {
+  const d = getDb();
+  const row = d.prepare("SELECT * FROM autonomous_goals WHERE id = ?").get(id);
+  if (!row) return null;
+  return parseGoalRow(row);
+}
+
+/** Get all goals (any status) — for reporting */
+export function getAllGoals(limit = 20): AutonomousGoal[] {
+  const d = getDb();
+  return (d.prepare("SELECT * FROM autonomous_goals ORDER BY updated_at DESC LIMIT ?")
+    .all(limit) as any[]).map(parseGoalRow);
+}
+
+/** Count escalated goals today (for daily cap) */
+export function countEscalatedToday(): number {
+  const d = getDb();
+  const startOfDay = Math.floor(Date.now() / 1000) - (new Date().getHours() * 3600 + new Date().getMinutes() * 60 + new Date().getSeconds());
+  return (d.prepare("SELECT COUNT(*) as c FROM autonomous_goals WHERE status = 'escalated' AND updated_at > ?")
+    .get(startOfDay) as { c: number }).c;
+}
+
 // ── Database maintenance — prevents unbounded table growth ──────────
 export function cleanupDatabase(): { purged: Record<string, number> } {
   const d = getDb();
@@ -1375,7 +1486,11 @@ export function cleanupDatabase(): { purged: Record<string, number> } {
   const decisions = d.prepare("DELETE FROM autonomous_decisions WHERE created_at < ?").run(ninetyDaysAgo);
   purged.autonomous_decisions = decisions.changes;
 
-  // 6. episodic_events low-importance older than 90 days (keep high-importance)
+  // 6. autonomous_goals completed/escalated older than 90 days
+  const autoGoals = d.prepare("DELETE FROM autonomous_goals WHERE status IN ('succeeded', 'escalated', 'failed') AND updated_at < ?").run(ninetyDaysAgo);
+  purged.autonomous_goals = autoGoals.changes;
+
+  // 7. episodic_events low-importance older than 90 days (keep high-importance)
   const episodic = d.prepare("DELETE FROM episodic_events WHERE importance < 0.7 AND created_at < ?").run(ninetyDaysAgo);
   purged.episodic_events = episodic.changes;
 

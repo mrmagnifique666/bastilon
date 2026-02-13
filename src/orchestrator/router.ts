@@ -258,6 +258,20 @@ async function handleMessageInner(
     const isAgent = isInternalChatId(chatId);
     const needsTools = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:") || userMessage.startsWith("[CRON:");
 
+    // Force Gemini for executor code request cycles (better code quality than Ollama)
+    if (chatId === 103 && userMessage.includes("[CODE_REQUEST]") && config.geminiApiKey && !isProviderCoolingDown("gemini")) {
+      try {
+        log.info(`[router] 🔧 Gemini force for executor code request: ${userMessage.slice(0, 100)}...`);
+        const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId, onToolProgress: async (cid, msg) => safeProgress(cid, msg) });
+        addTurn(chatId, { role: "assistant", content: geminiResult });
+        backgroundExtract(chatId, userMessage, geminiResult);
+        return geminiResult;
+      } catch (err) {
+        log.warn(`[router] Gemini force for executor failed, falling back to Ollama: ${err instanceof Error ? err.message : String(err)}`);
+        // Fall through to normal Ollama path
+      }
+    }
+
     if (isAgent || needsTools) {
       try {
         log.info(`[router] 🦙 Ollama-chat for ${isAgent ? `agent ${chatId}` : "scheduler"}: ${userMessage.slice(0, 100)}...`);
@@ -722,6 +736,20 @@ async function handleMessageStreamingInner(
     // Agents and scheduler tasks get full tool chain
     const isAgentStream = isInternalChatId(chatId);
     const needsToolsStream = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:") || userMessage.startsWith("[CRON:");
+
+    // Force Gemini for executor code request cycles (streaming path)
+    if (chatId === 103 && userMessage.includes("[CODE_REQUEST]") && config.geminiApiKey && !isProviderCoolingDown("gemini")) {
+      try {
+        log.info(`[router-stream] 🔧 Gemini force for executor code request: ${userMessage.slice(0, 100)}...`);
+        await draft.cancel();
+        const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId, onToolProgress: async (cid, msg) => safeProgress(cid, msg) });
+        addTurn(chatId, { role: "assistant", content: geminiResult });
+        backgroundExtract(chatId, userMessage, geminiResult);
+        return geminiResult;
+      } catch (err) {
+        log.warn(`[router-stream] Gemini force for executor failed, falling back: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     if (isAgentStream || needsToolsStream) {
       try {

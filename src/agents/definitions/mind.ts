@@ -17,7 +17,7 @@
  */
 import type { AgentConfig } from "../base.js";
 import { config } from "../../config/env.js";
-import { getRecentDecisions, getPendingQuestions } from "../../storage/store.js";
+import { getRecentDecisions, getPendingQuestions, getActiveGoals } from "../../storage/store.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -90,7 +90,14 @@ const FREEDOM_RULES =
   `- web.search échoue? → essaie api.call, web.fetch, shell.exec("curl...")\n` +
   `- trading.* échoue? → essaie api.call vers l'API Alpaca directement\n` +
   `- Avant de demander à Nicolas, fais 95% du travail toi-même. Sa contribution = minimale.\n` +
-  `- Tu as 357+ tools. UTILISE-LES TOUS créativement.\n\n`;
+  `- Tu as 357+ tools. UTILISE-LES TOUS créativement.\n\n` +
+  `OBJECTIFS AUTONOMES:\n` +
+  `- Si tu as un objectif actif, essaie TOUJOURS au moins 2-3 approches avant d'abandonner\n` +
+  `- Utilise autonomous.goal() pour tracker tes objectifs multi-étapes\n` +
+  `- Utilise autonomous.attempt() pour logger chaque tentative\n` +
+  `- Si une tentative réussit, utilise autonomous.complete() pour finaliser\n` +
+  `- Si toutes les stratégies échouent, utilise autonomous.escalate() pour créer un code.request auto-exécuté\n` +
+  `- PRIORITÉ: Continue les objectifs actifs AVANT d'en créer de nouveaux\n\n`;
 
 const ANTI_HALLUCINATION =
   `ANTI-HALLUCINATION:\n` +
@@ -121,12 +128,40 @@ function buildMindPrompt(cycle: number): string | null {
   const recentDecisions = getRecentDecisions(5);
   const pendingQuestions = getPendingQuestions();
 
+  // Load active autonomous goals
+  let goalsBlock = "";
+  const isAutoMode = (() => {
+    try { return fs.existsSync(path.resolve("relay/autonomous-mode.flag")); } catch { return false; }
+  })();
+  if (isAutoMode) {
+    const activeGoals = getActiveGoals();
+    if (activeGoals.length > 0) {
+      goalsBlock = `\n--- OBJECTIFS ACTIFS ---\n`;
+      for (const g of activeGoals) {
+        const remaining = g.strategies.filter(
+          (s) => !g.attempts.some((a) => a.strategy === s)
+        );
+        goalsBlock += `🎯 #${g.id}: ${g.goal}\n`;
+        goalsBlock += `   Tentatives: ${g.attempts.length} | `;
+        goalsBlock += remaining.length > 0
+          ? `Stratégies restantes: ${remaining.join(", ")}\n`
+          : `Toutes les stratégies essayées — ESCALADE si besoin\n`;
+        if (g.attempts.length > 0) {
+          const last = g.attempts[g.attempts.length - 1];
+          goalsBlock += `   Dernière: ${last.strategy} → ${last.success ? "OK" : "FAIL"}: ${last.result.slice(0, 80)}\n`;
+        }
+      }
+      goalsBlock += `\nPRIORITÉ: Continue à travailler sur ces objectifs avant d'en créer de nouveaux.\n---\n\n`;
+    }
+  }
+
   const contextBlock =
     `Tu es Kingston Mind — le cerveau autonome de Kingston, partenaire business de Nicolas.\n` +
     `Jour: ${dayName} | Heure: ${h}h (ET) | Marché: ${marketOpen ? "OUVERT" : "FERMÉ"}\n\n` +
     FREEDOM_RULES +
     ANTI_HALLUCINATION +
     AGENT_RULES +
+    goalsBlock +
     `--- STRATÉGIE ACTIVE ---\n${mindContent}\n--- FIN STRATÉGIE ---\n\n` +
     `--- DÉCISIONS RÉCENTES ---\n${formatDecisions(recentDecisions)}\n---\n\n` +
     `--- QUESTIONS EN ATTENTE ---\n${formatPending(pendingQuestions)}\n---\n\n`;

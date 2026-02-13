@@ -123,7 +123,10 @@ function buildExecutorPrompt(cycle: number): string | null {
       })
       .join("\n\n---\n\n");
 
-    parts.push(`## Code Requests (${pendingCode.length})\n\n${codeDetails}`);
+    // Add [CODE_REQUEST] marker so router forces Gemini (better code quality)
+    const hasAutoApprove = pendingCode.some((r: any) => r.auto_approve);
+    const marker = hasAutoApprove ? "[CODE_REQUEST][AUTO_APPROVE]" : "[CODE_REQUEST]";
+    parts.push(`${marker}\n## Code Requests (${pendingCode.length})\n\n${codeDetails}`);
   }
 
   // Source 2: agent_tasks table
