@@ -317,14 +317,34 @@ export class Agent {
     await emitHook("agent:cycle:start", { agentId: this.id, cycle: this.cycle, chatId: this.chatId });
 
     try {
-      // Prefix prompt with agent identity + global no-spam rule
+      // Check if this agent has active goals in goal_tree (for Mind agent)
+      const hasActiveGoals = this.id === "mind" && (() => {
+        try {
+          const d = getDb();
+          const t = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='goal_tree'").get();
+          if (!t) return false;
+          const c = d.prepare("SELECT COUNT(*) as c FROM goal_tree WHERE status = 'active'").get() as { c: number };
+          return c.c > 0;
+        } catch { return false; }
+      })();
+
+      // Build agent prompt — anti-spam rules adapt based on active goals
+      const messageRules = hasActiveGoals
+        ? `COMMUNICATION PENDANT GOAL (MODE ACTIF):\n` +
+          `- Tu travailles sur un GOAL ACTIF — tu peux envoyer des messages à Nicolas librement.\n` +
+          `- telegram.send POUR: progrès important, questions, résultats, blocages, demandes d'action.\n` +
+          `- notes.add POUR: logs internes, réflexions, données intermédiaires.\n` +
+          `- Sois proactif: si tu as besoin d'input de Nicolas, DEMANDE immédiatement.\n` +
+          `- Envoie un résumé de ce que tu fais à chaque étape importante.\n\n`
+        : `RÈGLE GLOBALE ANTI-SPAM (PRIORITÉ MAXIMALE):\n` +
+          `- NE PAS utiliser telegram.send pour des rapports de routine, heartbeats, ou résumés.\n` +
+          `- Utilise notes.add pour TOUT rapport interne, résumé, réflexion, log.\n` +
+          `- telegram.send UNIQUEMENT si Nicolas DOIT AGIR (décision requise, erreur critique, opportunité urgente).\n` +
+          `- Si tu n'es pas sûr → notes.add. Le doute = pas de notification.\n\n`;
+
       const agentPrompt =
         `[AGENT:${this.id.toUpperCase()}] (${this.name} — ${this.role})\n\n` +
-        `RÈGLE GLOBALE ANTI-SPAM (PRIORITÉ MAXIMALE):\n` +
-        `- NE PAS utiliser telegram.send pour des rapports de routine, heartbeats, ou résumés.\n` +
-        `- Utilise notes.add pour TOUT rapport interne, résumé, réflexion, log.\n` +
-        `- telegram.send UNIQUEMENT si Nicolas DOIT AGIR (décision requise, erreur critique, opportunité urgente).\n` +
-        `- Si tu n'es pas sûr → notes.add. Le doute = pas de notification.\n\n` +
+        messageRules +
         prompt;
 
       const result = await enqueueAdminAsync(() => handleMessage(this.chatId, agentPrompt, this.userId, "scheduler"));
@@ -352,6 +372,72 @@ export class Agent {
       saveState(this);
       await emitHook("agent:cycle:end", { agentId: this.id, cycle: this.cycle, chatId: this.chatId });
       log.info(`[agent:${this.id}] Cycle ${this.cycle} — completed (${durationMs}ms)`);
+
+      // ── Multi-round execution for Mind with active goals ──
+      // If Mind has active goals, immediately run continuation rounds (up to 3)
+      // instead of waiting 20 minutes for the next heartbeat.
+      if (hasActiveGoals && this.id === "mind") {
+        const MAX_CONTINUATION_ROUNDS = 3;
+        for (let round = 1; round <= MAX_CONTINUATION_ROUNDS; round++) {
+          // Re-check goals — maybe the goal was just completed
+          const stillHasGoals = (() => {
+            try {
+              const d = getDb();
+              const c = d.prepare("SELECT COUNT(*) as c FROM goal_tree WHERE status = 'active'").get() as { c: number };
+              return c.c > 0;
+            } catch { return false; }
+          })();
+
+          if (!stillHasGoals) {
+            log.info(`[agent:mind] Continuation round ${round} — no more active goals, stopping`);
+            break;
+          }
+
+          // Check rate limits
+          if (isClaudeRateLimited()) {
+            log.info(`[agent:mind] Continuation round ${round} — rate limited, stopping`);
+            break;
+          }
+
+          log.info(`[agent:mind] Continuation round ${round}/${MAX_CONTINUATION_ROUNDS} — goals still active, continuing`);
+
+          // Fresh context for continuation
+          clearTurns(this.chatId);
+          clearSession(this.chatId);
+
+          const contPrompt = this.buildPrompt(this.cycle);
+          this.cycle++;
+
+          if (!contPrompt) break;
+
+          const contAgentPrompt =
+            `[AGENT:MIND] (${this.name} — ${this.role}) [CONTINUATION ROUND ${round}]\n\n` +
+            `COMMUNICATION PENDANT GOAL (MODE ACTIF):\n` +
+            `- Tu travailles sur un GOAL ACTIF — continue le travail.\n` +
+            `- Appelle goal.focus() pour savoir où tu en es.\n` +
+            `- Envoie un update à Nicolas si progrès important.\n\n` +
+            contPrompt;
+
+          try {
+            const contResult = await enqueueAdminAsync(() =>
+              handleMessage(this.chatId, contAgentPrompt, this.userId, "scheduler")
+            );
+
+            if (detectAndSetRateLimit(contResult)) {
+              log.warn(`[agent:mind] Continuation round ${round} — rate limited`);
+              break;
+            }
+
+            this.totalRuns++;
+            logRun(this.id, this.cycle, Date.now(), 0, "success");
+            saveState(this);
+            log.info(`[agent:mind] Continuation round ${round} — completed`);
+          } catch (contErr) {
+            log.warn(`[agent:mind] Continuation round ${round} — error: ${contErr}`);
+            break;
+          }
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const durationMs = Date.now() - startTime;

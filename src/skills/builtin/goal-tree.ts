@@ -19,6 +19,8 @@
  */
 import { registerSkill } from "../loader.js";
 import { getDb } from "../../storage/store.js";
+import fs from "node:fs";
+import path from "node:path";
 import { log } from "../../utils/log.js";
 
 // ── DB Schema ──
@@ -430,6 +432,18 @@ registerSkill({
     if (phaseContext.length > 0) {
       lines.push("", "--- PHASES PRÉCÉDENTES ---", ...phaseContext);
     }
+
+    // Inject scratchpad if it exists
+    const scratchRootId = focus.root_id || focus.id;
+    try {
+      const scratchFile = path.join(path.resolve("relay/goals"), `${scratchRootId}.md`);
+      if (fs.existsSync(scratchFile)) {
+        const scratch = fs.readFileSync(scratchFile, "utf-8").trim();
+        if (scratch) {
+          lines.push("", "--- SCRATCHPAD (mémoire de travail) ---", scratch.slice(0, 1500), "---");
+        }
+      }
+    } catch { /* ignore */ }
 
     lines.push(
       "",
@@ -859,4 +873,76 @@ registerSkill({
   },
 });
 
-log.info(`[goal-tree] 8 goal tree skills registered (set, focus, advance, complete, fail, tree, decompose, status)`);
+// ── Goal Scratchpad ──
+// Persistent working memory per goal — survives across cycles.
+// Stored as files in relay/goals/<root_id>.md
+
+const GOALS_DIR = path.resolve("relay/goals");
+
+function ensureGoalsDir(): void {
+  try { fs.mkdirSync(GOALS_DIR, { recursive: true }); } catch { /* exists */ }
+}
+
+function scratchPath(goalId: number): string {
+  return path.join(GOALS_DIR, `${goalId}.md`);
+}
+
+function readScratch(goalId: number): string {
+  try { return fs.readFileSync(scratchPath(goalId), "utf-8"); } catch { return ""; }
+}
+
+registerSkill({
+  name: "goal.scratch",
+  description:
+    "Read or write the scratchpad for a goal. The scratchpad is a persistent working memory " +
+    "that survives across cycles. Use it to save intermediate results, URLs found, API keys, " +
+    "partial work, next steps — anything you need to remember between cycles.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      id: { type: "number", description: "Goal ID (uses root goal's scratchpad)" },
+      action: { type: "string", description: "'read' to read, 'write' to overwrite, 'append' to add content" },
+      content: { type: "string", description: "Content to write/append (required for write/append)" },
+    },
+    required: ["id", "action"],
+  },
+  async execute(args): Promise<string> {
+    ensureGoalsDir();
+    const goalId = Number(args.id);
+    const action = String(args.action).toLowerCase();
+
+    // Resolve to root goal's scratchpad
+    ensureTable();
+    const db = getDb();
+    const node = db.prepare("SELECT * FROM goal_tree WHERE id = ?").get(goalId) as GoalNode | undefined;
+    const rootId = node ? (node.root_id || node.id) : goalId;
+    const filePath = scratchPath(rootId);
+
+    if (action === "read") {
+      const content = readScratch(rootId);
+      return content || `(Scratchpad #${rootId} vide — utilise goal.scratch(id=${rootId}, action="write", content="...") pour écrire)`;
+    }
+
+    if (action === "write") {
+      const content = String(args.content || "");
+      fs.writeFileSync(filePath, content, "utf-8");
+      log.info(`[goal-tree] Scratchpad #${rootId} written (${content.length} chars)`);
+      return `Scratchpad #${rootId} sauvegardé (${content.length} chars).`;
+    }
+
+    if (action === "append") {
+      const existing = readScratch(rootId);
+      const newContent = String(args.content || "");
+      const timestamp = new Date().toLocaleString("fr-CA", { timeZone: "America/Toronto" });
+      const appended = existing + `\n\n--- ${timestamp} ---\n${newContent}`;
+      fs.writeFileSync(filePath, appended, "utf-8");
+      log.info(`[goal-tree] Scratchpad #${rootId} appended (${newContent.length} chars)`);
+      return `Ajouté au scratchpad #${rootId} (${newContent.length} chars, total: ${appended.length}).`;
+    }
+
+    return `Action invalide: "${action}". Utilise "read", "write", ou "append".`;
+  },
+});
+
+log.info(`[goal-tree] 9 goal tree skills registered (set, focus, advance, complete, fail, tree, decompose, status, scratch)`);

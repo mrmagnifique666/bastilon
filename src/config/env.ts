@@ -44,7 +44,7 @@ function buildConfig() {
     ),
     memoryTurns: Number(optional("MEMORY_TURNS", "12")),
     rateLimitMs: Number(optional("RATE_LIMIT_MS", "2000")),
-    maxToolChain: Number(optional("MAX_TOOL_CHAIN", "5")),
+    maxToolChain: Number(optional("MAX_TOOL_CHAIN", "20")),
     shellTimeout: Number(optional("SHELL_TIMEOUT_MS", "30000")),
     codeTimeout: Number(optional("CODE_TIMEOUT_MS", "30000")),
     cliTimeoutMs: Number(optional("CLI_TIMEOUT_MS", "300000")),
