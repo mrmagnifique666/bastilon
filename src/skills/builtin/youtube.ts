@@ -8,6 +8,80 @@ import { log } from "../../utils/log.js";
 
 const MAX_TRANSCRIPT = 12000;
 
+// Fallback: extract transcript via browser DOM when API fails
+async function extractTranscriptViaBrowser(videoId: string, showTimestamps: boolean): Promise<string> {
+  try {
+    const { browserManager } = await import("../../browser/manager.js");
+    const page = await browserManager.getPage();
+
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    await page.goto(videoUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    // Execute JavaScript to click transcript button and extract segments
+    const transcript = await page.evaluate(async () => {
+      // Find and click the transcript button
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const transcriptButton = buttons.find(btn => {
+        const text = btn.textContent || '';
+        const label = btn.getAttribute('aria-label') || '';
+        return text.toLowerCase().includes('transcript') ||
+               label.toLowerCase().includes('transcript') ||
+               text.toLowerCase().includes('show transcript');
+      });
+
+      if (!transcriptButton) {
+        return { error: 'Transcript button not found on page' };
+      }
+
+      (transcriptButton as HTMLElement).click();
+
+      // Wait for panel to open
+      await new Promise(r => setTimeout(r, 2500));
+
+      // Extract transcript segments
+      const segments = Array.from(document.querySelectorAll('ytd-transcript-segment-renderer'));
+
+      if (segments.length === 0) {
+        return { error: 'No transcript segments found after clicking button' };
+      }
+
+      // Map segments to {timestamp, text}
+      return segments.map(seg => {
+        const timestamp = seg.querySelector('.segment-timestamp')?.textContent?.trim() || '';
+        const text = seg.querySelector('.segment-text')?.textContent?.trim() || '';
+        return { timestamp, text };
+      });
+    });
+
+    if (typeof transcript === 'object' && 'error' in transcript) {
+      throw new Error(transcript.error as string);
+    }
+
+    if (!Array.isArray(transcript) || transcript.length === 0) {
+      throw new Error('No transcript segments extracted from browser');
+    }
+
+    // Format transcript
+    let text: string;
+    if (showTimestamps) {
+      text = transcript.map((s: any) => `[${s.timestamp}] ${s.text}`).join('\n');
+    } else {
+      text = transcript.map((s: any) => s.text).join(' ');
+    }
+
+    // Truncate if needed
+    if (text.length > MAX_TRANSCRIPT) {
+      text = text.slice(0, MAX_TRANSCRIPT) + `\n\n... (truncated, ${text.length} total chars)`;
+    }
+
+    const duration = transcript.length > 0 ? transcript[transcript.length - 1].timestamp : 'unknown';
+
+    return `YouTube Transcript (${videoId}, via browser, duration ~${duration}, ${transcript.length} segments):\n\n${text}`;
+  } catch (err) {
+    throw new Error(`Browser extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function extractVideoId(input: string): string | null {
   // Accept raw ID, full URL, or short URL
   const patterns = [
@@ -60,7 +134,9 @@ registerSkill({
       const segments = await YoutubeTranscript.fetchTranscript(videoId, { lang });
 
       if (!segments || segments.length === 0) {
-        return `No transcript available for video ${videoId} (lang=${lang}). The video may not have captions, or try a different language.`;
+        // FALLBACK: Try browser-based extraction
+        log.info(`[youtube.transcript] No transcript via API for ${videoId}, trying browser fallback...`);
+        return await extractTranscriptViaBrowser(videoId, showTimestamps);
       }
 
       // Format transcript
@@ -87,8 +163,15 @@ registerSkill({
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`[youtube.transcript] Error for ${videoId}: ${msg}`);
 
-      if (msg.includes("Could not get")) {
-        return `No transcript available for video ${videoId}. The video may not have captions enabled, or try lang='fr' or lang='auto'.`;
+      // FALLBACK: If API fails, try browser extraction
+      if (msg.includes("Could not get") || msg.includes("No transcripts")) {
+        log.info(`[youtube.transcript] API failed for ${videoId}, trying browser fallback...`);
+        try {
+          return await extractTranscriptViaBrowser(videoId, showTimestamps);
+        } catch (browserErr) {
+          const browserMsg = browserErr instanceof Error ? browserErr.message : String(browserErr);
+          return `No transcript available via API or browser for video ${videoId}. API error: ${msg}. Browser error: ${browserMsg}`;
+        }
       }
       return `Error fetching transcript: ${msg}`;
     }
