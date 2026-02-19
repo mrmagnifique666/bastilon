@@ -7,6 +7,7 @@ import { browserManager, type Page } from "../../browser/manager.js";
 import { config } from "../../config/env.js";
 import { log } from "../../utils/log.js";
 import { getBotPhotoFn } from "./telegram.js";
+import { handleCaptchaIfPresent, CaptchaSolver } from "../../browser/captcha-solver.js";
 
 const MAX_TEXT = 8000;
 
@@ -100,10 +101,27 @@ registerSkill({
       return `Error navigating to ${url}: ${err instanceof Error ? err.message : String(err)}`;
     }
 
+    // Auto-detect and solve CAPTCHAs after navigation
+    let captchaInfo = "";
+    try {
+      const captchaResult = await handleCaptchaIfPresent(page);
+      if (captchaResult) {
+        if (captchaResult.success) {
+          captchaInfo = `\n🔓 CAPTCHA (${captchaResult.method}) solved in ${captchaResult.timeMs}ms`;
+          // Wait for page to update after CAPTCHA solve
+          await page.waitForTimeout(2000);
+        } else {
+          captchaInfo = `\n⚠️ CAPTCHA detected (${captchaResult.method}) but solve failed: ${captchaResult.error}`;
+        }
+      }
+    } catch (err) {
+      log.warn(`[browser] CAPTCHA handler error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     const title = await page.title();
     const text = await page.evaluate(() => document.body?.innerText || "");
 
-    let result = `Navigated to: ${page.url()}\nTitle: ${title}\n\n${truncate(text)}`;
+    let result = `Navigated to: ${page.url()}\nTitle: ${title}${captchaInfo}\n\n${truncate(text)}`;
 
     if (wantScreenshot && chatId) {
       const ssResult = await takeAndSendScreenshot(chatId);
@@ -111,6 +129,36 @@ registerSkill({
     }
 
     return result;
+  },
+});
+
+registerSkill({
+  name: "browser.captcha",
+  description:
+    "Detect and solve CAPTCHAs on the current page. Supports reCAPTCHA v2/v3, hCaptcha, Cloudflare Turnstile, and Cloudflare JS challenges.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "'detect' to check for CAPTCHAs, 'solve' to attempt solving" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const action = (args.action as string) || "solve";
+    const page = await browserManager.getPage();
+    const solver = new CaptchaSolver(page);
+
+    if (action === "detect") {
+      const detection = await solver.detect();
+      return `CAPTCHA Detection:\n- Type: ${detection.type}\n- Site Key: ${detection.siteKey || 'N/A'}\n- Page: ${detection.pageUrl}\n- Confidence: ${(detection.confidence * 100).toFixed(0)}%`;
+    }
+
+    const result = await solver.solve();
+    if (result.success) {
+      return `✅ CAPTCHA solved!\n- Method: ${result.method}\n- Time: ${result.timeMs}ms${result.token ? `\n- Token: ${result.token.slice(0, 30)}...` : ''}`;
+    } else {
+      return `❌ CAPTCHA solve failed\n- Method: ${result.method}\n- Error: ${result.error}\n- Time: ${result.timeMs}ms`;
+    }
   },
 });
 
@@ -813,6 +861,7 @@ Example output:
 
     try {
       // Use Playwright's built-in accessibility tree API
+      if (!page.accessibility) return "Error: browser accessibility API not available. Navigate to a page first.";
       const accessibilityTree = await page.accessibility.snapshot({ interestingOnly: interactiveOnly });
 
       if (!accessibilityTree) {
@@ -1097,5 +1146,322 @@ registerSkill({
       }
     }
     return "Browser: NOT RUNNING (will auto-launch on next browser.* call)";
+  },
+});
+
+// ── browser.setup_session — Launch visible browser for manual login ──
+
+registerSkill({
+  name: "browser.setup_session",
+  description:
+    "Launch a VISIBLE browser for Nicolas to log into websites (Facebook, Gmail, etc.). Sessions are saved and reused by Kingston. Call browser.save_session when done.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description: "URL to open (e.g. 'https://facebook.com'). Default: blank tab",
+      },
+    },
+  },
+  async execute(args): Promise<string> {
+    const url = args.url ? String(args.url) : undefined;
+    try {
+      await browserManager.launchForLogin(url);
+      return `Browser VISIBLE lancé${url ? ` sur ${url}` : ""}. Connecte-toi à tes comptes, puis dis-moi quand c'est fait — j'appellerai browser.save_session pour sauvegarder.`;
+    } catch (err) {
+      return `Erreur lancement browser: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+// ── browser.save_session — Save cookies/localStorage after manual login ──
+
+registerSkill({
+  name: "browser.save_session",
+  description:
+    "Save current browser session (cookies, localStorage) to disk. Also extracts per-domain sessions. Call after browser.setup_session when user has finished logging in.",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    try {
+      const stateFile = await browserManager.saveSession();
+
+      // Also save per-domain session files for targeted reuse
+      const fs = await import("node:fs");
+      const sessionData = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+      const domains = new Set<string>();
+
+      // Extract unique domains from cookies
+      if (sessionData.cookies) {
+        for (const cookie of sessionData.cookies) {
+          const domain = cookie.domain.replace(/^\./, "");
+          domains.add(domain);
+        }
+      }
+
+      // Save per-domain session info in accounts dir
+      const accountsDir = path.join(process.cwd(), "relay", "accounts");
+      if (!fs.existsSync(accountsDir)) fs.mkdirSync(accountsDir, { recursive: true });
+
+      const savedDomains: string[] = [];
+      for (const domain of domains) {
+        // Filter cookies for this domain
+        const domainCookies = sessionData.cookies.filter((c: any) =>
+          c.domain === domain || c.domain === `.${domain}` || domain.endsWith(c.domain.replace(/^\./, ""))
+        );
+        if (domainCookies.length === 0) continue;
+
+        // Check if we have a meaningful session (auth cookies)
+        const hasAuth = domainCookies.some((c: any) =>
+          /session|token|auth|sid|user|login|csrf|_id/i.test(c.name)
+        );
+        if (!hasAuth) continue;
+
+        const accountFile = path.join(accountsDir, `${domain}.json`);
+        const existing = fs.existsSync(accountFile)
+          ? JSON.parse(fs.readFileSync(accountFile, "utf-8"))
+          : {};
+
+        // Update with session info
+        existing.domain = domain;
+        existing.has_session = true;
+        existing.session_saved = new Date().toISOString();
+        existing.cookie_count = domainCookies.length;
+        existing.method = existing.method || "manual_login";
+
+        fs.writeFileSync(accountFile, JSON.stringify(existing, null, 2));
+        savedDomains.push(domain);
+      }
+
+      const domainList = savedDomains.length > 0
+        ? `\nSessions par domaine: ${savedDomains.join(", ")}`
+        : "";
+      return `Session globale sauvegardée dans ${stateFile}.${domainList}\nKingston réutilisera ces cookies pour naviguer. Le browser reste ouvert — ferme-le quand tu veux.`;
+    } catch (err) {
+      return `Erreur sauvegarde session: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+// ── browser.grab_session — Import cookies from Nicolas's Chrome ──────────
+
+registerSkill({
+  name: "browser.grab_session",
+  description:
+    "Connect to Nicolas's running Chrome (via CDP) to grab his active sessions/cookies. " +
+    "If Chrome isn't running with CDP, launches it with --remote-debugging-port. " +
+    "After Nicolas logs into sites in his Chrome, Kingston can grab those cookies. " +
+    "Usage: 1) Nicolas opens a site and logs in. 2) Kingston calls browser.grab_session to import cookies. " +
+    "Optional: specify domain to only grab cookies for that domain.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      domain: {
+        type: "string",
+        description: "Only grab cookies for this domain (e.g. 'reddit.com'). Default: grab all.",
+      },
+      cdp_url: {
+        type: "string",
+        description: "CDP URL (default: http://localhost:9222)",
+      },
+      launch: {
+        type: "string",
+        description: 'Set to "true" to launch Chrome with CDP enabled if not running',
+      },
+    },
+  },
+  async execute(args): Promise<string> {
+    const targetDomain = args.domain ? String(args.domain).replace(/^www\./, "") : null;
+    const cdpUrl = String(args.cdp_url || "http://localhost:9222");
+    const shouldLaunch = String(args.launch) === "true";
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+
+    const results: string[] = ["**browser.grab_session**\n"];
+
+    try {
+      // Step 1: Try connecting to Chrome via CDP
+      let cdpBrowser: import("playwright").Browser | null = null;
+
+      try {
+        // Try to discover the WebSocket endpoint
+        const resp = await fetch(`${cdpUrl}/json/version`, { signal: AbortSignal.timeout(3000) });
+        const data = await resp.json();
+        const wsUrl = data.webSocketDebuggerUrl;
+        if (wsUrl) {
+          const { chromium } = await import("playwright");
+          cdpBrowser = await chromium.connectOverCDP(wsUrl);
+          results.push(`Connecté au Chrome de Nicolas via CDP (${wsUrl.slice(0, 40)}...)`);
+        }
+      } catch {
+        // CDP not available — try direct URL
+        try {
+          const { chromium } = await import("playwright");
+          cdpBrowser = await chromium.connectOverCDP(cdpUrl);
+          results.push(`Connecté via CDP direct: ${cdpUrl}`);
+        } catch {
+          if (shouldLaunch) {
+            // Launch Chrome with CDP
+            const chromePath = config.browserChromePath ||
+              "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+            try {
+              const { exec } = await import("node:child_process");
+              exec(`"${chromePath}" --remote-debugging-port=9222 --no-first-run`);
+              results.push("Chrome lancé avec CDP (port 9222). Attente 3s...");
+              await new Promise(r => setTimeout(r, 3000));
+
+              // Retry connection
+              const { chromium } = await import("playwright");
+              cdpBrowser = await chromium.connectOverCDP(cdpUrl);
+              results.push("Connecté au Chrome fraîchement lancé!");
+            } catch (launchErr) {
+              return `${results.join("\n")}\n\n❌ Impossible de lancer Chrome: ${launchErr instanceof Error ? launchErr.message : String(launchErr)}\n\nSolution: Lance Chrome manuellement avec:\nchrome.exe --remote-debugging-port=9222`;
+            }
+          } else {
+            return `${results.join("\n")}\n\n❌ Chrome n'est pas joignable via CDP sur ${cdpUrl}.\n\n**2 solutions:**\n1. Lance Chrome avec CDP:\n   chrome.exe --remote-debugging-port=9222\n2. Utilise browser.grab_session(launch:"true") pour que je le lance.\n3. Ou utilise browser.setup_session → je t'ouvre MON browser, tu te connectes, puis browser.save_session.`;
+          }
+        }
+      }
+
+      if (!cdpBrowser) {
+        return `${results.join("\n")}\n\n❌ Connexion CDP échouée.`;
+      }
+
+      // Step 2: Extract cookies from all contexts
+      const contexts = cdpBrowser.contexts();
+      let allCookies: any[] = [];
+
+      for (const ctx of contexts) {
+        const cookies = await ctx.cookies();
+        allCookies.push(...cookies);
+      }
+
+      // If no contexts have cookies, try default context pages
+      if (allCookies.length === 0) {
+        const pages = cdpBrowser.contexts().flatMap(c => c.pages());
+        if (pages.length > 0) {
+          results.push(`Chrome a ${pages.length} onglet(s) ouvert(s), mais 0 cookies accessibles via contexts.`);
+          // Try to get cookies from CDP directly
+          for (const page of pages) {
+            try {
+              const cdpSession = await page.context().newCDPSession(page);
+              const { cookies } = await cdpSession.send("Network.getAllCookies");
+              allCookies.push(...(cookies as any[]));
+              await cdpSession.detach();
+              break; // Got cookies from one page, that's enough
+            } catch { continue; }
+          }
+        }
+      }
+
+      results.push(`${allCookies.length} cookies récupérés depuis Chrome.`);
+
+      // Step 3: Filter by domain if specified
+      let filteredCookies = allCookies;
+      if (targetDomain) {
+        filteredCookies = allCookies.filter((c: any) => {
+          const cookieDomain = (c.domain || "").replace(/^\./, "");
+          return cookieDomain === targetDomain ||
+            cookieDomain.endsWith(`.${targetDomain}`) ||
+            targetDomain.endsWith(cookieDomain);
+        });
+        results.push(`${filteredCookies.length} cookies pour ${targetDomain}.`);
+      }
+
+      if (filteredCookies.length === 0) {
+        // Disconnect cleanly
+        try { await cdpBrowser.close(); } catch { /* ignore */ }
+        return `${results.join("\n")}\n\n⚠️ Aucun cookie trouvé${targetDomain ? ` pour ${targetDomain}` : ""}. Nicolas doit d'abord se connecter au site dans Chrome.`;
+      }
+
+      // Step 4: Convert CDP cookies to Playwright format and merge with existing state
+      const profileDir = path.join(process.cwd(), "relay", "browser-profile");
+      if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
+      const stateFile = path.join(profileDir, "state.json");
+
+      let existingState: { cookies: any[]; origins: any[] } = { cookies: [], origins: [] };
+      if (fs.existsSync(stateFile)) {
+        try {
+          existingState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+        } catch { /* corrupt state, start fresh */ }
+      }
+
+      // Convert cookies to Playwright storageState format
+      const playwrightCookies = filteredCookies.map((c: any) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || "/",
+        expires: c.expires || -1,
+        httpOnly: c.httpOnly || false,
+        secure: c.secure || false,
+        sameSite: (c.sameSite === "strict" ? "Strict" : c.sameSite === "lax" ? "Lax" : "None") as "Strict" | "Lax" | "None",
+      }));
+
+      // Merge: replace existing cookies for same domain/name/path, add new ones
+      const cookieKey = (c: any) => `${c.domain}|${c.name}|${c.path}`;
+      const existingMap = new Map(existingState.cookies.map((c: any) => [cookieKey(c), c]));
+
+      for (const cookie of playwrightCookies) {
+        existingMap.set(cookieKey(cookie), cookie);
+      }
+
+      existingState.cookies = Array.from(existingMap.values());
+      fs.writeFileSync(stateFile, JSON.stringify(existingState, null, 2), "utf-8");
+
+      // Step 5: Also save per-domain account metadata
+      const domains = new Set<string>();
+      for (const c of filteredCookies) {
+        const d = (c.domain || "").replace(/^\./, "");
+        if (d) domains.add(d);
+      }
+
+      const accountsDir = path.join(process.cwd(), "relay", "accounts");
+      if (!fs.existsSync(accountsDir)) fs.mkdirSync(accountsDir, { recursive: true });
+
+      const savedDomains: string[] = [];
+      for (const domain of domains) {
+        const domainCookies = filteredCookies.filter((c: any) => {
+          const d = (c.domain || "").replace(/^\./, "");
+          return d === domain || d.endsWith(`.${domain}`);
+        });
+
+        const hasAuth = domainCookies.some((c: any) =>
+          /session|token|auth|sid|user|login|csrf|_id|access/i.test(c.name)
+        );
+        if (!hasAuth && domainCookies.length < 3) continue;
+
+        const accountFile = path.join(accountsDir, `${domain}.json`);
+        const existing = fs.existsSync(accountFile)
+          ? JSON.parse(fs.readFileSync(accountFile, "utf-8"))
+          : {};
+
+        existing.domain = domain;
+        existing.has_session = true;
+        existing.session_grabbed = new Date().toISOString();
+        existing.cookie_count = domainCookies.length;
+        existing.method = existing.method || "grabbed_from_chrome";
+
+        fs.writeFileSync(accountFile, JSON.stringify(existing, null, 2));
+        savedDomains.push(domain);
+      }
+
+      // Disconnect from Nicolas's Chrome (don't close it!)
+      try { await cdpBrowser.close(); } catch { /* ignore */ }
+
+      results.push(`\n✅ **${playwrightCookies.length} cookies importés** dans state.json`);
+      if (savedDomains.length > 0) {
+        results.push(`Domaines avec sessions auth: ${savedDomains.join(", ")}`);
+      }
+      results.push(`\nKingston peut maintenant naviguer ces sites avec les sessions de Nicolas.`);
+      results.push(`Utilise browser.navigate(url:"...") pour aller sur le site — les cookies seront chargés automatiquement.`);
+
+      return results.join("\n");
+    } catch (err) {
+      return `${results.join("\n")}\n\n❌ Erreur: ${err instanceof Error ? err.message : String(err)}`;
+    }
   },
 });

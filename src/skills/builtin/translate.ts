@@ -37,7 +37,7 @@ registerSkill({
       sourceLang = "auto";
     }
 
-    const langpair = `${sourceLang === "auto" ? "" : sourceLang}|${to}`;
+    const langpair = `${sourceLang}|${to}`;
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 1000))}&langpair=${encodeURIComponent(langpair)}`;
 
     const resp = await fetch(url);

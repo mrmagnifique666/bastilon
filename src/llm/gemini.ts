@@ -10,9 +10,12 @@ import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { getTurns } from "../storage/store.js";
 import { isToolPermitted } from "../security/policy.js";
-import { getSkill, validateArgs } from "../skills/loader.js";
+import { getSkill, getAllSkills, validateArgs } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
+import { getPersonalityPrompt } from "../personality/personality.js";
+import { getCurrentMoodContext } from "../personality/mood.js";
+import { getPluginExpertise, getPluginSummary } from "../plugins/loader.js";
 import { getSkillsForGemini } from "../skills/loader.js";
 import { listAgents } from "../agents/registry.js";
 import { logEstimatedTokens, enforceRateDelay, markCallComplete } from "./tokenTracker.js";
@@ -190,7 +193,7 @@ function getAgentContextForChatId(chatId: number): string | null {
   return lines.join("\n");
 }
 
-export function buildSystemInstruction(isAdmin: boolean, chatId?: number): string {
+export function buildSystemInstruction(isAdmin: boolean, chatId?: number, userMessage?: string): string {
   const lines = [
     `You are Kingston, an autonomous AI assistant operating through a Telegram relay on the user's machine.`,
     `Your name is Kingston. You are proactive, capable, and concise.`,
@@ -202,13 +205,15 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     `- Hostname: ${os.hostname()}`,
     `- Node: ${process.version}`,
     `- Working directory: ${process.cwd()}`,
-    `- Date: ${new Date().toISOString().split("T")[0]}`,
+    `- Date: ${new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`,
+    `- Heure: ${new Date().toLocaleTimeString("fr-CA", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false })} (America/Toronto — heure de l'Est)`,
     `- Admin: ${isAdmin ? "yes" : "no"}`,
     ...(chatId ? [`- Telegram chat ID: ${chatId} (auto-injected for telegram.send — you can omit chatId)`] : []),
     ``,
     `## Guidelines (CRITICAL — READ CAREFULLY)`,
     `- EXECUTE IMMEDIATELY. Never ask "would you like me to...?" or "should I...?" — JUST DO IT.`,
     `- If Nicolas asks you to do something, USE TOOLS RIGHT NOW. Do not describe what you would do.`,
+    `- NEVER say "je vérifie", "je vais vérifier", "let me check", "I'll look into it" — you CANNOT come back later. You have ONE chance to respond. If you need to check something, CALL THE TOOL NOW in this response. If you say "je vérifie" without actually calling a tool, Nicolas gets NOTHING.`,
     `- You have FULL admin access. You can write files, run shell commands, deploy via FTP, browse the web.`,
     `- When a task requires multiple steps, chain ALL tool calls autonomously until completion.`,
     `- NEVER ask for permission to write files, execute code, or use any tool. You already have permission.`,
@@ -225,7 +230,7 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     `- If you need data but the tool doesn't exist, chain shell.exec + web.fetch + files.write to build your own pipeline.`,
     `- If something takes multiple attempts, DO THEM ALL in one session — don't report failure after one try.`,
     `- Before asking Nicolas for help, exhaust ALL alternatives. His contribution should be MINIMAL — do 95% of the work yourself.`,
-    `- You have 357+ tools. USE THEM ALL. web.search, api.call, shell.exec, browser.*, gmail.*, files.*, etc.`,
+    `- You have ${getAllSkills().length}+ tools. USE THEM ALL. web.search, api.call, shell.exec, browser.*, gmail.*, files.*, etc.`,
     `- Think step by step: What do I need? → What tools do I have? → What's the fastest path? → EXECUTE.`,
     ``,
     `## BROWSER — TU CONTRÔLES L'ORDINATEUR DE NICOLAS`,
@@ -247,6 +252,11 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     `- JAMAIS abandonner une tâche browser. Si ça ne marche pas, essaie autrement (autre sélecteur, scroll, attendre, etc.)`,
     `- N'utilise browser.* que quand Nicolas te le demande ou quand c'est la seule option. Les agents autonomes (100-106) n'ont PAS accès au browser.`,
     ``,
+    `## FLUIDITÉ — TRANSITIONS PENDANT LES OUTILS`,
+    `- Quand tu utilises un outil, dis brièvement ce que tu fais: "Je vérifie...", "Un instant..."`,
+    `- JAMAIS rester silencieux ou laisser un message vide pendant un appel d'outil.`,
+    `- Si tu appelles plusieurs outils, mentionne-le: "Je vérifie plusieurs choses en parallèle..."`,
+    ``,
     `## ANTI-HALLUCINATION (MOST IMPORTANT RULES — VIOLATION = CRITICAL FAILURE)`,
     `- NEVER claim you did something unless a tool ACTUALLY returned a success result.`,
     `- NEVER invent, fabricate, or assume tool results. Only report what the tool output ACTUALLY says.`,
@@ -255,6 +265,9 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     `- BEFORE saying "Done" or "Terminé", mentally verify: did a tool ACTUALLY confirm success? If no → don't say it.`,
     `- When reporting results, quote the actual tool output. Don't paraphrase into something more positive.`,
     `- If you're unsure whether something worked, say "Je ne peux pas confirmer que ça a fonctionné" — NEVER guess.`,
+    `- NEVER promise a future action ("je vais créer...", "give me 10 seconds", "un moment"). Tu ne peux PAS revenir plus tard.`,
+    `- Si tu veux faire quelque chose (créer un mème, générer une image, etc.), FAIS-LE MAINTENANT via tool call dans cette même réponse.`,
+    `- Si tu ne peux pas le faire maintenant, dis-le honnêtement au lieu de promettre.`,
     ``,
     `## POST-DEPLOYMENT VERIFICATION (MANDATORY)`,
     `- After ANY ftp.upload or ftp.upload_dir, you MUST call ftp.verify to confirm the content actually changed on the server.`,
@@ -290,16 +303,67 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number): strin
     }
   }
 
+  // Inject Kingston personality (consistent tone across all interactions)
+  const personality = getPersonalityPrompt();
+  if (personality) {
+    lines.push("", "## Kingston Personality", personality);
+  }
+
   // Inject USER.md context (user preferences, mission, rules)
   const userMd = loadUserMd();
   if (userMd) {
     lines.push("", userMd);
   }
 
+  // Inject COACHING.md (Émile's coaching notes for Kingston)
+  try {
+    const coachPath = path.resolve(process.cwd(), "relay", "COACHING.md");
+    if (fs.existsSync(coachPath)) {
+      const coaching = fs.readFileSync(coachPath, "utf-8");
+      if (coaching.length > 0 && coaching.length < 3000) {
+        lines.push("", "## Coaching Notes (from Émile)", coaching);
+      }
+    }
+  } catch {}
+
+  // Training mode: override anti-hallucination for skill testing
+  if (chatId === 250) {
+    lines.push(
+      "",
+      "## TRAINING MODE (chatId 250)",
+      "- You are being TESTED on your ability to call tools.",
+      "- When asked to call a skill like `X.Y`, look for it in your available function declarations.",
+      "- The skill IS available as a function you can call. Call it NOW.",
+      "- DO NOT say 'Je n'ai pas de skill' or 'Je n'ai pas d'outil' — the tools are registered as your function declarations.",
+      "- If a tool returns an error, report the error. But ALWAYS try calling it first.",
+      "- OVERRIDE: In training mode, ignore the anti-hallucination rule about saying 'je n'ai pas d'outil'. Just CALL the function.",
+    );
+  }
+
   // Inject session log (unified cross-channel knowledge)
   const sessionLog = loadSessionLog();
   if (sessionLog) {
     lines.push("", `## Session Log (shared across all channels)`, sessionLog);
+  }
+
+  // Inject plugin expertise (context-matched domain knowledge from Cowork-style plugins)
+  if (userMessage) {
+    const pluginExpertise = getPluginExpertise(userMessage);
+    if (pluginExpertise) {
+      lines.push("", pluginExpertise);
+    }
+  } else {
+    // No user message available — inject compact plugin summary
+    const pluginSummary = getPluginSummary();
+    if (pluginSummary) {
+      lines.push("", pluginSummary);
+    }
+  }
+
+  // Inject mood-adaptive tone (set by router before LLM call, user chats only)
+  const moodCtx = getCurrentMoodContext();
+  if (moodCtx) {
+    lines.push("", moodCtx);
   }
 
   const systemPrompt = lines.join("\n");
@@ -454,6 +518,103 @@ function truncateResult(result: string): string {
   return result.slice(0, MAX_TOOL_RESULT_LENGTH) + `\n... [truncated, ${result.length} chars total]`;
 }
 
+// --- Single tool execution helper (for parallel dispatch) ---
+
+interface GeminiToolResult {
+  name: string;
+  args: Record<string, unknown>;
+  result: string;
+}
+
+/**
+ * Validate and execute a single Gemini function call.
+ * Returns the result to be fed back as functionResponse.
+ * All validation checks are included — this is self-contained.
+ */
+async function executeSingleGeminiTool(
+  fc: { name: string; args: Record<string, unknown> },
+  chatId: number,
+  userId: number,
+  step: number,
+  onToolProgress?: (chatId: number, message: string) => Promise<void>,
+): Promise<GeminiToolResult> {
+  const toolName = fc.name;
+  const rawArgs = fc.args || {};
+
+  log.info(`[gemini] Function call (step ${step + 1}): ${toolName}(${JSON.stringify(rawArgs).slice(0, 200)})`);
+
+  // Validate tool exists in registry (anti-hallucination)
+  const skill = getSkill(toolName);
+  if (!skill) {
+    log.warn(`[gemini] Unknown tool "${toolName}" — feeding error back`);
+    return { name: toolName, args: rawArgs, result: `Error: Unknown tool "${toolName}". Check the tool catalog and try again.` };
+  }
+
+  // Hard block: agents/cron (internal chatIds) cannot use browser.*
+  const isInternal = chatId === 1 || (chatId >= 100 && chatId <= 106) || (chatId >= 200 && chatId <= 249);
+  if (isInternal && toolName.startsWith("browser.")) {
+    log.warn(`[gemini] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
+    return { name: toolName, args: rawArgs, result: `Error: Tool "${toolName}" is blocked for agents — use web.search instead.` };
+  }
+
+  // Security check
+  if (!isToolPermitted(toolName, userId)) {
+    const msg = `Error: Tool "${toolName}" is not permitted${skill.adminOnly ? " (admin only)" : ""}.`;
+    log.warn(`[gemini] ${msg}`);
+    return { name: toolName, args: rawArgs, result: msg };
+  }
+
+  // Normalize args
+  const safeArgs = normalizeArgs(toolName, rawArgs, chatId, skill);
+
+  // Agent/cron chatId fix: rewrite internal chatIds to real admin chatId for telegram.*
+  if (isInternal && toolName.startsWith("telegram.") && config.adminChatId > 0) {
+    safeArgs.chatId = String(config.adminChatId);
+    log.debug(`[gemini] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
+  }
+
+  // Validate args
+  const validationError = validateArgs(safeArgs, skill.argsSchema);
+  if (validationError) {
+    log.warn(`[gemini] Arg validation failed for ${toolName}: ${validationError}`);
+    return { name: toolName, args: rawArgs, result: `Error: ${validationError}. Fix the arguments and try again.` };
+  }
+
+  // Block placeholder hallucinations in outbound messages (agents and cron)
+  if (isInternal) {
+    const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
+    if (outboundTools.includes(toolName)) {
+      const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
+      const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
+      if (placeholderRe.test(textArg)) {
+        log.warn(`[gemini] Blocked ${toolName} — placeholder detected: "${textArg.slice(0, 120)}"`);
+        return { name: toolName, args: rawArgs, result: `Error: Message contains placeholder brackets like [RÉSUMÉ]. Use data tools first, then compose with REAL values.` };
+      }
+    }
+  }
+
+  // Execute skill
+  try {
+    log.info(`[gemini] Executing tool (step ${step + 1}/${config.maxToolChain}): ${toolName}`);
+    const toolResult = await skill.execute(safeArgs);
+    log.debug(`[gemini] Tool result (${toolName}): ${toolResult.slice(0, 200)}`);
+
+    // Progress callback
+    if (onToolProgress) {
+      const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
+      try {
+        await onToolProgress(chatId, `⚙️ **${toolName}**\n\`\`\`\n${preview}\n\`\`\``);
+      } catch { /* ignore progress errors */ }
+    }
+
+    return { name: toolName, args: rawArgs, result: truncateResult(toolResult) };
+  } catch (err) {
+    const errorMsg = `Tool "${toolName}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
+    log.error(`[gemini] ${errorMsg}`);
+    return { name: toolName, args: rawArgs, result: `Error: ${errorMsg}` };
+  }
+}
+
 // --- Main orchestrator ---
 
 /**
@@ -468,11 +629,15 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
     throw new Error("GEMINI_API_KEY not configured");
   }
 
-  const systemInstruction = buildSystemInstruction(isAdmin, chatId);
+  const systemInstruction = buildSystemInstruction(isAdmin, chatId, userMessage);
   const contents = buildContents(chatId, userMessage);
   const tools = getSkillsForGemini(isAdmin, userMessage);
 
   log.info(`[gemini] Sending message (chatId=${chatId}, admin=${isAdmin}, tools=${tools.length}): ${userMessage.slice(0, 100)}...`);
+
+  // Loop detection: break if same tool called 3+ times consecutively
+  let lastToolName = "";
+  let repeatCount = 0;
 
   for (let step = 0; step < config.maxToolChain; step++) {
     const response = await callGeminiAPI(systemInstruction, contents, tools);
@@ -492,139 +657,73 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
       throw new GeminiSafetyError("Gemini blocked response due to safety filter");
     }
 
-    // Process parts — may contain text, functionCall, or both
+    // Process parts — collect text and function calls separately
     const parts = candidate.content.parts;
     let finalText = "";
-    let hasFunctionCall = false;
+    const functionCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 
     for (const part of parts) {
-      // Text part — accumulate
       if ("text" in part) {
         finalText += part.text;
       }
-
-      // Function call part — execute and loop
       if ("functionCall" in part) {
-        hasFunctionCall = true;
-        const { name: toolName, args: rawArgs } = part.functionCall;
-        log.info(`[gemini] Function call (step ${step + 1}): ${toolName}(${JSON.stringify(rawArgs).slice(0, 200)})`);
-
-        // Add the model's function call to contents
-        contents.push({
-          role: "model",
-          parts: [{ functionCall: { name: toolName, args: rawArgs } }],
-        });
-
-        // Validate tool exists in registry (anti-hallucination)
-        const skill = getSkill(toolName);
-        if (!skill) {
-          log.warn(`[gemini] Unknown tool "${toolName}" — feeding error back`);
-          contents.push({
-            role: "user",
-            parts: [{ functionResponse: { name: toolName, response: { result: `Error: Unknown tool "${toolName}". Check the tool catalog and try again.` } } }],
-          });
-          continue;
-        }
-
-        // Hard block: agents/cron (internal chatIds) cannot use browser.*
-        if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("browser.")) {
-          log.warn(`[gemini] Agent chatId=${chatId} tried to call ${toolName} — blocked`);
-          contents.push({
-            role: "user",
-            parts: [{ functionResponse: { name: toolName, response: { result: `Error: Tool "${toolName}" is blocked for agents — use web.search instead.` } } }],
-          });
-          continue;
-        }
-
-        // Security check
-        if (!isToolPermitted(toolName, userId)) {
-          const msg = `Error: Tool "${toolName}" is not permitted${skill.adminOnly ? " (admin only)" : ""}.`;
-          log.warn(`[gemini] ${msg}`);
-          // Return text instead of looping — permission errors are final
-          return msg;
-        }
-
-        // Normalize args
-        const safeArgs = normalizeArgs(toolName, rawArgs || {}, chatId, skill);
-
-        // Agent/cron chatId fix: rewrite internal chatIds to real admin chatId for telegram.*
-        if ((chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) && toolName.startsWith("telegram.") && config.adminChatId > 0) {
-          safeArgs.chatId = String(config.adminChatId);
-          log.debug(`[gemini] Internal session ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${toolName}`);
-        }
-
-        // Validate args
-        const validationError = validateArgs(safeArgs, skill.argsSchema);
-        if (validationError) {
-          log.warn(`[gemini] Arg validation failed for ${toolName}: ${validationError}`);
-          contents.push({
-            role: "user",
-            parts: [{ functionResponse: { name: toolName, response: { result: `Error: ${validationError}. Fix the arguments and try again.` } } }],
-          });
-          continue;
-        }
-
-        // Block placeholder hallucinations in outbound messages (agents and cron)
-        if (chatId === 1 || chatId >= 100 && chatId <= 106 || chatId >= 200 && chatId <= 249) {
-          const outboundTools = ["telegram.send", "mind.ask", "moltbook.post", "moltbook.comment", "content.publish"];
-          if (outboundTools.includes(toolName)) {
-            const textArg = String(safeArgs.text || safeArgs.content || safeArgs.question || "");
-            const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
-            if (placeholderRe.test(textArg)) {
-              log.warn(`[gemini] Blocked ${toolName} — placeholder detected: "${textArg.slice(0, 120)}"`);
-              contents.push({
-                role: "user",
-                parts: [{ functionResponse: { name: toolName, response: { result: `Error: Message contains placeholder brackets like [RÉSUMÉ]. Use data tools first, then compose with REAL values.` } } }],
-              });
-              continue;
-            }
-          }
-        }
-
-        // Execute skill
-        let toolResult: string;
-        try {
-          log.info(`[gemini] Executing tool (step ${step + 1}/${config.maxToolChain}): ${toolName}`);
-          toolResult = await skill.execute(safeArgs);
-        } catch (err) {
-          const errorMsg = `Tool "${toolName}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
-          log.error(`[gemini] ${errorMsg}`);
-          contents.push({
-            role: "user",
-            parts: [{ functionResponse: { name: toolName, response: { result: `Error: ${errorMsg}` } } }],
-          });
-          continue;
-        }
-
-        log.debug(`[gemini] Tool result (${toolName}): ${toolResult.slice(0, 200)}`);
-
-        // Progress callback
-        if (onToolProgress) {
-          const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
-          try {
-            await onToolProgress(chatId, `⚙️ **${toolName}**\n\`\`\`\n${preview}\n\`\`\``);
-          } catch { /* ignore progress errors */ }
-        }
-
-        // Feed result back as functionResponse
-        contents.push({
-          role: "user",
-          parts: [{ functionResponse: { name: toolName, response: { result: truncateResult(toolResult) } } }],
-        });
+        functionCalls.push({ name: part.functionCall.name, args: part.functionCall.args });
       }
     }
 
-    // If no function call was made, return the text
-    if (!hasFunctionCall) {
+    // If no function calls, return the text
+    if (functionCalls.length === 0) {
       const result = finalText || "(empty response)";
-      // Estimate tokens: sum of all content parts
       const inputChars = contents.reduce((sum, c) => sum + c.parts.reduce((s, p) => s + ((p as any).text || "").length, 0), 0) + systemInstruction.length;
       logEstimatedTokens("gemini", inputChars, result.length);
       markCallComplete("gemini");
       return result;
     }
 
-    // Otherwise loop continues — Gemini will process the functionResponse
+    // Loop detection: same single tool called repeatedly = stuck
+    if (functionCalls.length === 1) {
+      const callName = functionCalls[0].name;
+      if (callName === lastToolName) {
+        repeatCount++;
+        if (repeatCount >= 3) {
+          log.warn(`[gemini] 🔄 Loop detected: ${callName} called ${repeatCount + 1}x consecutively — breaking`);
+          return finalText || `(Loop détecté: ${callName} appelé en boucle. Résultat partiel disponible.)`;
+        }
+      } else {
+        lastToolName = callName;
+        repeatCount = 1;
+      }
+    } else {
+      lastToolName = "";
+      repeatCount = 0;
+    }
+
+    // Add all model functionCall parts to contents
+    for (const fc of functionCalls) {
+      contents.push({
+        role: "model",
+        parts: [{ functionCall: { name: fc.name, args: fc.args } }],
+      });
+    }
+
+    // Execute ALL function calls in parallel
+    const results = await Promise.all(
+      functionCalls.map(fc => executeSingleGeminiTool(fc, chatId, userId, step, onToolProgress))
+    );
+
+    if (functionCalls.length > 1) {
+      log.info(`[gemini] ⚡ Executed ${functionCalls.length} tool calls in parallel: ${functionCalls.map(fc => fc.name).join(", ")}`);
+    }
+
+    // Add all functionResponse parts to contents
+    for (const r of results) {
+      contents.push({
+        role: "user",
+        parts: [{ functionResponse: { name: r.name, response: { result: r.result } } }],
+      });
+    }
+
+    // Loop continues — Gemini will process the functionResponses
   }
 
   // Exhausted tool chain

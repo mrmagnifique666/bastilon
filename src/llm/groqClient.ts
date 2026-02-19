@@ -169,7 +169,7 @@ export async function runGroq(
 export async function runGroqChat(options: GroqChatOptions): Promise<string> {
   const { chatId, userMessage, isAdmin: userIsAdmin, userId, onToolProgress } = options;
 
-  const systemPrompt = buildSystemInstruction(userIsAdmin, chatId);
+  const systemPrompt = buildSystemInstruction(userIsAdmin, chatId, userMessage);
   const ollamaTools = getSkillsForOllama(userMessage);
   const tools = convertToolsToOpenAI(ollamaTools);
 
@@ -214,15 +214,18 @@ export async function runGroqChat(options: GroqChatOptions): Promise<string> {
       tool_calls: msg.tool_calls,
     });
 
-    // Process each tool call via shared executor
-    for (const tc of msg.tool_calls) {
-      let rawArgs: Record<string, unknown> = {};
-      try { rawArgs = JSON.parse(tc.function.arguments || "{}"); } catch { rawArgs = {}; }
-
-      const result = await executeToolCall(
-        { toolName: tc.function.name, rawArgs, callId: tc.id },
-        { chatId, userId, provider: "groq-chat", onToolProgress, step, maxSteps: config.maxToolChain }
-      );
+    // Execute all tool calls in parallel for speed
+    const results = await Promise.all(
+      msg.tool_calls.map(tc => {
+        let rawArgs: Record<string, unknown> = {};
+        try { rawArgs = JSON.parse(tc.function.arguments || "{}"); } catch { rawArgs = {}; }
+        return executeToolCall(
+          { toolName: tc.function.name, rawArgs, callId: tc.id },
+          { chatId, userId, provider: "groq-chat", onToolProgress, step, maxSteps: config.maxToolChain }
+        );
+      })
+    );
+    for (const result of results) {
       messages.push({ role: "tool", content: result.content, tool_call_id: result.tool_call_id });
     }
   }

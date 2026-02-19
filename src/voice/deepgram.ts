@@ -7,7 +7,7 @@ import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
 export interface DeepgramCallbacks {
-  onTranscript: (text: string, isFinal: boolean) => void;
+  onTranscript: (text: string, isFinal: boolean, speechFinal: boolean) => void;
   onError: (err: Error) => void;
   onClose: () => void;
 }
@@ -48,8 +48,7 @@ export function connectDeepgram(callbacks: DeepgramCallbacks): WebSocket {
         const alt = msg.channel.alternatives[0];
         const text = alt.transcript as string;
         if (text) {
-          const isFinal = !!msg.speech_final;
-          callbacks.onTranscript(text, isFinal);
+          callbacks.onTranscript(text, !!msg.is_final, !!msg.speech_final);
         }
       }
     } catch (err) {

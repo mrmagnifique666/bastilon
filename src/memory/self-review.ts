@@ -213,6 +213,7 @@ async function deriveRuleSmart(pattern: ErrorPattern): Promise<string> {
       ], {
         timeout: 30000,
         stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
       });
 
       let output = "";

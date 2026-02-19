@@ -79,7 +79,39 @@ registerSkill({
     const action = (args.action as string) || "list";
     const name = args.name as string;
     const value = args.value as string;
-    const scope = (args.scope as string) || "User";
+    const scope = (args.scope as string) || "process";
+
+    // "process" scope: check Node.js process.env (includes .env file vars)
+    if (scope.toLowerCase() === "process") {
+      switch (action) {
+        case "list": {
+          const keys = Object.keys(process.env).sort();
+          const safe = keys.map(k => {
+            const v = process.env[k] || "";
+            const redacted = /KEY|TOKEN|SECRET|PASSWORD|API/i.test(k) ? `${v.slice(0, 6)}...` : v.slice(0, 80);
+            return `${k}=${redacted}`;
+          });
+          return `Process env (${keys.length} vars):\n${safe.join("\n")}`;
+        }
+        case "get":
+          if (!name) return "Error: name is required";
+          const val = process.env[name];
+          if (!val) return "(not set)";
+          // Redact sensitive values
+          if (/KEY|TOKEN|SECRET|PASSWORD|API/i.test(name)) return `${val.slice(0, 8)}... (configured, ${val.length} chars)`;
+          return val;
+        case "set":
+          if (!name || value === undefined) return "Error: name and value are required";
+          process.env[name] = value;
+          return `Set process::${name} = ${value}`;
+        case "delete":
+          if (!name) return "Error: name is required";
+          delete process.env[name];
+          return `Deleted process::${name}`;
+        default:
+          return `Unknown action: ${action}`;
+      }
+    }
 
     switch (action) {
       case "list":

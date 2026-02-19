@@ -47,7 +47,7 @@ const PROFILE_NAMESPACES: Record<ToolProfile, string[]> = {
     "rss.", "errors.", "config.",
     "files.", "code.", "git.", "shell.", "learn.",
     // automation extras
-    "browser.", "api.", "ftp.", "agents.", "scheduler.",
+    "browser.", "api.", "ftp.", "agents.", "scheduler.", "site.",
     "gmail.", "sms.", "whatsapp.", "phone.",
     "stripe.", "booking.", "hubspot.",
     "twitter.", "linkedin.", "reddit.", "discord.", "facebook.", "instagram.",

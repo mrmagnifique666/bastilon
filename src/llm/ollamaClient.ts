@@ -133,7 +133,7 @@ interface OllamaChatResponse {
 export async function runOllamaChat(options: OllamaChatOptions): Promise<string> {
   const { chatId, userMessage, isAdmin: userIsAdmin, userId, onToolProgress } = options;
 
-  const systemPrompt = buildSystemInstruction(userIsAdmin, chatId);
+  const systemPrompt = buildSystemInstruction(userIsAdmin, chatId, userMessage);
   const tools = getSkillsForOllama(userMessage);
 
   // Build conversation history
@@ -165,6 +165,10 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
 
   log.info(`[ollama-chat] 🦙 Sending to ${config.ollamaModel} (chatId=${chatId}, tools=${tools.length}): ${userMessage.slice(0, 100)}...`);
 
+  // Loop detection
+  let lastToolName = "";
+  let repeatCount = 0;
+
   for (let step = 0; step < config.maxToolChain; step++) {
     const response = await callOllamaChatAPI(messages, tools);
 
@@ -188,6 +192,24 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
       return text;
     }
 
+    // Loop detection: same tool called 3+ times = stuck
+    if (msg.tool_calls.length === 1) {
+      const callName = msg.tool_calls[0].function.name;
+      if (callName === lastToolName) {
+        repeatCount++;
+        if (repeatCount >= 3) {
+          log.warn(`[ollama-chat] 🔄 Loop detected: ${callName} called ${repeatCount + 1}x — breaking`);
+          return msg.content || `(Loop détecté: ${callName} appelé en boucle.)`;
+        }
+      } else {
+        lastToolName = callName;
+        repeatCount = 1;
+      }
+    } else {
+      lastToolName = "";
+      repeatCount = 0;
+    }
+
     // Process tool calls
     // Add assistant message with tool_calls to history
     messages.push({
@@ -196,11 +218,14 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
       tool_calls: msg.tool_calls,
     });
 
-    for (const tc of msg.tool_calls) {
-      const result = await executeToolCall(
+    // Execute all tool calls in parallel for speed
+    const results = await Promise.all(
+      msg.tool_calls.map(tc => executeToolCall(
         { toolName: tc.function.name, rawArgs: tc.function.arguments || {} },
         { chatId, userId, provider: "ollama-chat", onToolProgress, step, maxSteps: config.maxToolChain }
-      );
+      ))
+    );
+    for (const result of results) {
       messages.push({ role: "tool", content: result.content });
     }
     // Loop continues — Ollama processes tool results
@@ -208,6 +233,109 @@ export async function runOllamaChat(options: OllamaChatOptions): Promise<string>
 
   // Exhausted tool chain
   return `Reached tool chain limit (${config.maxToolChain} steps).`;
+}
+
+// --- Ollama Tool Router (hybrid mode: Ollama handles tool routing, Opus handles conversation) ---
+
+/**
+ * Result from runOllamaToolRouter — either another tool_call or a final summary.
+ * Matches the router's ParsedResult format for easy integration.
+ */
+export interface OllamaRouterResult {
+  type: "tool_call" | "message";
+  tool?: string;
+  args?: Record<string, unknown>;
+  text?: string;
+}
+
+/**
+ * Use Ollama as the tool routing brain for intermediate steps.
+ * Takes the original user message + accumulated tool history and decides:
+ *   - Call another tool (returns type: "tool_call")
+ *   - Return a text summary (returns type: "message")
+ *
+ * This saves Claude Opus/Sonnet tokens by offloading tool routing to local Ollama ($0).
+ * The router calls Opus ONLY for the initial message and the final conversational response.
+ */
+export async function runOllamaToolRouter(
+  chatId: number,
+  originalUserMessage: string,
+  toolHistory: Array<{ tool: string; result: string }>,
+  userIsAdmin: boolean,
+): Promise<OllamaRouterResult> {
+  const tools = getSkillsForOllama(originalUserMessage);
+
+  const systemPrompt = [
+    "Tu es Kingston, un assistant IA autonome. Tu EXÉCUTES des tâches en utilisant des outils.",
+    "Tu reçois le message original de l'utilisateur et les résultats des outils déjà exécutés.",
+    "DÉCIDE: soit appeler un AUTRE outil nécessaire, soit rédiger un résumé final des résultats.",
+    "Si la tâche est complète, retourne un résumé concis en français des actions effectuées et résultats obtenus.",
+    "Si d'autres outils sont nécessaires, appelle-les.",
+    "Sois CONCIS. Max 4-5 lignes pour le résumé final.",
+    "IMPORTANT: Ne fais PAS de tool call si la tâche est déjà accomplie par les outils précédents.",
+  ].join(" ");
+
+  const messages: OllamaChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Message de Nicolas: "${originalUserMessage}"` },
+  ];
+
+  // Add tool history as conversation context
+  for (const { tool, result } of toolHistory) {
+    messages.push({
+      role: "assistant",
+      content: `J'ai appelé l'outil ${tool}.`,
+    });
+    messages.push({
+      role: "user",
+      content: `[Résultat de ${tool}]:\n${result.slice(0, 3000)}`,
+    });
+  }
+
+  // Ask Ollama to decide
+  messages.push({
+    role: "user",
+    content: "Basé sur les résultats ci-dessus, que dois-je faire? Appeler un autre outil ou rédiger le réponse finale?",
+  });
+
+  log.info(`[ollama-router] 🦙 Asking Ollama for next step (${toolHistory.length} tools executed so far)`);
+
+  try {
+    const response = await callOllamaChatAPI(messages, tools);
+
+    if (response.error) {
+      log.warn(`[ollama-router] Ollama error: ${response.error}`);
+      return { type: "message", text: undefined }; // Signal to fallback to Sonnet
+    }
+
+    const msg = response.message;
+    if (!msg) {
+      log.warn(`[ollama-router] No message in response`);
+      return { type: "message", text: undefined };
+    }
+
+    // Ollama wants to call a tool
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      const tc = msg.tool_calls[0]; // Take first tool call
+      const toolName = tc.function.name;
+      const toolArgs = tc.function.arguments || {};
+      log.info(`[ollama-router] 🦙 Ollama wants to call: ${toolName}`);
+      return { type: "tool_call", tool: toolName, args: toolArgs };
+    }
+
+    // Ollama returned text — it's the summary
+    const text = (msg.content || "").trim();
+    if (text) {
+      log.info(`[ollama-router] 🦙 Ollama returned summary (${text.length} chars)`);
+      return { type: "message", text };
+    }
+
+    // Empty — signal to use Sonnet fallback
+    return { type: "message", text: undefined };
+  } catch (err) {
+    log.warn(`[ollama-router] Failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { type: "message", text: undefined }; // Fallback to Sonnet
+  }
 }
 
 /** Call Ollama /api/chat endpoint */

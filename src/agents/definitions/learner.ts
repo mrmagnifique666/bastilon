@@ -124,15 +124,22 @@ function buildLearnerPrompt(cycle: number): string | null {
     // Rule effectiveness review
     const effectiveness = evaluateEffectiveness();
     if (effectiveness.length === 0) {
+      // No graduated rules to evaluate — skip this cycle entirely
+      const patterns = getAllPatterns();
+      const nearGrad = patterns.filter(p => !p.graduated && p.count >= 3);
+      if (nearGrad.length === 0) {
+        log.debug(`[learner] Cycle ${cycle} skipped — no rules to evaluate, no patterns near graduation`);
+        return null;
+      }
       return (
         `Cycle ${cycle} — Rule Effectiveness Review\n\n` +
         `Tu es l'agent Learner de Kingston.\n` +
         AGENT_RULES +
-        `Aucune règle graduée à évaluer. Vérifie les patterns proches de graduation.\n\n` +
+        `Aucune règle graduée à évaluer, mais ${nearGrad.length} pattern(s) proche(s) de graduation.\n\n` +
         `1. Liste les error patterns via system.patterns\n` +
         `2. Si des patterns ont 3-4 occurrences, note les dans notes.add pour suivi\n` +
         `3. Log via analytics.log(skill='learner.effectiveness', outcome='success')\n` +
-        `4. Sauvegarde un résumé court dans notes.add avec tag [LEARNER-CYCLE1]`
+        `4. NE CRÉE PAS de note si tout est stable. Note UNIQUEMENT si tu trouves un finding actionnable.`
       );
     }
 
@@ -198,18 +205,41 @@ function buildLearnerPrompt(cycle: number): string | null {
     return null;
   }
 
+  // Load open ignorance gaps for the Learner to work on
+  let ignoranceReport = "";
+  try {
+    const igDb = getDb();
+    const gaps = igDb.prepare(
+      `SELECT id, topic, what_i_dont_know, severity, suggested_fix, attempts FROM ignorance_log
+       WHERE status = 'open' ORDER BY
+       CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+       attempts DESC LIMIT 10`
+    ).all() as Array<any>;
+    if (gaps.length > 0) {
+      ignoranceReport = gaps.map((g: any) => {
+        const icon = g.severity === "critical" ? "🔴" : g.severity === "high" ? "🟠" : "🟡";
+        return `${icon} #${g.id} [${g.topic}] ${g.what_i_dont_know.slice(0, 100)}${g.suggested_fix ? `\n   💡 ${g.suggested_fix.slice(0, 80)}` : ""}`;
+      }).join("\n");
+    }
+  } catch { /* table may not exist */ }
+
   return (
-    `Cycle ${cycle} — Proactive Fix Proposals\n\n` +
-    `Tu es l'agent Learner. Propose des améliorations préventives.\n` +
+    `Cycle ${cycle} — Proactive Fix Proposals + Ignorance Review\n\n` +
+    `Tu es l'agent Learner. Propose des améliorations préventives ET traite les lacunes d'ignorance.\n` +
     AGENT_RULES +
     `## Tendances d'erreurs (48h)\n${trendSummary}\n\n` +
     `## Patterns récurrents non gradués\n${recurringReport}\n\n` +
+    (ignoranceReport ? `## Aveux d'Ignorance (lacunes ouvertes)\n${ignoranceReport}\n\n` : "") +
     `Instructions :\n` +
     `1. Analyse les tendances et patterns ci-dessus\n` +
     `2. Si tu détectes un problème systémique, propose une solution dans notes.add\n` +
     `3. Si approprié, utilise files.read pour lire le code source pertinent et comprendre la root cause\n` +
-    `4. Log via analytics.log(skill='learner.proactive', outcome='success')\n` +
-    `5. Sauvegarde un résumé concis dans notes.add avec tag [LEARNER-CYCLE2] et proposals concrètes`
+    `4. **IGNORANCE**: Pour chaque lacune ouverte, tente de la résoudre:\n` +
+    `   - Recherche l'info manquante (web.search, files.read, memory.search)\n` +
+    `   - Si résolue, appelle learn.resolve(id=N, resolution="ce que j'ai appris")\n` +
+    `   - Si pas résolvable, documente pourquoi dans notes.add\n` +
+    `5. Log via analytics.log(skill='learner.proactive', outcome='success')\n` +
+    `6. Sauvegarde un résumé concis dans notes.add avec tag [LEARNER-CYCLE2] et proposals concrètes`
   );
 }
 

@@ -80,19 +80,24 @@ registerSkill({
     const button = (args.button as string) || "left";
     const dbl = args.doubleClick as boolean;
     try {
-      const clickFlag = button === "right" ? "0x0008; 0x0010" : button === "middle" ? "0x0020; 0x0040" : "0x0002; 0x0004";
+      const downFlag = button === "right" ? "0x0008" : button === "middle" ? "0x0020" : "0x0002";
+      const upFlag = button === "right" ? "0x0010" : button === "middle" ? "0x0040" : "0x0004";
+      const repeatBlock = dbl
+        ? `Start-Sleep -Milliseconds 100\n[MouseSim]::mouse_event(${downFlag}, 0, 0, 0, 0)\n[MouseSim]::mouse_event(${upFlag}, 0, 0, 0, 0)`
+        : "";
       ps(`
-        Add-Type @'
-        using System; using System.Runtime.InteropServices;
-        public class MouseSim {
-          [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-          [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
-        }
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public class MouseSim {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
+}
 '@
-        [MouseSim]::SetCursorPos(${x}, ${y})
-        Start-Sleep -Milliseconds 100
-        [MouseSim]::mouse_event(${clickFlag}, 0, 0, 0, 0)
-        ${dbl ? `Start-Sleep -Milliseconds 100; [MouseSim]::mouse_event(${clickFlag}, 0, 0, 0, 0)` : ""}
+[MouseSim]::SetCursorPos(${x}, ${y})
+Start-Sleep -Milliseconds 100
+[MouseSim]::mouse_event(${downFlag}, 0, 0, 0, 0)
+[MouseSim]::mouse_event(${upFlag}, 0, 0, 0, 0)
+${repeatBlock}
       `);
       return `Clicked at (${x}, ${y})${dbl ? " (double)" : ""} [${button}]`;
     } catch (err) {

@@ -13,7 +13,8 @@ registerSkill({
     properties: {},
   },
   async execute(): Promise<string> {
-    reloadEnv();
-    return "Configuration reloaded from .env.";
+    const changed = reloadEnv();
+    if (changed.length === 0) return "Configuration reloaded — no changes detected.";
+    return `Configuration reloaded. Changed keys: ${changed.join(", ")}`;
   },
 });

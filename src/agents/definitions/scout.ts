@@ -38,7 +38,10 @@ function buildScoutPrompt(cycle: number): string | null {
     `- Utilise: web.search, web.fetch, api.call, contacts.*, notes.*, analytics.log, telegram.send, gmail.*, shell.exec, browser.snapshot, browser.extract\n` +
     `- Sois concis. Pas de bavardage.\n` +
     `- INGÉNIOSITÉ: Si web.search échoue, essaie api.call ou web.fetch directement. Si une source ne donne rien, cherche ailleurs.\n` +
-    `- Avant de rapporter "rien trouvé", essaie au moins 3 requêtes différentes.\n\n`;
+    `- Avant de rapporter "rien trouvé", essaie au moins 3 requêtes différentes.\n` +
+    `- ANTI-HALLUCINATION (CRITIQUE): JAMAIS inventer de données de contacts. Tu dois TOUJOURS chercher via web.search AVANT d'appeler contacts.add.\n` +
+    `- Si web.search ne retourne pas de vrais noms/emails/téléphones, NE PAS inventer de contacts fictifs.\n` +
+    `- Chaque contact ajouté DOIT provenir d'un résultat de recherche réel — cite la source.\n\n`;
 
   const prompts: Record<number, string> = {
     0: // LinkedIn Prospecting

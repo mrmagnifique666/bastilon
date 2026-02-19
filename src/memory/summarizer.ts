@@ -53,7 +53,7 @@ export async function summarizeConversation(chatId: number, turnsToSummarize: Tu
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.1,
-          maxOutputTokens: 512,
+          maxOutputTokens: 1024,
         },
       }),
     });
@@ -66,7 +66,7 @@ export async function summarizeConversation(chatId: number, turnsToSummarize: Tu
     const data = await res.json();
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    // Parse JSON from response (may be wrapped in markdown fences)
+    // Parse JSON from response (may be wrapped in markdown fences or truncated)
     const jsonStr = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
     if (!jsonStr) return;
 
@@ -74,8 +74,19 @@ export async function summarizeConversation(chatId: number, turnsToSummarize: Tu
     try {
       parsed = JSON.parse(jsonStr);
     } catch {
-      log.debug(`[summarizer] Failed to parse JSON: ${jsonStr.slice(0, 200)}`);
-      return;
+      // Try to extract summary from truncated JSON
+      const summaryMatch = jsonStr.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (summaryMatch) {
+        const topicsMatch = jsonStr.match(/"topics"\s*:\s*\[(.*?)\]/);
+        const topics = topicsMatch
+          ? topicsMatch[1].match(/"([^"]+)"/g)?.map(s => s.replace(/"/g, "")) || []
+          : [];
+        parsed = { summary: summaryMatch[1], topics };
+        log.debug(`[summarizer] Recovered truncated JSON (${parsed.summary.length} chars)`);
+      } else {
+        log.debug(`[summarizer] Failed to parse JSON: ${jsonStr.slice(0, 200)}`);
+        return;
+      }
     }
 
     if (!parsed.summary || typeof parsed.summary !== "string") return;

@@ -28,7 +28,7 @@ Bâtir un empire technologique avec Kingston comme partenaire AI autonome.
 ## Comptes & Services
 - Gmail: Kingston.orchestrator@gmail.com
 - Trading: Alpaca (paper trading)
-- Moltbook: @kingston (profil actif)
+- Moltbook: @Kingston_CDR (profil actif)
 - GitHub: mrmagnifique666/bastilon
 
 ## Horaire

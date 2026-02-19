@@ -15,6 +15,7 @@ function runGit(args: string[]): Promise<string> {
       cwd: PROJECT_ROOT,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 30_000,
+      windowsHide: true,
     });
 
     let stdout = "";

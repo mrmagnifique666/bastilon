@@ -3,8 +3,11 @@
  * Auto-Fix Pipeline — monitor site/bot health, detect issues, spawn fix tasks.
  * Inspired by OpenClaw: detect → analyze → spawn agent → fix → test → deploy → notify.
  */
+import fs from "node:fs";
 import { registerSkill, getSkill } from "../loader.js";
 import { getDb, logError } from "../../storage/store.js";
+import { config } from "../../config/env.js";
+import { reloadEnv } from "../../config/env.js";
 import { log } from "../../utils/log.js";
 
 interface HealthCheck {
@@ -233,4 +236,103 @@ registerSkill({
   },
 });
 
-log.debug("Registered 3 autofix.* skills");
+/** Run async API health checks (Facebook, Gmail token, Ollama) */
+async function runApiHealthChecks(): Promise<HealthCheck[]> {
+  const checks: HealthCheck[] = [];
+
+  // Facebook API health
+  try {
+    if (config.facebookPageAccessToken && config.facebookPageId) {
+      const resp = await fetch(
+        `https://graph.facebook.com/v22.0/${config.facebookPageId}?fields=id&access_token=${config.facebookPageAccessToken}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      const data = await resp.json() as any;
+      checks.push({
+        name: "Facebook API",
+        status: data.error ? "critical" : "ok",
+        message: data.error ? String(data.error.message).slice(0, 80) : "Connected",
+      });
+    }
+  } catch (e) {
+    checks.push({ name: "Facebook API", status: "warning", message: String(e).slice(0, 80) });
+  }
+
+  // Gmail token health
+  try {
+    if (config.gmailTokenPath) {
+      const tokenPath = config.gmailTokenPath;
+      if (fs.existsSync(tokenPath)) {
+        const token = JSON.parse(fs.readFileSync(tokenPath, "utf-8"));
+        const expiresAt = token.expiry_date || 0;
+        const hoursLeft = (expiresAt - Date.now()) / 3600000;
+        checks.push({
+          name: "Gmail Token",
+          status: hoursLeft < 0 ? "critical" : hoursLeft < 24 ? "warning" : "ok",
+          message: hoursLeft < 0 ? "Expired" : `Expires in ${Math.round(hoursLeft)}h`,
+        });
+      }
+    }
+  } catch {
+    checks.push({ name: "Gmail Token", status: "warning", message: "Cannot read token" });
+  }
+
+  // Ollama availability
+  try {
+    if (config.ollamaEnabled) {
+      const resp = await fetch(`${config.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      checks.push({
+        name: "Ollama",
+        status: resp.ok ? "ok" : "warning",
+        message: resp.ok ? "Running" : `HTTP ${resp.status}`,
+      });
+    }
+  } catch {
+    checks.push({ name: "Ollama", status: "critical", message: "Not responding" });
+  }
+
+  return checks;
+}
+
+registerSkill({
+  name: "autofix.watchdog",
+  description: "Periodic health watchdog — runs all checks (including API health), auto-heals config issues, alerts on critical.",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    const checks = runHealthChecks();
+    const apiChecks = await runApiHealthChecks();
+    const allChecks = [...checks, ...apiChecks];
+
+    const critical = allChecks.filter(c => c.status === "critical");
+    const warnings = allChecks.filter(c => c.status === "warning");
+
+    // Auto-heal: try config reload for known fixable issues
+    if (critical.length > 0) {
+      const changed = reloadEnv();
+      if (changed.length > 0) {
+        // Re-run checks after reload
+        const rechecks = runHealthChecks();
+        const apiRechecks = await runApiHealthChecks();
+        const allRechecks = [...rechecks, ...apiRechecks];
+        const stillCritical = allRechecks.filter(c => c.status === "critical");
+        if (stillCritical.length < critical.length) {
+          return `[Watchdog] Auto-healed via config reload (changed: ${changed.join(", ")}). ` +
+            `Remaining: ${stillCritical.length} critical, ${warnings.length} warnings.`;
+        }
+      }
+    }
+
+    if (critical.length === 0 && warnings.length === 0) {
+      return `[Watchdog] All systems healthy (${allChecks.length} checks passed).`;
+    }
+
+    const lines: string[] = [];
+    for (const c of [...critical, ...warnings]) {
+      lines.push(`${c.status === "critical" ? "🔴" : "🟡"} ${c.name}: ${c.message}`);
+    }
+    return `[Watchdog] ${critical.length} critical, ${warnings.length} warnings:\n${lines.join("\n")}`;
+  },
+});
+
+log.debug("Registered 4 autofix.* skills");

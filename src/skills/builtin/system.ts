@@ -67,6 +67,7 @@ registerSkill({
       const proc = spawn(cmd, args, {
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 10000,
+        windowsHide: true,
       });
 
       let stdout = "";
@@ -109,7 +110,7 @@ registerSkill({
 
 registerSkill({
   name: "system.restart",
-  description: "Restart the bot process (admin only). Requires the wrapper to be running.",
+  description: "Restart the bot process (admin only). Works with or without the wrapper.",
   adminOnly: true,
   argsSchema: {
     type: "object",
@@ -120,13 +121,33 @@ registerSkill({
   async execute(args): Promise<string> {
     const reason = (args.reason as string) || "no reason given";
     log.info(`[system.restart] Restart requested: ${reason}`);
+
     // Clear all sessions so stale messages don't re-trigger after restart
     for (const uid of config.allowedUsers) {
       clearSession(uid);
       clearTurns(uid);
     }
-    // Exit immediately — wrapper will catch code 42 and restart
-    process.exit(42);
+
+    // Detect if wrapper is running
+    const hasWrapper = process.env.__KINGSTON_WRAPPER === "1";
+
+    if (hasWrapper) {
+      // Wrapper catches exit code 42 and restarts
+      process.exit(42);
+    } else {
+      // No wrapper — self-respawn then exit
+      const child = spawn("npx", ["tsx", "src/index.ts"], {
+        stdio: "inherit",
+        shell: true,
+        cwd: process.cwd(),
+        detached: true,
+        windowsHide: true,
+      });
+      child.unref();
+      log.info(`[system.restart] No wrapper detected — spawned new instance (PID ${child.pid})`);
+      setTimeout(() => process.exit(0), 2000);
+    }
+    return "Restarting...";
   },
 });
 
@@ -164,6 +185,7 @@ registerSkill({
       const proc = spawn(cmd, cmdArgs, {
         stdio: "ignore",
         detached: true,
+        windowsHide: true,
       });
 
       proc.on("error", (err) => {

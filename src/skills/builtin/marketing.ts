@@ -62,7 +62,7 @@ function seedHookFormulas(): void {
 }
 
 // Seed on import
-try { seedHookFormulas(); } catch {}
+try { seedHookFormulas(); } catch (e) { log.debug(`[marketing] Hook seed on import: ${e}`); }
 
 registerSkill({
   name: "marketing.hooks",
@@ -82,6 +82,7 @@ registerSkill({
     if (category) hooks = hooks.filter(h => h.category === category);
 
     if (random) {
+      if (hooks.length === 0) return "No hooks found for this category.";
       const hook = hooks[Math.floor(Math.random() * hooks.length)];
       return `[${hook.category}] ${hook.template}\nExample: ${hook.example}`;
     }
@@ -358,7 +359,7 @@ registerSkill({
     const grouped: Record<string, string[]> = {};
     for (const r of rows) {
       let cat = "unknown";
-      try { cat = (JSON.parse(r.properties) as any).category || "unknown"; } catch {}
+      try { cat = (JSON.parse(r.properties) as any).category || "unknown"; } catch (e) { log.debug(`[marketing] Failed to parse language properties: ${e}`); }
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(r.name);
     }

@@ -30,11 +30,15 @@ const STALE_THRESHOLD = 0.3;
  * Returns a value between 0 and 1.
  */
 export function calculateTrust(
-  createdAt: Date | number,
+  createdAt: Date | number | string,
   kind: DataKind = "observation",
   baseTrust: number = 1.0
 ): number {
-  const created = typeof createdAt === "number" ? createdAt * 1000 : createdAt.getTime();
+  const created = typeof createdAt === "number"
+    ? createdAt * 1000
+    : typeof createdAt === "string"
+      ? Number(createdAt) * 1000
+      : createdAt.getTime();
   const daysSince = (Date.now() - created) / 86_400_000;
   if (daysSince <= 0) return baseTrust;
 

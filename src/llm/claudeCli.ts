@@ -17,6 +17,10 @@ import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { buildMemoryContext } from "./shared/memoryContext.js";
 import { loadSessionLog, loadUserMd } from "./gemini.js";
+import { getPersonalityPrompt } from "../personality/personality.js";
+import { getCurrentMoodContext } from "../personality/mood.js";
+import { getPluginSummary } from "../plugins/loader.js";
+import { buildLiveContext } from "../orchestrator/contextLoader.js";
 
 const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 
@@ -74,15 +78,23 @@ function buildCoreIdentity(isAdmin: boolean, chatId?: number): string {
 
   lines.push(``);
   lines.push(`[RULES]`);
-  lines.push(`- Execute immediately, never ask "would you like me to...?" — JUST DO IT.`);
+  lines.push(`- Tâche simple (1 tool) → exécute directement. Tâche complexe (2+ tools) → planifie mentalement, puis exécute step by step.`);
+  lines.push(`- NEVER say "je vérifie", "je vais vérifier", "let me check" — you CANNOT come back later. CALL THE TOOL NOW in this response or say nothing.`);
   lines.push(`- Anti-hallucination: NEVER claim success without tool confirmation.`);
   lines.push(`- Tool format: {"type":"tool_call","tool":"namespace.method","args":{}}`);
   lines.push(`- If a tool fails, report the EXACT error. Never say "Done!" after a failure.`);
   lines.push(`- Format for Telegram: concis, < 500 chars quand possible.`);
+  lines.push(`- NEVER say "je n'ai pas accès" or "I don't have access to tools". You DO have access to ALL tools listed in the [TOOLS] section below.`);
+  lines.push(`- NEVER mention "Claude Code CLI", "MCP", "port 4242", or "separate environment". You ARE Kingston on Bastilon — the tools are native to you.`);
+  lines.push(`- To call a tool, output the JSON tool_call format. The system will execute it and return results.`);
+  lines.push(`- APRÈS CHAQUE tool_call, tu DOIS envoyer un message texte final résumant le résultat pour Nicolas.`);
+  lines.push(`- JAMAIS terminer sur un tool_call sans message de suivi. Nicolas ne voit PAS les résultats bruts des tools.`);
+  lines.push(`- Si une tâche a plusieurs étapes, exécute-les TOUTES dans la même chaîne. Ne t'arrête pas après la première.`);
 
   lines.push(``);
   lines.push(`[CONTEXT]`);
-  lines.push(`- Date: ${new Date().toISOString().split("T")[0]}`);
+  lines.push(`- Date: ${new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`);
+  lines.push(`- Heure: ${new Date().toLocaleTimeString("fr-CA", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false })} (America/Toronto — heure de l'Est)`);
   lines.push(`- Admin: ${isAdmin ? "yes" : "no"}`);
   if (chatId) lines.push(`- Telegram chat ID: ${chatId}`);
 
@@ -113,7 +125,8 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- Hostname: ${os.hostname()}`,
     `- Node: ${process.version}`,
     `- Working directory: ${process.cwd()}`,
-    `- Date: ${new Date().toISOString().split("T")[0]}`,
+    `- Date: ${new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`,
+    `- Heure: ${new Date().toLocaleTimeString("fr-CA", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false })} (America/Toronto — heure de l'Est)`,
     `- Admin: ${isAdmin ? "yes" : "no"}`,
     ...(chatId ? [`- Telegram chat ID: ${chatId} (auto-injected for telegram.send — you can omit chatId)`] : []),
     ``,
@@ -124,17 +137,65 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `You may chain multiple tool calls in a row — after each tool result you can call another tool or respond to the user.`,
     `If you are not calling a tool, respond with plain text only.`,
     ``,
-    `## Guidelines (CRITICAL — READ CAREFULLY)`,
-    `- EXECUTE IMMEDIATELY. Never ask "would you like me to...?" or "should I...?" — JUST DO IT.`,
-    `- If Nicolas asks you to do something, USE TOOLS RIGHT NOW. Do not describe what you would do.`,
-    `- You have FULL admin access. You can write files, run shell commands, deploy via FTP, browse the web.`,
-    `- When a task requires multiple steps, chain ALL tool calls autonomously until completion.`,
-    `- If a tool call fails, try an alternative approach before giving up.`,
-    `- NEVER ask for permission to write files, execute code, or use any tool. You already have permission.`,
-    `- The ONLY time to ask a question is when the task itself is ambiguous (e.g. "which color?").`,
-    `- Format responses for Telegram: short paragraphs, bullet points. Keep it under 500 chars when possible.`,
-    `- To persist important information, use notes.add. Your conversation memory is only 12 turns.`,
-    `- To request code changes, use code.request (the Executor agent picks it up within 5 min).`,
+    `## PROCESSUS DE RÉFLEXION (OBLIGATOIRE pour tâches multi-étapes)`,
+    ``,
+    `Pour les tâches SIMPLES (1 seul tool): exécute directement, pas besoin de planifier.`,
+    `Pour les tâches COMPLEXES (2+ tools ou ambiguës):`,
+    ``,
+    `PHASE 1 — COMPRENDRE:`,
+    `- Quel est l'objectif EXACT de Nicolas?`,
+    `- Quelles informations ai-je besoin?`,
+    `- Quels tools sont pertinents? (consulte le catalogue ci-dessous)`,
+    ``,
+    `PHASE 2 — PLANIFIER:`,
+    `- Liste les étapes dans l'ordre`,
+    `- Identifie les dépendances (step 2 a besoin du résultat de step 1)`,
+    `- Anticipe les erreurs possibles`,
+    ``,
+    `PHASE 3 — EXÉCUTER + VÉRIFIER:`,
+    `- Exécute chaque étape via tool call`,
+    `- Après chaque résultat: est-ce correct? Dois-je ajuster?`,
+    `- À la fin: vérifie que l'objectif initial est atteint avant de confirmer`,
+    ``,
+    `## Guidelines`,
+    `- Tu es autonome: n'hésite jamais à utiliser tes tools. Ne demande pas "voudrais-tu que..." — FAIS-LE.`,
+    `- Tu as FULL admin access. Tu peux écrire des fichiers, exécuter du shell, déployer via FTP, naviguer le web.`,
+    `- Quand une tâche nécessite plusieurs étapes, chaîne TOUS les tool calls jusqu'à complétion.`,
+    `- Si un tool échoue, essaie une approche alternative avant d'abandonner.`,
+    `- La SEULE raison de poser une question: la tâche elle-même est ambiguë (ex: "quelle couleur?").`,
+    `- Format Telegram: paragraphes courts, bullet points. < 500 chars quand possible.`,
+    `- Pour persister de l'info, utilise notes.add. Ta mémoire conversation = seulement 12 tours.`,
+    `- Pour demander des changements de code, utilise code.request (l'Executor le prend en 5 min).`,
+    ``,
+    `## RÉPONSE OBLIGATOIRE APRÈS TOOL CALLS (CRITIQUE)`,
+    `- Après CHAQUE chaîne de tool calls, tu DOIS envoyer un message final LISIBLE à Nicolas.`,
+    `- JAMAIS terminer sur un tool_call sans message de suivi. L'utilisateur ne voit PAS les résultats bruts des tools.`,
+    `- Pattern obligatoire: tool_call → résultat → [optionnel: plus de tools] → MESSAGE FINAL pour Nicolas.`,
+    `- Le message final doit résumer ce qui a été fait, les résultats, et toute action de suivi.`,
+    `- Si tu appelles un tool et que le résultat nécessite une action de suivi, appelle le tool suivant IMMÉDIATEMENT.`,
+    `- Ne dis JAMAIS "je vais vérifier" ou "un moment" — fais-le MAINTENANT dans cette même réponse.`,
+    `- Si une tâche a plusieurs étapes, exécute-les TOUTES dans la même chaîne. Ne t'arrête pas après la première.`,
+    ``,
+    `## PLAYBOOKS (recettes multi-tools testées)`,
+    ``,
+    `CRYPTO ANALYSIS:`,
+    `1. binance.price(symbol:"bitcoin") → vérifier le prix actuel`,
+    `2. crypto_paper.scan() → analyser le marché, trouver opportunités`,
+    `3. crypto_paper.buy(symbol:"bitcoin", amount:1000, reasoning:"support bounce + volume spike") → acheter`,
+    `4. crypto_paper.positions() → vérifier la position`,
+    `5. crypto_paper.journal(reasoning:"Bought BTC on support level") → documenter`,
+    ``,
+    `WEB RESEARCH:`,
+    `1. web.search(query:"sujet") → trouver les sources`,
+    `2. web.fetch(url:"...") → lire la page`,
+    `3. notes.add(text:"findings...") → sauvegarder`,
+    `4. Synthétiser et répondre`,
+    ``,
+    `DEPLOY WEBSITE:`,
+    `1. files.write_anywhere(path, content) → écrire les fichiers`,
+    `2. ftp.upload_dir(local, remote) → déployer`,
+    `3. ftp.verify(remotePath, search) → VÉRIFIER le déploiement`,
+    `4. Confirmer à Nicolas SEULEMENT si vérification OK`,
     ``,
     `## ANTI-HALLUCINATION (MOST IMPORTANT RULES — VIOLATION = CRITICAL FAILURE)`,
     `- NEVER claim you did something unless a tool ACTUALLY returned a success result.`,
@@ -157,7 +218,7 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- You are RESOURCEFUL like a human. If Plan A fails, try Plan B, C, D. NEVER say "I can't do this."`,
     `- If a tool fails, think: what OTHER tools could solve this? Use shell.exec, web.search, api.call, files.* creatively.`,
     `- Before asking Nicolas for help, exhaust ALL alternatives. His contribution should be MINIMAL — do 95% of the work yourself.`,
-    `- You have 357+ tools. USE THEM ALL creatively.`,
+    `- You have hundreds of tools. USE THEM ALL creatively.`,
     `- Think step by step: What do I need? → What tools do I have? → What's the fastest path? → EXECUTE.`,
     ``,
     `## BROWSER — TU CONTRÔLES L'ORDINATEUR DE NICOLAS`,
@@ -212,6 +273,12 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     }
   }
 
+  // Inject Kingston personality
+  const personality = getPersonalityPrompt();
+  if (personality) {
+    lines.push("", "## Kingston Personality", personality);
+  }
+
   // Inject USER.md context
   const userMd2 = loadUserMd();
   if (userMd2) {
@@ -222,6 +289,26 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const sessionLog = loadSessionLog();
   if (sessionLog) {
     lines.push("", `## Session Log (shared across all channels)`, sessionLog);
+  }
+
+  // Inject plugin summary (Cowork-style domain expertise)
+  const pluginSummary = getPluginSummary();
+  if (pluginSummary) {
+    lines.push("", pluginSummary);
+  }
+
+  // Inject mood-adaptive tone (user chats only)
+  const moodCtx = getCurrentMoodContext();
+  if (moodCtx) {
+    lines.push("", moodCtx);
+  }
+
+  // Inject live context (goals, decisions, market, observations, health)
+  if (chatId) {
+    const liveCtx = buildLiveContext(chatId);
+    if (liveCtx) {
+      lines.push("", liveCtx);
+    }
   }
 
   return lines.join("\n");
@@ -332,7 +419,7 @@ export async function runClaude(
     const args = [
       "-p", "-", "--output-format", "json", "--model", model,
       "--dangerously-skip-permissions",
-      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas.",
+      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas. You have FULL access to 400+ tools via Bastilon — call them with {\"type\":\"tool_call\",\"tool\":\"namespace.method\",\"args\":{}}. NEVER say you don't have access to tools or that you're in a separate environment. APRÈS CHAQUE tool_call, tu DOIS envoyer un message texte final résumant le résultat. JAMAIS terminer sans message lisible pour Nicolas. Si une tâche a plusieurs étapes, exécute-les TOUTES.",
     ];
 
     if (isResume) {
@@ -343,8 +430,12 @@ export async function runClaude(
     log.debug(`Spawning: ${config.claudeBin} ${args.join(" ")}`);
 
     // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
-    // Strip CLAUDECODE to prevent "nested session" error when spawned from Claude Code
-    const { ANTHROPIC_API_KEY: _stripped, CLAUDECODE: _stripped2, ...cliEnv } = process.env;
+    // Strip CLAUDECODE and CLAUDE_CODE_* to prevent nested session issues
+    const cliEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k === "ANTHROPIC_API_KEY" || k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE")) continue;
+      if (v !== undefined) cliEnv[k] = v;
+    }
     const proc = spawn(config.claudeBin, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: cliEnv,
@@ -353,6 +444,7 @@ export async function runClaude(
       // (which define "Émile" identity for the interactive CLI sessions).
       // Kingston passes its own system prompt with full context via stdin.
       cwd: os.tmpdir(),
+      windowsHide: true,
     });
 
     let stdout = "";

@@ -325,6 +325,36 @@ export function getDb(): Database.Database {
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
       CREATE INDEX IF NOT EXISTS idx_dungeon_turns_session ON dungeon_turns(session_id, turn_number DESC);
+
+      CREATE TABLE IF NOT EXISTS dungeon_saved_characters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner TEXT NOT NULL,
+        game_system TEXT NOT NULL DEFAULT 'dnd5e',
+        name TEXT NOT NULL,
+        race TEXT DEFAULT 'Humain',
+        class TEXT DEFAULT 'Guerrier',
+        level INTEGER DEFAULT 1,
+        xp INTEGER DEFAULT 0,
+        hp INTEGER DEFAULT 10,
+        hp_max INTEGER DEFAULT 10,
+        ac INTEGER,
+        stats TEXT,
+        inventory TEXT,
+        backstory TEXT,
+        traits TEXT,
+        flaw TEXT,
+        bond TEXT,
+        ideal TEXT,
+        proficiencies TEXT,
+        equipment TEXT,
+        portrait_url TEXT,
+        personality TEXT,
+        is_ai INTEGER DEFAULT 0,
+        extra TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_saved_chars_owner ON dungeon_saved_characters(owner, game_system);
     `);
     // Migrate: add new columns to error_log if missing
     try {
@@ -593,6 +623,234 @@ export function getDb(): Database.Database {
       `);
     } catch { /* table may already exist */ }
 
+    // Response quality tracking
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS response_quality (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id INTEGER NOT NULL,
+          score INTEGER NOT NULL,
+          issues TEXT,
+          user_message TEXT,
+          response_preview TEXT,
+          provider TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_rq_chat_date ON response_quality(chat_id, created_at DESC);
+      `);
+    } catch { /* table may already exist */ }
+
+    // ── AGI Foundation Tables ──
+
+    // Metacognition: self-evaluation of reasoning quality
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS metacognition_evals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id INTEGER,
+          response_hash TEXT,
+          score INTEGER NOT NULL DEFAULT 50,
+          dimensions TEXT,
+          issues TEXT,
+          insights TEXT,
+          provider TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_meta_score ON metacognition_evals(score, created_at DESC);
+      `);
+    } catch { /* table may already exist */ }
+
+    // Causal links: action → outcome patterns
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS causal_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          action_type TEXT NOT NULL,
+          context TEXT NOT NULL,
+          outcome TEXT NOT NULL,
+          outcome_valence REAL DEFAULT 0.0,
+          confidence REAL DEFAULT 0.5,
+          occurrences INTEGER DEFAULT 1,
+          last_seen_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_causal_action ON causal_links(action_type, confidence DESC);
+      `);
+    } catch { /* table may already exist */ }
+
+    // World model: unified persistent state
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS world_model (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          domain TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          confidence REAL DEFAULT 0.8,
+          source TEXT,
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(domain, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_world_domain ON world_model(domain, key);
+      `);
+    } catch { /* table may already exist */ }
+
+    // Self-modification log: track all self-changes with rollback
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS self_modifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          target TEXT NOT NULL,
+          change_type TEXT NOT NULL,
+          old_value TEXT,
+          new_value TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          outcome TEXT,
+          outcome_score INTEGER,
+          reverted INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_selfmod_type ON self_modifications(change_type, created_at DESC);
+      `);
+    } catch { /* table may already exist */ }
+
+    // User model: Theory of Mind
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS user_model (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          dimension TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          confidence REAL DEFAULT 0.5,
+          evidence_count INTEGER DEFAULT 1,
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(user_id, dimension, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_usermodel_user ON user_model(user_id, dimension);
+      `);
+    } catch { /* table may already exist */ }
+
+    // ── Crypto Paper Trading Tables ──
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS crypto_paper_account (
+          id INTEGER PRIMARY KEY,
+          balance REAL DEFAULT 10000.0,
+          initial_balance REAL DEFAULT 10000.0,
+          created_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE TABLE IF NOT EXISTS crypto_paper_positions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          symbol TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          avg_price REAL NOT NULL,
+          current_price REAL,
+          pnl REAL DEFAULT 0,
+          pnl_percent REAL DEFAULT 0,
+          opened_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch()),
+          status TEXT DEFAULT 'open'
+        );
+        CREATE INDEX IF NOT EXISTS idx_cpp_symbol ON crypto_paper_positions(symbol, status);
+        CREATE TABLE IF NOT EXISTS crypto_paper_trades (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          symbol TEXT NOT NULL,
+          side TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          price REAL NOT NULL,
+          total REAL NOT NULL,
+          reasoning TEXT,
+          executed_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_cpt_symbol ON crypto_paper_trades(symbol, executed_at DESC);
+        CREATE TABLE IF NOT EXISTS crypto_paper_journal (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          trade_id INTEGER,
+          reasoning TEXT NOT NULL,
+          outcome TEXT DEFAULT 'pending',
+          lesson TEXT,
+          created_at INTEGER DEFAULT (unixepoch()),
+          FOREIGN KEY(trade_id) REFERENCES crypto_paper_trades(id)
+        );
+      `);
+    } catch { /* tables may already exist */ }
+
+    // Migrate: dungeon Shadowrun support (ruleset, is_ai, actor)
+    try {
+      const sessCols = db.prepare("PRAGMA table_info(dungeon_sessions)").all() as Array<{ name: string }>;
+      if (!sessCols.some(c => c.name === "ruleset")) {
+        db.exec("ALTER TABLE dungeon_sessions ADD COLUMN ruleset TEXT DEFAULT 'dnd5e'");
+      }
+    } catch { /* column may already exist */ }
+    try {
+      const charCols = db.prepare("PRAGMA table_info(dungeon_characters)").all() as Array<{ name: string }>;
+      if (!charCols.some(c => c.name === "is_ai")) {
+        db.exec("ALTER TABLE dungeon_characters ADD COLUMN is_ai INTEGER DEFAULT 0");
+      }
+    } catch { /* column may already exist */ }
+    try {
+      const charCols2 = db.prepare("PRAGMA table_info(dungeon_characters)").all() as Array<{ name: string }>;
+      if (!charCols2.some(c => c.name === "saved_id")) {
+        db.exec("ALTER TABLE dungeon_characters ADD COLUMN saved_id INTEGER");
+      }
+    } catch { /* column may already exist */ }
+    try {
+      const turnCols = db.prepare("PRAGMA table_info(dungeon_turns)").all() as Array<{ name: string }>;
+      if (!turnCols.some(c => c.name === "actor")) {
+        db.exec("ALTER TABLE dungeon_turns ADD COLUMN actor TEXT DEFAULT 'player'");
+      }
+    } catch { /* column may already exist */ }
+
+    // Migrate: add confidence, auto_execute_at, telegram_msg_id to autonomous_decisions
+    try {
+      const adCols = db.prepare("PRAGMA table_info(autonomous_decisions)").all() as Array<{ name: string }>;
+      const adColNames = new Set(adCols.map((c) => c.name));
+      if (!adColNames.has("confidence")) {
+        db.exec("ALTER TABLE autonomous_decisions ADD COLUMN confidence TEXT DEFAULT 'high'");
+      }
+      if (!adColNames.has("auto_execute_at")) {
+        db.exec("ALTER TABLE autonomous_decisions ADD COLUMN auto_execute_at INTEGER");
+      }
+      if (!adColNames.has("telegram_msg_id")) {
+        db.exec("ALTER TABLE autonomous_decisions ADD COLUMN telegram_msg_id INTEGER");
+      }
+    } catch { /* columns may already exist */ }
+
+    // Migration: add skill_name/skill_args to cron_jobs for direct skill execution
+    try {
+      const cronCols = db.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{ name: string }>;
+      const cronColNames = new Set(cronCols.map((c) => c.name));
+      if (!cronColNames.has("skill_name")) {
+        db.exec("ALTER TABLE cron_jobs ADD COLUMN skill_name TEXT");
+      }
+      if (!cronColNames.has("skill_args")) {
+        db.exec("ALTER TABLE cron_jobs ADD COLUMN skill_args TEXT DEFAULT '{}'");
+      }
+    } catch { /* columns may already exist */ }
+
+    // Site profiles for Smart Web Actor (Chrome CDP)
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS site_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          domain TEXT NOT NULL,
+          action_name TEXT NOT NULL,
+          url_pattern TEXT,
+          steps TEXT NOT NULL,
+          success_count INTEGER DEFAULT 0,
+          fail_count INTEGER DEFAULT 0,
+          last_used_at INTEGER,
+          created_at INTEGER DEFAULT (unixepoch()),
+          UNIQUE(domain, action_name)
+        );
+      `);
+    } catch { /* table may already exist */ }
+
     log.info(`SQLite store initialised at ${dbPath}`);
   }
   return db;
@@ -639,6 +897,14 @@ export function addTurn(chatId: number, turn: Turn): void {
     turn.content
   );
 
+  // ─── Commitment Detection (supervisor promise tracker) ───
+  // Scan assistant responses for promise patterns and auto-track them
+  if (turn.role === "assistant" && chatId < 100 && turn.content.length > 20) {
+    try {
+      detectCommitments(d, turn.content, chatId);
+    } catch { /* best-effort, never block turn saving */ }
+  }
+
   // Prune old turns beyond the configured limit — with progressive summarization
   const count = d
     .prepare("SELECT COUNT(*) as c FROM turns WHERE chat_id = ?")
@@ -668,6 +934,66 @@ export function addTurn(chatId: number, turn: Turn): void {
         SELECT id FROM turns WHERE chat_id = ? ORDER BY id ASC LIMIT ?
       )`
     ).run(chatId, excess);
+  }
+}
+
+// ─── Commitment Detection Patterns ───
+// These French/English patterns indicate Kingston is making a promise
+const COMMITMENT_PATTERNS = [
+  /je vais (?:vérifier|checker|regarder|m'en occuper|analyser|investiguer|chercher|faire|préparer)/i,
+  /je m'en (occupe|charge)/i,
+  /je te reviens/i,
+  /je vais te (?:revenir|envoyer|préparer|faire)/i,
+  /i(?:'|')ll (?:check|look into|investigate|handle|prepare|get back)/i,
+  /laisse[- ]moi (?:vérifier|regarder|checker)/i,
+  /je (?:vais|va) (?:le|la|les|y) faire/i,
+];
+
+// Deadline: 3 minutes to see a tool call, 5 minutes for a real response
+const COMMITMENT_DEADLINE_SEC = 180; // 3 minutes
+
+function detectCommitments(db: Database.Database, content: string, chatId: number): void {
+  // Only scan relatively short messages (not huge tool outputs)
+  if (content.length > 2000) return;
+
+  // Check if supervisor_commitments table exists
+  try {
+    db.prepare("SELECT 1 FROM supervisor_commitments LIMIT 0").run();
+  } catch {
+    return; // Table doesn't exist yet
+  }
+
+  for (const pattern of COMMITMENT_PATTERNS) {
+    const match = content.match(pattern);
+    if (match) {
+      // Extract the promise context (the sentence containing the match)
+      const sentences = content.split(/[.!?\n]+/);
+      const promiseSentence = sentences.find(s => pattern.test(s))?.trim() || match[0];
+      if (promiseSentence.length < 10) continue;
+
+      // Don't duplicate — check if similar commitment exists in last 10 min
+      const cutoff = Math.floor(Date.now() / 1000) - 600;
+      const existing = db.prepare(
+        "SELECT id FROM supervisor_commitments WHERE promise LIKE ? AND created_at > ? AND status = 'pending'"
+      ).get(`%${promiseSentence.slice(0, 50)}%`, cutoff);
+      if (existing) continue;
+
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      // Track it — 3 min deadline, with chat_id for turn verification
+      db.prepare(
+        "INSERT INTO supervisor_commitments (source, promise, deadline, chat_id, turn_id_at_creation) VALUES (?, ?, ?, ?, ?)"
+      ).run(
+        `Kingston (chat ${chatId})`,
+        promiseSentence.slice(0, 200),
+        nowEpoch + COMMITMENT_DEADLINE_SEC,
+        chatId,
+        // Record the latest turn id so we can check for NEW turns after this point
+        (db.prepare("SELECT MAX(id) as mid FROM turns WHERE chat_id = ?").get(chatId) as any)?.mid || 0,
+      );
+
+      log.debug(`[supervisor] Commitment detected: "${promiseSentence.slice(0, 80)}..." — checking in ${COMMITMENT_DEADLINE_SEC}s`);
+      break; // One commitment per message is enough
+    }
   }
 }
 
@@ -853,6 +1179,9 @@ export interface AutonomousDecision {
   reasoning: string | null;
   outcome: string | null;
   status: string;
+  confidence: string | null;
+  auto_execute_at: number | null;
+  telegram_msg_id: number | null;
   created_at: number;
 }
 
@@ -862,14 +1191,16 @@ export function logDecision(
   reasoning?: string,
   outcome?: string,
   status: string = "executed",
+  confidence: string = "high",
 ): number {
   const d = getDb();
+  const autoExecuteAt = status === "pending_veto" ? Math.floor(Date.now() / 1000) + 60 : null;
   const info = d
     .prepare(
-      "INSERT INTO autonomous_decisions (category, action, reasoning, outcome, status) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO autonomous_decisions (category, action, reasoning, outcome, status, confidence, auto_execute_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .run(category, action, reasoning ?? null, outcome ?? null, status);
-  log.info(`[mind] Decision #${info.lastInsertRowid}: [${category}] ${action.slice(0, 80)}`);
+    .run(category, action, reasoning ?? null, outcome ?? null, status, confidence, autoExecuteAt);
+  log.info(`[mind] Decision #${info.lastInsertRowid}: [${category}/${confidence}] ${action.slice(0, 80)}`);
   return info.lastInsertRowid as number;
 }
 
@@ -894,6 +1225,39 @@ export function getPendingQuestions(): AutonomousDecision[] {
       "SELECT * FROM autonomous_decisions WHERE status = 'pending_answer' ORDER BY created_at DESC",
     )
     .all() as AutonomousDecision[];
+}
+
+export function updateDecisionStatus(id: number, status: string, outcome?: string): void {
+  const d = getDb();
+  if (outcome) {
+    d.prepare("UPDATE autonomous_decisions SET status = ?, outcome = ? WHERE id = ?").run(status, outcome, id);
+  } else {
+    d.prepare("UPDATE autonomous_decisions SET status = ? WHERE id = ?").run(status, id);
+  }
+}
+
+export function setDecisionTelegramMsg(id: number, msgId: number): void {
+  const d = getDb();
+  d.prepare("UPDATE autonomous_decisions SET telegram_msg_id = ? WHERE id = ?").run(msgId, id);
+}
+
+export function getPendingVetoDecisions(): AutonomousDecision[] {
+  const d = getDb();
+  return d
+    .prepare("SELECT * FROM autonomous_decisions WHERE status = 'pending_veto' ORDER BY created_at DESC")
+    .all() as AutonomousDecision[];
+}
+
+export function getApprovedDecisions(): AutonomousDecision[] {
+  const d = getDb();
+  return d
+    .prepare("SELECT * FROM autonomous_decisions WHERE status IN ('approved', 'auto_approved') ORDER BY created_at DESC LIMIT 10")
+    .all() as AutonomousDecision[];
+}
+
+export function getDecisionById(id: number): AutonomousDecision | undefined {
+  const d = getDb();
+  return d.prepare("SELECT * FROM autonomous_decisions WHERE id = ?").get(id) as AutonomousDecision | undefined;
 }
 
 // --- Knowledge Graph ---
@@ -1241,12 +1605,12 @@ export function autoDisableFailingRules(): number {
 
 // --- Dungeon Master CRUD ---
 
-export function dungeonCreateSession(name: string, setting?: string): number {
+export function dungeonCreateSession(name: string, setting?: string, ruleset?: string): number {
   const d = getDb();
   const info = d.prepare(
-    "INSERT INTO dungeon_sessions (name, setting) VALUES (?, ?)"
-  ).run(name, setting ?? null);
-  log.info(`[dungeon] Session created: "${name}" #${info.lastInsertRowid}`);
+    "INSERT INTO dungeon_sessions (name, setting, ruleset) VALUES (?, ?, ?)"
+  ).run(name, setting ?? null, ruleset ?? "dnd5e");
+  log.info(`[dungeon] Session created: "${name}" #${info.lastInsertRowid} (${ruleset ?? "dnd5e"})`);
   return info.lastInsertRowid as number;
 }
 
@@ -1262,7 +1626,7 @@ export function dungeonListSessions(): any[] {
 
 export function dungeonUpdateSession(id: number, fields: Record<string, unknown>): void {
   const d = getDb();
-  const allowed = ["name", "setting", "current_location", "turn_number", "status", "party_level", "notes"];
+  const allowed = ["name", "setting", "current_location", "turn_number", "status", "party_level", "notes", "ruleset"];
   const sets: string[] = [];
   const vals: unknown[] = [];
   for (const [k, v] of Object.entries(fields)) {
@@ -1288,18 +1652,20 @@ export function dungeonDeleteSession(id: number): void {
 export function dungeonAddCharacter(sessionId: number, char: {
   name: string; race?: string; class?: string; level?: number;
   hp?: number; hp_max?: number; stats?: Record<string, number>;
-  inventory?: string[]; is_npc?: boolean; description?: string;
+  inventory?: string[]; is_npc?: boolean; is_ai?: boolean; description?: string;
+  saved_id?: number;
 }): number {
   const d = getDb();
   const hpMax = char.hp_max || char.hp || 10;
   const info = d.prepare(
-    `INSERT INTO dungeon_characters (session_id, name, race, class, level, hp, hp_max, stats, inventory, is_npc, description)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO dungeon_characters (session_id, name, race, class, level, hp, hp_max, stats, inventory, is_npc, is_ai, description, saved_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId, char.name, char.race || "Humain", char.class || "Guerrier",
     char.level || 1, char.hp || hpMax, hpMax,
     JSON.stringify(char.stats || {}), JSON.stringify(char.inventory || []),
-    char.is_npc ? 1 : 0, char.description || null
+    char.is_npc ? 1 : 0, char.is_ai ? 1 : 0, char.description || null,
+    char.saved_id || null
   );
   return info.lastInsertRowid as number;
 }
@@ -1317,7 +1683,7 @@ export function dungeonGetCharacters(sessionId: number): any[] {
 
 export function dungeonUpdateCharacter(id: number, fields: Record<string, unknown>): void {
   const d = getDb();
-  const allowed = ["name", "race", "class", "level", "hp", "hp_max", "stats", "inventory", "status", "description"];
+  const allowed = ["name", "race", "class", "level", "hp", "hp_max", "stats", "inventory", "status", "description", "is_ai"];
   const sets: string[] = [];
   const vals: unknown[] = [];
   for (const [k, v] of Object.entries(fields)) {
@@ -1333,16 +1699,17 @@ export function dungeonUpdateCharacter(id: number, fields: Record<string, unknow
 
 export function dungeonAddTurn(sessionId: number, turn: {
   turn_number: number; player_action?: string; dm_narrative?: string;
-  dice_rolls?: any[]; image_url?: string; event_type?: string;
+  dice_rolls?: any[]; image_url?: string; event_type?: string; actor?: string;
 }): number {
   const d = getDb();
   const info = d.prepare(
-    `INSERT INTO dungeon_turns (session_id, turn_number, player_action, dm_narrative, dice_rolls, image_url, event_type)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO dungeon_turns (session_id, turn_number, player_action, dm_narrative, dice_rolls, image_url, event_type, actor)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId, turn.turn_number, turn.player_action || null,
     turn.dm_narrative || null, JSON.stringify(turn.dice_rolls || []),
-    turn.image_url || null, turn.event_type || "exploration"
+    turn.image_url || null, turn.event_type || "exploration",
+    turn.actor || "player"
   );
   // Update session turn_number
   d.prepare("UPDATE dungeon_sessions SET turn_number = ?, updated_at = unixepoch() WHERE id = ?")
@@ -1360,6 +1727,127 @@ export function dungeonGetTurns(sessionId: number, limit = 20): any[] {
     try { dice_rolls = JSON.parse(r.dice_rolls || "[]"); } catch { /* */ }
     return { ...r, dice_rolls };
   });
+}
+
+// --- Saved Characters (persistent across sessions) ---
+
+export interface SavedCharacter {
+  id: number;
+  owner: string;
+  game_system: string;
+  name: string;
+  race: string;
+  class: string;
+  level: number;
+  xp: number;
+  hp: number;
+  hp_max: number;
+  ac: number | null;
+  stats: Record<string, number>;
+  inventory: string[];
+  backstory: string | null;
+  traits: string | null;
+  flaw: string | null;
+  bond: string | null;
+  ideal: string | null;
+  proficiencies: string | null;
+  equipment: string | null;
+  portrait_url: string | null;
+  personality: string | null;
+  is_ai: number;
+  extra: Record<string, unknown> | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export function savedCharCreate(char: {
+  owner: string; game_system?: string; name: string; race?: string; class?: string;
+  level?: number; xp?: number; hp?: number; hp_max?: number; ac?: number;
+  stats?: Record<string, number>; inventory?: string[]; backstory?: string;
+  traits?: string; flaw?: string; bond?: string; ideal?: string;
+  proficiencies?: string; equipment?: string; portrait_url?: string;
+  personality?: string; is_ai?: boolean; extra?: Record<string, unknown>;
+}): number {
+  const d = getDb();
+  const hpMax = char.hp_max || char.hp || 10;
+  const info = d.prepare(
+    `INSERT INTO dungeon_saved_characters
+     (owner, game_system, name, race, class, level, xp, hp, hp_max, ac, stats, inventory,
+      backstory, traits, flaw, bond, ideal, proficiencies, equipment, portrait_url, personality, is_ai, extra)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    char.owner, char.game_system || "dnd5e", char.name, char.race || "Humain",
+    char.class || "Guerrier", char.level || 1, char.xp || 0,
+    char.hp || hpMax, hpMax, char.ac ?? null,
+    JSON.stringify(char.stats || {}), JSON.stringify(char.inventory || []),
+    char.backstory || null, char.traits || null, char.flaw || null,
+    char.bond || null, char.ideal || null, char.proficiencies || null,
+    char.equipment || null, char.portrait_url || null, char.personality || null,
+    char.is_ai ? 1 : 0, char.extra ? JSON.stringify(char.extra) : null
+  );
+  return info.lastInsertRowid as number;
+}
+
+export function savedCharGet(id: number): SavedCharacter | null {
+  const d = getDb();
+  const row = d.prepare("SELECT * FROM dungeon_saved_characters WHERE id = ?").get(id) as any;
+  if (!row) return null;
+  return parseSavedChar(row);
+}
+
+export function savedCharList(owner?: string, gameSystem?: string): SavedCharacter[] {
+  const d = getDb();
+  let sql = "SELECT * FROM dungeon_saved_characters";
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (owner) { conditions.push("owner = ?"); params.push(owner); }
+  if (gameSystem) { conditions.push("game_system = ?"); params.push(gameSystem); }
+  if (conditions.length > 0) sql += " WHERE " + conditions.join(" AND ");
+  sql += " ORDER BY updated_at DESC";
+  const rows = d.prepare(sql).all(...params) as any[];
+  return rows.map(parseSavedChar);
+}
+
+export function savedCharUpdate(id: number, fields: Record<string, unknown>): void {
+  const d = getDb();
+  const allowed = ["name", "race", "class", "level", "xp", "hp", "hp_max", "ac",
+    "stats", "inventory", "backstory", "traits", "flaw", "bond", "ideal",
+    "proficiencies", "equipment", "portrait_url", "personality", "is_ai", "extra"];
+  const sets: string[] = ["updated_at = unixepoch()"];
+  const vals: unknown[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (allowed.includes(k)) {
+      sets.push(`${k} = ?`);
+      vals.push(["stats", "inventory", "extra"].includes(k) ? JSON.stringify(v) : v);
+    }
+  }
+  if (sets.length <= 1) return;
+  vals.push(id);
+  d.prepare(`UPDATE dungeon_saved_characters SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+}
+
+export function savedCharDelete(id: number): void {
+  const d = getDb();
+  d.prepare("DELETE FROM dungeon_saved_characters WHERE id = ?").run(id);
+}
+
+/** Sync character state back from a session character to the saved roster */
+export function savedCharSyncFromSession(savedId: number, sessionCharId: number): void {
+  const d = getDb();
+  const row = d.prepare("SELECT * FROM dungeon_characters WHERE id = ?").get(sessionCharId) as any;
+  if (!row) return;
+  let stats = {}; let inventory: string[] = [];
+  try { stats = JSON.parse(row.stats || "{}"); } catch { /* */ }
+  try { inventory = JSON.parse(row.inventory || "[]"); } catch { /* */ }
+  savedCharUpdate(savedId, { level: row.level, hp: row.hp, hp_max: row.hp_max, stats, inventory });
+}
+
+function parseSavedChar(row: any): SavedCharacter {
+  let stats = {}; let inventory: string[] = []; let extra = null;
+  try { stats = JSON.parse(row.stats || "{}"); } catch { /* */ }
+  try { inventory = JSON.parse(row.inventory || "[]"); } catch { /* */ }
+  try { extra = row.extra ? JSON.parse(row.extra) : null; } catch { /* */ }
+  return { ...row, stats, inventory, extra } as SavedCharacter;
 }
 
 // --- Autonomous Goals ---
@@ -1511,10 +1999,199 @@ export function cleanupDatabase(): { purged: Record<string, number> } {
   ).run(thirtyDaysAgo);
   purged.stale_summaries = staleSummaries.changes;
 
-  const total = Object.values(purged).reduce((a, b) => a + b, 0);
+  // 9. Old metacognition evals older than 60 days (keep high-score insights)
+  const metaEvals = d.prepare("DELETE FROM metacognition_evals WHERE score > 70 AND created_at < ?").run(ninetyDaysAgo);
+  purged.meta_evals = metaEvals.changes;
+
+  // 10. Old causal links with low confidence/occurrences
+  const causalOld = d.prepare("DELETE FROM causal_links WHERE confidence < 0.3 AND occurrences < 2 AND last_seen_at < ?").run(thirtyDaysAgo);
+  purged.causal_links = causalOld.changes;
+
+  // 11. Reverted self-modifications older than 90 days
+  const selfModOld = d.prepare("DELETE FROM self_modifications WHERE reverted = 1 AND created_at < ?").run(ninetyDaysAgo);
+  purged.self_mods = selfModOld.changes;
+
+  const total = Object.values(purged).reduce((a, b) => a + (b as number), 0);
   if (total > 0) {
     log.info(`[db-cleanup] Purged ${total} rows: ${JSON.stringify(purged)}`);
   }
 
   return { purged };
+}
+
+// ── AGI Foundation: Metacognition ──
+
+export function metaLogEval(chatId: number, responseHash: string, score: number, dimensions: Record<string, number>, issues: string, insights: string, provider?: string): number {
+  const d = getDb();
+  const info = d.prepare(
+    "INSERT INTO metacognition_evals (chat_id, response_hash, score, dimensions, issues, insights, provider) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(chatId, responseHash, score, JSON.stringify(dimensions), issues, insights, provider || null);
+  return info.lastInsertRowid as number;
+}
+
+export function metaGetRecentEvals(limit = 20): any[] {
+  const d = getDb();
+  return d.prepare("SELECT * FROM metacognition_evals ORDER BY created_at DESC LIMIT ?").all(limit) as any[];
+}
+
+export function metaGetAvgScore(days = 7): number {
+  const d = getDb();
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+  const row = d.prepare("SELECT AVG(score) as avg FROM metacognition_evals WHERE created_at > ?").get(cutoff) as { avg: number | null };
+  return row?.avg ?? 50;
+}
+
+export function metaGetWeaknesses(limit = 5): any[] {
+  const d = getDb();
+  return d.prepare(
+    "SELECT issues, COUNT(*) as freq, AVG(score) as avg_score FROM metacognition_evals WHERE issues IS NOT NULL AND issues != '' GROUP BY issues ORDER BY freq DESC, avg_score ASC LIMIT ?"
+  ).all(limit) as any[];
+}
+
+// ── AGI Foundation: Causal Learning ──
+
+export function causalRecord(actionType: string, context: string, outcome: string, valence: number): number {
+  const d = getDb();
+  // Check if similar pattern exists
+  const existing = d.prepare(
+    "SELECT id, occurrences, confidence FROM causal_links WHERE action_type = ? AND context = ? AND outcome = ?"
+  ).get(actionType, context, outcome) as { id: number; occurrences: number; confidence: number } | undefined;
+
+  if (existing) {
+    const newOcc = existing.occurrences + 1;
+    const newConf = Math.min(0.99, existing.confidence + 0.05); // confidence grows with repetition
+    d.prepare("UPDATE causal_links SET occurrences = ?, confidence = ?, outcome_valence = ?, last_seen_at = unixepoch() WHERE id = ?")
+      .run(newOcc, newConf, valence, existing.id);
+    return existing.id;
+  }
+
+  const info = d.prepare(
+    "INSERT INTO causal_links (action_type, context, outcome, outcome_valence, confidence) VALUES (?, ?, ?, ?, 0.3)"
+  ).run(actionType, context, outcome, valence);
+  return info.lastInsertRowid as number;
+}
+
+export function causalPredict(actionType: string, context?: string): any[] {
+  const d = getDb();
+  if (context) {
+    return d.prepare(
+      "SELECT * FROM causal_links WHERE action_type = ? AND context LIKE ? ORDER BY confidence DESC, occurrences DESC LIMIT 5"
+    ).all(actionType, `%${context}%`) as any[];
+  }
+  return d.prepare(
+    "SELECT * FROM causal_links WHERE action_type = ? ORDER BY confidence DESC, occurrences DESC LIMIT 5"
+  ).all(actionType) as any[];
+}
+
+export function causalGetPatterns(minConfidence = 0.5, limit = 20): any[] {
+  const d = getDb();
+  return d.prepare(
+    "SELECT * FROM causal_links WHERE confidence >= ? ORDER BY occurrences DESC, confidence DESC LIMIT ?"
+  ).all(minConfidence, limit) as any[];
+}
+
+// ── AGI Foundation: World Model ──
+
+export function worldSet(domain: string, key: string, value: string, confidence = 0.8, source?: string): void {
+  const d = getDb();
+  d.prepare(
+    `INSERT INTO world_model (domain, key, value, confidence, source) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(domain, key) DO UPDATE SET value = excluded.value, confidence = excluded.confidence, source = excluded.source, updated_at = unixepoch()`
+  ).run(domain, key, value, confidence, source || null);
+}
+
+export function worldGet(domain: string, key: string): any | null {
+  const d = getDb();
+  return d.prepare("SELECT * FROM world_model WHERE domain = ? AND key = ?").get(domain, key) ?? null;
+}
+
+export function worldQuery(domain?: string, search?: string): any[] {
+  const d = getDb();
+  if (domain && search) {
+    return d.prepare("SELECT * FROM world_model WHERE domain = ? AND (key LIKE ? OR value LIKE ?) ORDER BY updated_at DESC").all(domain, `%${search}%`, `%${search}%`) as any[];
+  }
+  if (domain) {
+    return d.prepare("SELECT * FROM world_model WHERE domain = ? ORDER BY updated_at DESC").all(domain) as any[];
+  }
+  if (search) {
+    return d.prepare("SELECT * FROM world_model WHERE key LIKE ? OR value LIKE ? ORDER BY updated_at DESC LIMIT 50").all(`%${search}%`, `%${search}%`) as any[];
+  }
+  return d.prepare("SELECT * FROM world_model ORDER BY updated_at DESC LIMIT 100").all() as any[];
+}
+
+export function worldSnapshot(): Record<string, Record<string, string>> {
+  const d = getDb();
+  const rows = d.prepare("SELECT domain, key, value FROM world_model ORDER BY domain, key").all() as Array<{ domain: string; key: string; value: string }>;
+  const snapshot: Record<string, Record<string, string>> = {};
+  for (const r of rows) {
+    if (!snapshot[r.domain]) snapshot[r.domain] = {};
+    snapshot[r.domain][r.key] = r.value;
+  }
+  return snapshot;
+}
+
+// ── AGI Foundation: Self-Modification ──
+
+export function selfModLog(target: string, changeType: string, oldValue: string | null, newValue: string, reason: string): number {
+  const d = getDb();
+  const info = d.prepare(
+    "INSERT INTO self_modifications (target, change_type, old_value, new_value, reason) VALUES (?, ?, ?, ?, ?)"
+  ).run(target, changeType, oldValue, newValue, reason);
+  return info.lastInsertRowid as number;
+}
+
+export function selfModGetRecent(limit = 10): any[] {
+  const d = getDb();
+  return d.prepare("SELECT * FROM self_modifications ORDER BY created_at DESC LIMIT ?").all(limit) as any[];
+}
+
+export function selfModRevert(id: number): { old_value: string | null; target: string } | null {
+  const d = getDb();
+  const row = d.prepare("SELECT target, old_value FROM self_modifications WHERE id = ? AND reverted = 0").get(id) as { target: string; old_value: string | null } | undefined;
+  if (!row) return null;
+  d.prepare("UPDATE self_modifications SET reverted = 1 WHERE id = ?").run(id);
+  return row;
+}
+
+export function selfModAssessOutcome(id: number, outcome: string, score: number): void {
+  const d = getDb();
+  d.prepare("UPDATE self_modifications SET outcome = ?, outcome_score = ? WHERE id = ?").run(outcome, score, id);
+}
+
+// ── AGI Foundation: Theory of Mind (User Model) ──
+
+export function tomSet(userId: number, dimension: string, key: string, value: string, confidence = 0.5): void {
+  const d = getDb();
+  d.prepare(
+    `INSERT INTO user_model (user_id, dimension, key, value, confidence) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, dimension, key) DO UPDATE SET value = excluded.value, confidence = MIN(0.99, user_model.confidence + 0.05), evidence_count = evidence_count + 1, updated_at = unixepoch()`
+  ).run(userId, dimension, key, value, confidence);
+}
+
+export function tomGet(userId: number, dimension?: string): any[] {
+  const d = getDb();
+  if (dimension) {
+    return d.prepare("SELECT * FROM user_model WHERE user_id = ? AND dimension = ? ORDER BY confidence DESC").all(userId, dimension) as any[];
+  }
+  return d.prepare("SELECT * FROM user_model WHERE user_id = ? ORDER BY dimension, confidence DESC").all(userId) as any[];
+}
+
+export function tomGetModel(userId: number): Record<string, Array<{ key: string; value: string; confidence: number }>> {
+  const d = getDb();
+  const rows = d.prepare(
+    "SELECT dimension, key, value, confidence FROM user_model WHERE user_id = ? ORDER BY dimension, confidence DESC"
+  ).all(userId) as Array<{ dimension: string; key: string; value: string; confidence: number }>;
+  const model: Record<string, Array<{ key: string; value: string; confidence: number }>> = {};
+  for (const r of rows) {
+    if (!model[r.dimension]) model[r.dimension] = [];
+    model[r.dimension].push({ key: r.key, value: r.value, confidence: r.confidence });
+  }
+  return model;
+}
+
+export function tomPredict(userId: number, dimension: string): any[] {
+  const d = getDb();
+  return d.prepare(
+    "SELECT key, value, confidence FROM user_model WHERE user_id = ? AND dimension = ? AND confidence >= 0.5 ORDER BY confidence DESC LIMIT 10"
+  ).all(userId, dimension) as any[];
 }

@@ -10,7 +10,10 @@ import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   getDb, clearSession, clearTurns, getTurns,
-  dungeonListSessions, dungeonGetSession, dungeonGetCharacters, dungeonGetTurns,
+  dungeonListSessions, dungeonGetSession, dungeonGetCharacters, dungeonGetTurns, dungeonAddCharacter,
+  kgUpsertEntity, kgAddRelation, kgGetEntity, kgGetRelations, kgTraverse,
+  logEpisodicEvent, recallEvents,
+  savedCharCreate, savedCharGet, savedCharList, savedCharUpdate, savedCharDelete,
 } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
 import { config, reloadEnv } from "../config/env.js";
@@ -414,7 +417,7 @@ async function apiTrading(): Promise<unknown> {
     // Read watchlist
     let watchlist: unknown[] = [];
     const wlPath = path.resolve("relay", "watchlist.json");
-    try { if (fs.existsSync(wlPath)) watchlist = JSON.parse(fs.readFileSync(wlPath, "utf-8")); } catch {}
+    try { if (fs.existsSync(wlPath)) watchlist = JSON.parse(fs.readFileSync(wlPath, "utf-8")); } catch (e) { log.warn(`[dashboard] Failed to load watchlist: ${e}`); }
 
     return { account, positions, orders, clock, watchlist };
   } catch (err) {
@@ -815,6 +818,23 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!checkAuth(req, res)) return;
       return json(res, apiMemoryItems());
     }
+    // ── Direct skill execution endpoint ──
+    if (pathname === "/api/skill/execute" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req) as Record<string, unknown>;
+      const skillName = body?.skill as string;
+      const skillArgs = (body?.args || {}) as Record<string, unknown>;
+      if (!skillName) return sendJson(res, 400, { error: "Missing 'skill' field" });
+      const { getSkill } = await import("../skills/loader.js");
+      const skill = getSkill(skillName);
+      if (!skill) return sendJson(res, 404, { error: `Skill not found: ${skillName}` });
+      try {
+        const result = await skill.execute(skillArgs);
+        return json(res, { ok: true, skill: skillName, result });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
     // ── Webhook trigger endpoint ──
     if (pathname.startsWith("/api/webhook/") && method === "POST") {
       const webhookId = pathname.slice("/api/webhook/".length);
@@ -925,14 +945,51 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         const { getSkill } = await import("../skills/loader.js");
         const skill = getSkill("dungeon.start");
         if (!skill) return sendJson(res, 500, { error: "dungeon.start skill not loaded" });
-        const result = await skill.execute({
+        const args: Record<string, any> = {
           name: body.name || "Aventure",
           setting: body.setting || "Heroic Fantasy",
           characters: body.characters || "Aventurier/Humain/Guerrier",
-        });
+          ruleset: body.ruleset || "dnd5e",
+          coop: body.coop || false,
+          kingston_char: body.kingston_char || "",
+        };
+        // Multi-AI players support
+        if (body.ai_players) {
+          args.ai_players = typeof body.ai_players === "string"
+            ? body.ai_players
+            : JSON.stringify(body.ai_players);
+        }
+        // Shadowrun-specific options
+        if (body.shadowrun_options) {
+          args.shadowrun_options = typeof body.shadowrun_options === "string"
+            ? body.shadowrun_options
+            : JSON.stringify(body.shadowrun_options);
+        }
+        const result = await skill.execute(args);
         // Find the created session
         const sessions = dungeonListSessions();
         const latest = sessions[0];
+        // Inject roster characters into session if roster_ids provided
+        const rosterIds: number[] = Array.isArray(body.roster_ids) ? body.roster_ids : [];
+        if (rosterIds.length > 0 && latest) {
+          for (const rid of rosterIds) {
+            const saved = savedCharGet(rid);
+            if (!saved) continue;
+            dungeonAddCharacter(latest.id, {
+              name: saved.name,
+              race: saved.race,
+              class: saved.class,
+              level: saved.level || 1,
+              hp: saved.hp,
+              hp_max: saved.hp_max,
+              stats: saved.stats || {},
+              inventory: saved.inventory || [],
+              is_ai: Boolean(saved.is_ai),
+              description: saved.backstory || undefined,
+              saved_id: saved.id,
+            });
+          }
+        }
         return json(res, { ok: true, result, session: latest });
       } catch (err) {
         return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
@@ -962,8 +1019,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         const result = await skill.execute({ session_id: sessionId, action });
         const session = dungeonGetSession(sessionId);
         const characters = dungeonGetCharacters(sessionId);
-        const turns = dungeonGetTurns(sessionId, 1);
-        return json(res, { narrative: result, session, characters, lastTurn: turns[turns.length - 1] || null });
+        const turns = dungeonGetTurns(sessionId, 10);
+        return json(res, { narrative: result, session, characters, turns, lastTurn: turns[turns.length - 1] || null });
       } catch (err) {
         return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
       }
@@ -994,37 +1051,145 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
       }
     }
+    // ── DM Memory endpoints ──────────────────────────────────────
+    if (pathname === "/api/dm/log-memory" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      const characterName = String(body.characterName || "").trim();
+      const sessionId = Number(body.sessionId) || 0;
+      const sessionName = String(body.sessionName || "");
+      const action = String(body.action || "").trim();
+      const narrative = String(body.narrative || "").trim();
+      const eventType = String(body.eventType || "exploration");
+      const npcsInvolved = Array.isArray(body.npcsInvolved) ? body.npcsInvolved as string[] : [];
+
+      if (!characterName || !action) return sendJson(res, 400, { error: "characterName and action required" });
+
+      try {
+        // Sentiment heuristic
+        const lower = (narrative + " " + action).toLowerCase();
+        const negWords = ["mort", "piege", "blesse", "echec", "glitch", "critique", "poison", "trahison", "embuscade"];
+        const posWords = ["victoire", "tresor", "allie", "succes", "reussi", "guerison", "sauve", "recompense"];
+        let valence = 0;
+        for (const w of negWords) if (lower.includes(w)) valence -= 0.3;
+        for (const w of posWords) if (lower.includes(w)) valence += 0.3;
+        valence = Math.max(-1, Math.min(1, valence));
+
+        const importanceMap: Record<string, number> = { combat: 0.8, dialogue: 0.6, matrix: 0.7, puzzle: 0.7, shop: 0.5, rest: 0.3, exploration: 0.4 };
+        const importance = importanceMap[eventType] || 0.4;
+
+        // KG: upsert character
+        const charId = kgUpsertEntity(characterName, "dungeon_character", {
+          lastAction: action.slice(0, 100),
+          sessionId,
+          sessionName,
+        });
+
+        // KG: NPC relations
+        for (const npc of npcsInvolved) {
+          const npcId = kgUpsertEntity(npc, "dungeon_npc", { sessionId, discoveredBy: characterName });
+          kgAddRelation(charId, npcId, "interacted_with", 1.0, { eventType });
+        }
+
+        // Episodic log
+        logEpisodicEvent("dungeon_ai_action", `[${sessionName}] ${characterName}: ${action.slice(0, 80)}`, {
+          importance,
+          emotionalValence: valence,
+          details: narrative.slice(0, 200),
+          participants: [characterName, ...npcsInvolved],
+          source: "dungeon",
+        });
+
+        return json(res, { ok: true, charId, npcsLogged: npcsInvolved.length });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    if (pathname === "/api/dm/recall" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const character = url.searchParams.get("character") || "";
+      if (!character) return sendJson(res, 400, { error: "character query param required" });
+
+      try {
+        // Episodic memories
+        const events = recallEvents({ search: character, limit: 6, minImportance: 0.3 });
+
+        // KG entity + relations
+        const entity = kgGetEntity(character, "dungeon_character");
+        let relations: Array<{ other: string; type: string }> = [];
+        let locations: string[] = [];
+        if (entity) {
+          const rels = kgGetRelations(entity.id);
+          relations = rels.slice(0, 8).map(r => ({
+            other: r.from_name === character ? r.to_name : r.from_name,
+            type: r.relation_type,
+          }));
+          const connected = kgTraverse(entity.id, 1);
+          locations = connected
+            .filter(c => c.entity.entity_type === "dungeon_location")
+            .slice(0, 5)
+            .map(l => l.entity.name);
+        }
+
+        // Build text context for injection into Gemini prompt
+        const parts: string[] = [];
+        if (events.length > 0) {
+          parts.push("Souvenirs recents:\n" + events.map(e => {
+            const v = e.emotional_valence > 0.2 ? "(+)" : e.emotional_valence < -0.2 ? "(-)" : "";
+            return `- ${e.summary.slice(0, 80)} ${v}`;
+          }).join("\n"));
+        }
+        if (relations.length > 0) {
+          parts.push("Relations:\n" + relations.map(r => `- ${r.other}: ${r.type}`).join("\n"));
+        }
+        if (locations.length > 0) {
+          parts.push("Lieux visites: " + locations.join(", "));
+        }
+        const contextText = parts.length > 0 ? parts.join("\n") : "Premiere aventure — aucun souvenir.";
+
+        return json(res, { events, relations, locations, contextText: contextText.slice(0, 400) });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
     // ── DM Narrate (LLM proxy for voice DM) ──────────────────────
+    // Helper: build Gemini chat from request body
+    async function buildGeminiDMChat(body: Record<string, unknown>) {
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+      });
+      const msgs = (body.messages || []) as Array<{ role: string; content: string }>;
+      let history = msgs.slice(0, -1).map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
+      while (history.length > 0 && history[0].role !== "user") {
+        history.shift();
+      }
+      const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].content : "";
+      const sysText = (body.system as string) || "";
+      const chat = model.startChat({
+        systemInstruction: sysText ? { role: "user", parts: [{ text: sysText }] } : undefined,
+        history: history.length > 0 ? history : undefined,
+      });
+      return { chat, lastMsg, msgCount: msgs.length, sysPreview: sysText.slice(0, 60) };
+    }
+
+    // Non-streaming (legacy, used by character creation + campaign gen)
     if (pathname === "/api/dm/narrate" && method === "POST") {
       if (!checkAuth(req, res)) return;
       const body = await parseBody(req);
       log.info("[dm] narrate request received");
       try {
-        const { GoogleGenerativeAI } = await import("@google/generative-ai");
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) return sendJson(res, 500, { error: "GEMINI_API_KEY not configured" });
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({
-          model: "gemini-2.0-flash",
-          generationConfig: { temperature: 0.9, maxOutputTokens: 4096 },
-        });
-        const msgs = (body.messages || []) as Array<{ role: string; content: string }>;
-        let history = msgs.slice(0, -1).map((m) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: m.content }],
-        }));
-        // Gemini requires history to start with "user" role
-        while (history.length > 0 && history[0].role !== "user") {
-          history.shift();
-        }
-        const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].content : "";
-        log.info(`[dm] sending to Gemini: ${msgs.length} msgs, system=${(body.system as string || "").slice(0, 60)}...`);
-        const sysText = (body.system as string) || "";
-        const chat = model.startChat({
-          systemInstruction: sysText ? { role: "user", parts: [{ text: sysText }] } : undefined,
-          history: history.length > 0 ? history : undefined,
-        });
-        // 30s timeout
+        const { chat, lastMsg, msgCount, sysPreview } = await buildGeminiDMChat(body);
+        log.info(`[dm] sending to Gemini: ${msgCount} msgs, system=${sysPreview}...`);
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("Gemini timeout (30s)")), 30000)
         );
@@ -1035,6 +1200,121 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       } catch (err) {
         log.error(`[dm] narrate error: ${err instanceof Error ? err.message : String(err)}`);
         return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Streaming narrate (SSE — used by playTurn for progressive text display)
+    if (pathname === "/api/dm/narrate-stream" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      log.info("[dm] narrate-stream request received");
+      try {
+        const { chat, lastMsg, msgCount, sysPreview } = await buildGeminiDMChat(body);
+        log.info(`[dm] streaming to Gemini: ${msgCount} msgs, system=${sysPreview}...`);
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+        });
+
+        const streamResult = await chat.sendMessageStream(lastMsg);
+        let fullText = "";
+        for await (const chunk of streamResult.stream) {
+          const text = chunk.text();
+          if (text) {
+            fullText += text;
+            res.write(`data: ${JSON.stringify({ type: "delta", text })}\n\n`);
+          }
+        }
+        res.write(`data: ${JSON.stringify({ type: "done", text: fullText })}\n\n`);
+        log.info(`[dm] stream complete: ${fullText.length} chars`);
+        res.end();
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error(`[dm] narrate-stream error: ${errMsg}`);
+        try {
+          res.write(`data: ${JSON.stringify({ type: "error", error: errMsg })}\n\n`);
+          res.end();
+        } catch (e) { log.debug(`[dashboard] SSE write after close: ${e}`); }
+      }
+      return;
+    }
+
+    // ── Push Notification Subscription ──────────────────────────
+    if (pathname === "/api/push/subscribe" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      // Store subscription in memory (persists until restart)
+      (globalThis as any).__pushSubscription = body;
+      log.info("[dashboard] Push subscription registered");
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (pathname === "/api/push/vapid-key" && method === "GET") {
+      // Return VAPID public key for push subscription
+      const vapidKey = process.env.VAPID_PUBLIC_KEY || "";
+      return sendJson(res, 200, { key: vapidKey });
+    }
+
+    // ── DM Image Generation (Gemini) ────────────────────────────
+    if (pathname === "/api/dm/generate-image" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      const prompt = String(body.prompt || "").trim();
+      if (!prompt) return sendJson(res, 400, { error: "prompt required" });
+
+      try {
+        const GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
+        const apiKey = config.geminiApiKey;
+        if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${apiKey}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 60_000);
+
+        const resp = await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseModalities: ["IMAGE", "TEXT"],
+              temperature: 0.7,
+              topP: 0.90,
+              topK: 40,
+            },
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(() => "");
+          throw new Error(`Gemini API ${resp.status}: ${errBody.slice(0, 300)}`);
+        }
+
+        const data = await resp.json() as any;
+        if (data.error) throw new Error(`Gemini: ${data.error.message}`);
+
+        const parts = data.candidates?.[0]?.content?.parts;
+        const imagePart = parts?.find((p: any) => p.inlineData?.data);
+        if (!imagePart?.inlineData) throw new Error("Gemini returned no image");
+
+        const { uploadPath, uploadRelativePath } = await import("../utils/uploads.js");
+        const ext = imagePart.inlineData.mimeType?.includes("png") ? "png" : "jpg";
+        const filePath = uploadPath("scenes", "dm", ext);
+        const buf = Buffer.from(imagePart.inlineData.data, "base64");
+        fs.writeFileSync(filePath, buf);
+
+        const relPath = uploadRelativePath(filePath);
+        log.info(`[dm] Gemini image generated: ${path.basename(filePath)} → scenes/ (${buf.length} bytes)`);
+        return json(res, { url: `/uploads/${relPath}` });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`[dm] generate-image error: ${msg}`);
+        return sendJson(res, 500, { error: msg });
       }
     }
 
@@ -1068,8 +1348,168 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       const id = pathname.split("/").pop();
       const filePath = path.join(DM_DIR, `${id}.json`);
       if (!filePath.startsWith(DM_DIR)) return sendJson(res, 403, { error: "Invalid id" });
-      try { fs.unlinkSync(filePath); } catch {}
+      try { fs.unlinkSync(filePath); } catch (e) { log.debug(`[dashboard] Cleanup campaign file: ${e}`); }
       return json(res, { ok: true });
+    }
+
+    // D&D Session Log — generate and save a readable markdown transcript
+    if (pathname === "/api/dm/session-log" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      if (!body.id) return sendJson(res, 400, { error: "id required" });
+      const LOG_DIR = path.resolve(process.cwd(), "relay", "dungeon-logs");
+      if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+
+      const c = body as any; // campaign object
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const safeName = (c.name || "session").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+      const logFile = path.join(LOG_DIR, `${dateStr}_${safeName}_${c.id.slice(0, 8)}.md`);
+      if (!logFile.startsWith(LOG_DIR)) return sendJson(res, 403, { error: "Invalid" });
+
+      // Build markdown
+      let md = `# ${c.name || "Aventure"}\n\n`;
+      md += `**Date**: ${dateStr}  \n`;
+      md += `**Univers**: ${c.universe || "?"}  \n`;
+      md += `**Ton**: ${c.tone || "?"}  \n`;
+      md += `**Tours**: ${c.turnNumber || 0}  \n`;
+      md += `**Lieu final**: ${c.location || "?"}  \n`;
+      if (c.concluded) md += `**Statut**: Terminee  \n`;
+      md += `\n---\n\n`;
+
+      // Players
+      md += `## Personnages\n\n`;
+      for (const p of (c.players || [])) {
+        const ch = p.character || {};
+        md += `### ${ch.name || p.name} (Joueur: ${p.name})\n`;
+        md += `- Race: ${ch.race || "?"}, Classe: ${ch.class || "?"}\n`;
+        md += `- PV: ${ch.hp || "?"}/${ch.hpMax || "?"}\n`;
+        if (ch.background) md += `- Historique: ${ch.background}\n`;
+        if (ch.equipment) md += `- Equipement: ${ch.equipment}\n`;
+        md += `\n`;
+      }
+      for (const ai of (c.aiPlayers || [])) {
+        const ch = ai.character || {};
+        md += `### ${ch.name || ai.name} (IA, ${ai.personality || "?"})\n`;
+        md += `- Race: ${ch.race || "?"}, Classe: ${ch.class || "?"}\n`;
+        md += `- PV: ${ch.hp || "?"}/${ch.hpMax || "?"}\n`;
+        if (ch.background) md += `- Historique: ${ch.background}\n`;
+        if (ch.equipment) md += `- Equipement: ${ch.equipment}\n`;
+        md += `\n`;
+      }
+
+      // Arc
+      if (c.arcOutline) {
+        md += `## Arc Narratif\n\n${c.arcOutline}\n\n`;
+      }
+
+      // Turns
+      md += `## Chronique\n\n`;
+      for (const t of (c.turns || [])) {
+        if (t.action) {
+          const prefix = t.isPartyChat ? `**${t.player}** *(au groupe)*` : `**${t.player}**`;
+          const action = t.isPartyChat ? t.action.replace(/^\[PARTY\]\s*/i, "") : t.action;
+          md += `> ${prefix}: ${action}\n\n`;
+        }
+        if (t.narrative) {
+          md += `*Tour ${t.turn}* — ${t.narrative}\n\n`;
+        }
+        if ((t.images || []).filter((u: string) => !u.startsWith("dimg-")).length) {
+          md += `*[Images: ${t.images.filter((u: string) => !u.startsWith("dimg-")).join(", ")}]*\n\n`;
+        }
+        md += `---\n\n`;
+      }
+
+      // Quests
+      if (c.quests?.length) {
+        md += `## Quetes\n\n`;
+        for (const q of c.quests) {
+          md += `- **${q.name}** (${q.status}): ${q.detail || ""}\n`;
+        }
+        md += `\n`;
+      }
+
+      // NPCs
+      if (c.npcs?.length) {
+        md += `## PNJ\n\n`;
+        for (const n of c.npcs) {
+          md += `- **${n.name}**: ${n.description || ""} (${n.attitude || "?"})\n`;
+        }
+        md += `\n`;
+      }
+
+      fs.writeFileSync(logFile, md, "utf8");
+      log.info(`[dungeon-log] Saved session log: ${logFile}`);
+      return json(res, { ok: true, file: logFile, size: md.length });
+    }
+
+    // List existing session logs
+    if (pathname === "/api/dm/session-logs" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const LOG_DIR = path.resolve(process.cwd(), "relay", "dungeon-logs");
+      if (!fs.existsSync(LOG_DIR)) return json(res, { logs: [] });
+      const files = fs.readdirSync(LOG_DIR).filter((f: string) => f.endsWith(".md")).sort().reverse();
+      return json(res, { logs: files.map((f: string) => ({ name: f, path: path.join(LOG_DIR, f) })) });
+    }
+
+    // ── Persistent Character Roster API ──
+
+    if (pathname === "/api/dm/characters" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const owner = searchParams.get("owner") || undefined;
+      const gameSystem = searchParams.get("game_system") || undefined;
+      const chars = savedCharList(owner, gameSystem);
+      return json(res, { ok: true, characters: chars });
+    }
+
+    if (pathname === "/api/dm/characters" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      if (!body.owner || !body.name) return sendJson(res, 400, { ok: false, error: "owner and name required" });
+      const id = savedCharCreate({
+        owner: String(body.owner),
+        game_system: String(body.game_system || "dnd5e"),
+        name: String(body.name),
+        race: body.race ? String(body.race) : undefined,
+        class: body.class ? String(body.class) : undefined,
+        level: body.level ? Number(body.level) : undefined,
+        xp: body.xp ? Number(body.xp) : undefined,
+        hp: body.hp ? Number(body.hp) : undefined,
+        hp_max: body.hp_max ? Number(body.hp_max) : undefined,
+        ac: body.ac ? Number(body.ac) : undefined,
+        stats: body.stats || undefined,
+        inventory: body.inventory || undefined,
+        backstory: body.backstory ? String(body.backstory) : undefined,
+        traits: body.traits ? String(body.traits) : undefined,
+        flaw: body.flaw ? String(body.flaw) : undefined,
+        bond: body.bond ? String(body.bond) : undefined,
+        ideal: body.ideal ? String(body.ideal) : undefined,
+        proficiencies: body.proficiencies ? String(body.proficiencies) : undefined,
+        equipment: body.equipment ? String(body.equipment) : undefined,
+        portrait_url: body.portrait_url ? String(body.portrait_url) : undefined,
+        personality: body.personality ? String(body.personality) : undefined,
+        is_ai: !!body.is_ai,
+        extra: body.extra || undefined,
+      });
+      const saved = savedCharGet(id);
+      return json(res, { ok: true, character: saved });
+    }
+
+    if (pathname.startsWith("/api/dm/characters/") && method === "PUT") {
+      if (!checkAuth(req, res)) return;
+      const id = Number(pathname.split("/").pop());
+      if (!id) return sendJson(res, 400, { ok: false, error: "invalid character id" });
+      const body = await parseBody(req);
+      savedCharUpdate(id, body);
+      const updated = savedCharGet(id);
+      return json(res, { ok: true, character: updated });
+    }
+
+    if (pathname.startsWith("/api/dm/characters/") && method === "DELETE") {
+      if (!checkAuth(req, res)) return;
+      const id = Number(pathname.split("/").pop());
+      if (!id) return sendJson(res, 400, { ok: false, error: "invalid character id" });
+      savedCharDelete(id);
+      return json(res, { ok: true, deleted: id });
     }
 
     if (pathname === "/api/chat/reset" && method === "POST") {
@@ -1120,7 +1560,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
             if (recentNotes.length > 0) {
               memoryHint += "Notes récentes: " + recentNotes.map(n => n.content.slice(0, 100)).join(" | ") + "\n";
             }
-          } catch { /* no memory context available */ }
+          } catch (e) { log.debug(`[dashboard] Failed to load voice memory context: ${e}`); }
 
           response = await withTimeout(
             runOllamaChat({
@@ -1174,7 +1614,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         const detail = String(args?.path || args?.query || args?.command || "").slice(0, 80);
         try {
           res.write(`event: progress\ndata: ${JSON.stringify({ tool: toolName, status: "running", detail })}\n\n`);
-        } catch {}
+        } catch (e) { log.debug(`[dashboard] SSE progress write failed: ${e}`); }
       }, { namespace, priority: "low", description: "SSE progress for dashboard" });
 
       registerHook("tool:after", async (_evt, ctx) => {
@@ -1182,7 +1622,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         const toolName = String(ctx.tool || ctx.name || "");
         try {
           res.write(`event: progress\ndata: ${JSON.stringify({ tool: toolName, status: "done" })}\n\n`);
-        } catch {}
+        } catch (e) { log.debug(`[dashboard] SSE progress write failed: ${e}`); }
       }, { namespace, priority: "low", description: "SSE progress for dashboard" });
 
       try {
@@ -1241,7 +1681,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       try {
         const { updateBrowserState } = await import("../voice/wakeword.js");
         updateBrowserState(!!body.active, body.wake_word as string | undefined);
-      } catch {}
+      } catch (e) { log.debug(`[dashboard] Failed to update wakeword state: ${e}`); }
       return json(res, { ok: true });
     }
 
@@ -1361,15 +1801,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     if (pathname === "/api/gallery" && method === "GET") {
-      const uploadsDir = path.resolve(config.uploadsDir);
       try {
-        const files = fs.readdirSync(uploadsDir)
-          .filter(f => /\.(png|jpg|jpeg|gif|webp|svg|bmp)$/i.test(f))
-          .map(f => {
-            const stat = fs.statSync(path.join(uploadsDir, f));
-            return { name: f, url: `/uploads/${f}`, size: stat.size, mtime: stat.mtimeMs };
-          })
-          .sort((a, b) => b.mtime - a.mtime);
+        const { listUploads } = await import("../utils/uploads.js");
+        const category = url.searchParams.get("category") as any;
+        const files = listUploads(category || undefined);
         return sendJson(res, 200, { ok: true, files });
       } catch {
         return sendJson(res, 200, { ok: true, files: [] });

@@ -98,19 +98,21 @@ export function handleTwilioStream(twilioWs: WebSocket): void {
 
         // Connect to Deepgram
         deepgramWs = connectDeepgram({
-          onTranscript: (text, isFinal) => {
-            log.debug(`[pipeline] Transcript (final=${isFinal}): ${text}`);
-            if (isFinal) {
-              // speech_final — accumulate and process
-              utteranceBuffer += (utteranceBuffer ? " " : "") + text;
+          onTranscript: (text, isFinal, speechFinal) => {
+            log.debug(`[pipeline] Transcript (is_final=${isFinal}, speech_final=${speechFinal}): ${text}`);
+            if (!isFinal) {
+              // Interim result — ignore (will be replaced by final)
+              return;
+            }
+            // Final segment — accumulate
+            utteranceBuffer += (utteranceBuffer ? " " : "") + text;
+            if (speechFinal) {
+              // End of utterance — process accumulated text
               const fullText = utteranceBuffer.trim();
               utteranceBuffer = "";
               if (fullText) {
                 processUtterance(fullText);
               }
-            } else {
-              // Interim — accumulate
-              utteranceBuffer += (utteranceBuffer ? " " : "") + text;
             }
           },
           onError: (err) => {

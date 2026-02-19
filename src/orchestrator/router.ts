@@ -9,19 +9,24 @@ import { getSkill, validateArgs, getSkillSchema } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
-import { runOllama, runOllamaChat, isOllamaAvailable } from "../llm/ollamaClient.js";
+import { runOllama, runOllamaChat, isOllamaAvailable, runOllamaToolRouter } from "../llm/ollamaClient.js";
 import { runGroq, runGroqChat, isGroqAvailable } from "../llm/groqClient.js";
 import { addTurn, logError, getTurns, clearSession } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { extractAndStoreMemories } from "../memory/semantic.js";
+import { detectAndLearnFromCorrection } from "../memory/correctionDetector.js";
+import { evaluateResponseQuality } from "../memory/qualityGate.js";
 import { selectModel, getModelId, modelLabel, type ModelTier } from "../llm/modelSelector.js";
 import { isClaudeRateLimited, detectAndSetRateLimit, clearRateLimit, rateLimitRemainingMinutes, shouldProbeRateLimit, markProbeAttempt } from "../llm/rateLimitState.js";
 import { isProviderCoolingDown, markProviderCooldown, clearProviderCooldown, providerCooldownSeconds } from "../llm/providerCooldown.js";
+import { classifyError, recordFailure, clearProviderFailures, isProviderHealthy } from "../llm/failover.js";
 import { emitHook } from "../hooks/hooks.js";
-import { isInterrupted } from "../bot/chatLock.js";
+import { isInterrupted, enqueueAdminAsync } from "../bot/chatLock.js";
+import { tryParallelDispatch } from "../llm/parallel.js";
 import type { DraftController } from "../bot/draftMessage.js";
+import { detectMood, getToneInstructions, logMood, setCurrentMoodContext } from "../personality/mood.js";
 
 /**
  * Check if a chatId belongs to an automated/internal session (scheduler, agents, or cron jobs).
@@ -31,23 +36,32 @@ export function isInternalChatId(chatId: number): boolean {
   return chatId === 1 || (chatId >= 100 && chatId <= 107) || (chatId >= 200 && chatId <= 249);
 }
 
-const GROQ_SYSTEM_PROMPT = [
-  "Tu es Kingston, un assistant IA personnel pour Nicolas.",
-  "Tu es concis, amical et tu réponds en français par défaut.",
-  "Tu ne peux PAS exécuter d'outils — réponds uniquement avec du texte.",
-  "Si on te demande quelque chose qui nécessite un outil, dis que tu vas transmettre la demande.",
-].join(" ");
+function buildGroqSystemPrompt(): string {
+  const now = new Date();
+  const date = now.toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const time = now.toLocaleTimeString("fr-CA", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false });
+  return [
+    "Tu es Kingston, un assistant IA personnel pour Nicolas.",
+    `Date: ${date}. Heure: ${time} (heure de l'Est, Gatineau).`,
+    "Tu es concis, amical et tu réponds en français par défaut.",
+    "Tu ne peux PAS exécuter d'outils — réponds uniquement avec du texte.",
+    "Si on te demande quelque chose qui nécessite un outil, dis que tu vas transmettre la demande.",
+  ].join(" ");
+}
 
 /** Try Groq as text-only fallback. Returns null on failure. */
 async function tryGroqFallback(chatId: number, userMessage: string, label: string): Promise<string | null> {
-  if (!isGroqAvailable()) return null;
+  if (!isGroqAvailable() || !isProviderHealthy("groq")) return null;
   try {
     log.info(`[router] ⚡ Groq fallback (${label}): ${userMessage.slice(0, 100)}...`);
-    const result = await runGroq(GROQ_SYSTEM_PROMPT, userMessage);
+    const result = await runGroq(buildGroqSystemPrompt(), userMessage);
     log.info(`[router] Groq fallback success (${result.length} chars)`);
+    clearProviderFailures("groq");
     return result;
   } catch (err) {
-    log.warn(`[router] Groq fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+    const errClass = classifyError(err);
+    recordFailure("groq", errClass);
+    log.warn(`[router] Groq fallback failed [${errClass}]: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -69,6 +83,12 @@ function backgroundExtract(chatId: number, userMessage: string, assistantRespons
   extractAndStoreMemories(chatId, `User: ${userMessage}\nAssistant: ${assistantResponse}`)
     .then(count => { if (count > 0) log.debug(`[memory] Extracted ${count} new memories`); })
     .catch(err => log.warn(`[memory] Extraction failed (possible quota issue): ${err instanceof Error ? err.message : String(err)}`));
+  // Detect corrections and auto-create behavioral rules (fire-and-forget)
+  detectAndLearnFromCorrection(userMessage, assistantResponse)
+    .catch(err => log.debug(`[correction] Detection failed: ${err instanceof Error ? err.message : String(err)}`));
+  // Evaluate response quality (fire-and-forget)
+  evaluateResponseQuality(chatId, userMessage, assistantResponse)
+    .catch(err => log.debug(`[quality] Evaluation failed: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 export let progressCallback: ((chatId: number, message: string) => Promise<void>) | null = null;
@@ -91,14 +111,18 @@ async function safeProgress(chatId: number, message: string): Promise<void> {
 function shouldUseGemini(chatId: number): boolean {
   // Must be enabled and have API key
   if (!config.geminiOrchestratorEnabled || !config.geminiApiKey) return false;
-  // Agents (chatId 100-106) and cron jobs (200-249) always use Ollama-first path to preserve Gemini rate limit for user
+  // Agents (chatId 100-106) and cron jobs (200-249) always use Ollama-first path
   if (isInternalChatId(chatId)) return false;
+  // Real Telegram users (chatId > 1000) go directly to Claude Sonnet — they deserve the best model,
+  // not Gemini Flash. Gemini is kept as fallback only (via fallbackWithoutClaude).
+  if (chatId > 1000) return false;
+  // Dashboard (chatId 2), Emile (chatId 3) can still use Gemini
   return true;
 }
 
 /**
  * Fallback chain when Claude CLI is unavailable (rate-limited or down).
- * Tries: Gemini Flash (full tool chain) → Ollama-chat (tool chain) → Groq (text-only) → error message.
+ * Tries: Sonnet (if Opus was rate-limited) → Gemini Flash → Ollama-chat → Groq → error.
  * Ensures the bot NEVER goes silent.
  */
 async function fallbackWithoutClaude(
@@ -106,10 +130,71 @@ async function fallbackWithoutClaude(
   userMessage: string,
   userIsAdmin: boolean,
   userId: number,
-  remainingMinutes: number
+  remainingMinutes: number,
+  rateLimitedModel?: string
 ): Promise<string> {
+  // --- Try Sonnet if it was Opus that got rate-limited (separate quotas on Max plan) ---
+  if (rateLimitedModel && rateLimitedModel.includes("opus")) {
+    try {
+      const sonnetModel = getModelId("sonnet");
+      log.info(`[router] 🎵 Trying Sonnet fallback (Opus rate-limited): ${userMessage.slice(0, 100)}...`);
+      await safeProgress(chatId, `🎵 Mode Sonnet (Opus indisponible ~${remainingMinutes}min)`);
+      const sonnetResult = await runClaude(chatId, userMessage, userIsAdmin, sonnetModel);
+      if (sonnetResult.type === "message") {
+        if (sonnetResult.text && detectAndSetRateLimit(sonnetResult.text)) {
+          log.warn(`[router] Sonnet also rate-limited — continuing to Gemini`);
+        } else {
+          const text = sonnetResult.text?.trim() || "";
+          if (text && !text.includes("(Claude returned an empty response)")) {
+            clearRateLimit();
+            addTurn(chatId, { role: "assistant", content: text });
+            backgroundExtract(chatId, userMessage, text);
+            log.info(`[router] Sonnet fallback success (${text.length} chars)`);
+            return text;
+          }
+        }
+      } else if (sonnetResult.type === "tool_call") {
+        // Sonnet returned a tool call — process it through the normal tool chain
+        // This is the best case: we get full tool support from Sonnet when Opus is down
+        clearRateLimit();
+        log.info(`[router] Sonnet returned tool_call: ${sonnetResult.tool} — processing tool chain`);
+        // Store user turn and process tool chain inline
+        let result = sonnetResult;
+        const sonnetFollowUp = getModelId("sonnet");
+        for (let step = 0; step < config.maxToolChain; step++) {
+          if (result.type !== "tool_call") break;
+          const skill = getSkill(result.tool || "");
+          if (!skill || !isToolPermitted(result.tool || "", userId)) {
+            const msg = `Tool "${result.tool}" not available.`;
+            addTurn(chatId, { role: "assistant", content: msg });
+            return msg;
+          }
+          try {
+            const toolResult = await skill.execute((result.args || {}) as Record<string, unknown>);
+            const followUp = `[Tool "${result.tool}" résultat]:\n${toolResult}\n\nÉvalue ce résultat et réponds à Nicolas.`;
+            addTurn(chatId, { role: "assistant", content: `[called ${result.tool}]` });
+            addTurn(chatId, { role: "user", content: followUp });
+            result = await runClaude(chatId, followUp, userIsAdmin, sonnetFollowUp);
+          } catch (err) {
+            const errMsg = `Tool "${result.tool}" failed: ${err instanceof Error ? err.message : String(err)}`;
+            addTurn(chatId, { role: "assistant", content: errMsg });
+            return errMsg;
+          }
+        }
+        if (result.type === "message") {
+          const text = result.text?.trim() || "Tâche terminée.";
+          addTurn(chatId, { role: "assistant", content: text });
+          backgroundExtract(chatId, userMessage, text);
+          return text;
+        }
+      }
+    } catch (err) {
+      log.warn(`[router] Sonnet fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // --- Try Gemini Flash (supports full tool chain, $0) ---
-  if (config.geminiApiKey && !isProviderCoolingDown("gemini")) {
+  if (config.geminiApiKey && !isProviderCoolingDown("gemini") && isProviderHealthy("gemini")) {
     try {
       log.info(`[router] 🔄 Gemini fallback (Claude down ${remainingMinutes}min): ${userMessage.slice(0, 100)}...`);
       await safeProgress(chatId, `⚡ Mode Gemini (Claude indisponible ~${remainingMinutes}min)`);
@@ -123,19 +208,22 @@ async function fallbackWithoutClaude(
       addTurn(chatId, { role: "assistant", content: geminiResult });
       backgroundExtract(chatId, userMessage, geminiResult);
       clearProviderCooldown("gemini");
+      clearProviderFailures("gemini");
       log.info(`[router] Gemini fallback success (${geminiResult.length} chars)`);
       return geminiResult;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      const errClass = classifyError(err);
+      recordFailure("gemini", errClass);
       if (err instanceof GeminiRateLimitError) markProviderCooldown("gemini", "429 rate limit");
-      log.warn(`[router] Gemini fallback also failed: ${errMsg}`);
+      log.warn(`[router] Gemini fallback also failed [${errClass}]: ${errMsg}`);
     }
-  } else if (isProviderCoolingDown("gemini")) {
-    log.debug(`[router] Skipping Gemini (cooldown ${providerCooldownSeconds("gemini")}s remaining)`);
+  } else if (isProviderCoolingDown("gemini") || !isProviderHealthy("gemini")) {
+    log.debug(`[router] Skipping Gemini (cooldown ${providerCooldownSeconds("gemini")}s remaining or failover cooldown)`);
   }
 
   // --- Try Ollama with tools (local, full tool chain, always available) ---
-  if (config.ollamaEnabled && !isProviderCoolingDown("ollama")) {
+  if (config.ollamaEnabled && !isProviderCoolingDown("ollama") && isProviderHealthy("ollama")) {
     try {
       const ollamaUp = await isOllamaAvailable();
       if (ollamaUp) {
@@ -151,21 +239,25 @@ async function fallbackWithoutClaude(
         addTurn(chatId, { role: "assistant", content: ollamaResult });
         backgroundExtract(chatId, userMessage, ollamaResult);
         clearProviderCooldown("ollama");
+        clearProviderFailures("ollama");
         log.info(`[router] Ollama-chat fallback success (${ollamaResult.length} chars)`);
         return ollamaResult;
       } else {
         markProviderCooldown("ollama", "not reachable");
+        recordFailure("ollama", "timeout");
       }
     } catch (err) {
+      const errClass = classifyError(err);
+      recordFailure("ollama", errClass);
       markProviderCooldown("ollama", err instanceof Error ? err.message : "unknown error");
-      log.warn(`[router] Ollama-chat fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+      log.warn(`[router] Ollama-chat fallback failed [${errClass}]: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } else if (isProviderCoolingDown("ollama")) {
-    log.debug(`[router] Skipping Ollama (cooldown ${providerCooldownSeconds("ollama")}s remaining)`);
+  } else if (isProviderCoolingDown("ollama") || !isProviderHealthy("ollama")) {
+    log.debug(`[router] Skipping Ollama (cooldown ${providerCooldownSeconds("ollama")}s remaining or failover cooldown)`);
   }
 
   // --- Try Groq with tools (llama-3.3-70b, $0) ---
-  if (isGroqAvailable() && !isProviderCoolingDown("groq")) {
+  if (isGroqAvailable() && !isProviderCoolingDown("groq") && isProviderHealthy("groq")) {
     try {
       log.info(`[router] ⚡ Groq-chat fallback (Claude+Gemini+Ollama down): ${userMessage.slice(0, 100)}...`);
       await safeProgress(chatId, `⚡ Mode Groq avec outils (services principaux indisponibles ~${remainingMinutes}min)`);
@@ -179,13 +271,16 @@ async function fallbackWithoutClaude(
       addTurn(chatId, { role: "assistant", content: groqResult });
       backgroundExtract(chatId, userMessage, groqResult);
       clearProviderCooldown("groq");
+      clearProviderFailures("groq");
       return groqResult;
     } catch (err) {
+      const errClass = classifyError(err);
+      recordFailure("groq", errClass);
       markProviderCooldown("groq", err instanceof Error ? err.message : "unknown error");
-      log.warn(`[router] Groq-chat fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+      log.warn(`[router] Groq-chat fallback failed [${errClass}]: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } else if (isProviderCoolingDown("groq")) {
-    log.debug(`[router] Skipping Groq (cooldown ${providerCooldownSeconds("groq")}s remaining)`);
+  } else if (isProviderCoolingDown("groq") || !isProviderHealthy("groq")) {
+    log.debug(`[router] Skipping Groq (cooldown ${providerCooldownSeconds("groq")}s remaining or failover cooldown)`);
   }
 
   // --- All models down — return a useful error instead of silence ---
@@ -202,6 +297,42 @@ async function fallbackWithoutClaude(
  * 3. On Claude rate limit, fall back to Gemini → Ollama → error
  * 4. Store turns and return the final text
  */
+/**
+ * Detect if Kingston promised a future action in his response that wasn't executed.
+ * Returns the promised action text, or null if no deferred action found.
+ */
+function detectDeferredAction(response: string): string | null {
+  if (!response || response.length < 20) return null;
+
+  // Don't trigger on self-followups (prevent infinite loops)
+  if (response.includes("[SELF-FOLLOWUP]")) return null;
+
+  // Check last 200 chars of response for action promises
+  const tail = response.slice(-200).toLowerCase();
+
+  const patterns = [
+    /(?:je vais|i'll|i will|let me|laisse-moi|attends?|un moment|donne-moi|give me)\s+(?:créer|create|générer|generate|faire|make|chercher|search|préparer|prepare|envoyer|send|poster|post|scanner|scan|analyser|analyze)/i,
+    /(?:give me|donne-moi|attends?)\s+\d+\s*(?:second|minute|sec|min)/i,
+    /(?:je m'en occupe|j'y travaille|en cours|working on it|on it)\s*[.!]?\s*$/i,
+    /(?:je vais te|i'll send you|je t'envoie ça)\s/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = response.slice(-300).match(pattern);
+    if (match) {
+      // Extract the promise — take from the match to end of response
+      const promiseStart = response.lastIndexOf(match[0]);
+      const promise = response.slice(promiseStart).trim();
+      // Only trigger if the promise is near the END of the response (last 300 chars)
+      if (response.length - promiseStart < 300) {
+        return promise;
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function handleMessage(
   chatId: number,
   userMessage: string,
@@ -211,6 +342,25 @@ export async function handleMessage(
   const response = await handleMessageInner(chatId, userMessage, userId, contextHint);
   // Fire-and-forget compaction AFTER response — never blocks the user
   backgroundCompact(chatId, userId);
+
+  // Self-reply: if Kingston promised an action, auto-trigger a follow-up
+  if (!isInternalChatId(chatId) && !userMessage.includes("[SELF-FOLLOWUP]")) {
+    const deferred = detectDeferredAction(response);
+    if (deferred) {
+      log.info(`[router] Deferred action detected: "${deferred.slice(0, 80)}..." — scheduling self-followup`);
+      setTimeout(() => {
+        enqueueAdminAsync(() =>
+          handleMessage(
+            chatId,
+            `[SELF-FOLLOWUP] Tu viens de dire: "${deferred.slice(0, 200)}"\n\nEXÉCUTE cette action MAINTENANT. Utilise les tools nécessaires. Ne répète pas ta promesse — FAIS-LE et envoie le résultat directement.`,
+            userId,
+            "scheduler"
+          )
+        ).catch(err => log.warn(`[router] Self-followup failed: ${err}`));
+      }, 3000); // 3 second delay
+    }
+  }
+
   return response;
 }
 
@@ -222,8 +372,34 @@ async function handleMessageInner(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  // Mood detection for user messages (not agents/scheduler) — $0 cost heuristics
+  if (!isInternalChatId(chatId) && chatId > 10) {
+    const mood = detectMood(userMessage);
+    logMood(mood, chatId);
+    setCurrentMoodContext(getToneInstructions(mood));
+  } else {
+    setCurrentMoodContext("");
+  }
+
   // Store user turn
   addTurn(chatId, { role: "user", content: userMessage });
+
+  // --- Parallel dispatch (multi-task detection) ---
+  if (!isInternalChatId(chatId) && config.groqApiKey) {
+    try {
+      const parallel = await tryParallelDispatch(
+        chatId, userMessage, userId, userIsAdmin,
+        async (cid, msg) => safeProgress(cid, msg),
+      );
+      if (parallel.attempted && parallel.merged) {
+        addTurn(chatId, { role: "assistant", content: parallel.merged });
+        backgroundExtract(chatId, userMessage, parallel.merged);
+        return parallel.merged;
+      }
+    } catch (err) {
+      log.warn(`[router] Parallel dispatch failed, falling through: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // --- Gemini path (primary) ---
   if (shouldUseGemini(chatId)) {
@@ -244,6 +420,8 @@ async function handleMessageInner(
       const errMsg = err instanceof Error ? err.message : String(err);
       log.warn(`[router] Gemini failed, falling back to Claude CLI: ${errMsg}`);
       logError(err instanceof Error ? err : errMsg, "router:gemini_fallback");
+      // Force fresh session so Claude gets full system prompt + tool catalog
+      clearSession(chatId);
     }
   }
 
@@ -256,7 +434,7 @@ async function handleMessageInner(
   if (tier === "ollama") {
     // Agents (chatId 100-106) and scheduler tasks that need tools get full tool chain
     const isAgent = isInternalChatId(chatId);
-    const needsTools = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:") || userMessage.startsWith("[CRON:");
+    const needsTools = userMessage.startsWith("[SCHEDULER:") || userMessage.startsWith("[AGENT:") || userMessage.startsWith("[CRON:") || userMessage.startsWith("[TRAINING:");
 
     // Force Gemini for executor code request cycles (better code quality than Ollama)
     if (chatId === 103 && userMessage.includes("[CODE_REQUEST]") && config.geminiApiKey && !isProviderCoolingDown("gemini")) {
@@ -272,6 +450,19 @@ async function handleMessageInner(
       }
     }
 
+    // Force Gemini for training tasks (chatId 250) — Ollama is too weak at tool calling
+    if (chatId === 250 && userMessage.startsWith("[TRAINING:") && config.geminiApiKey && !isProviderCoolingDown("gemini")) {
+      try {
+        log.info(`[router] 🏋️ Gemini force for training: ${userMessage.slice(0, 100)}...`);
+        const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId, onToolProgress: async (cid, msg) => safeProgress(cid, msg) });
+        addTurn(chatId, { role: "assistant", content: geminiResult });
+        return geminiResult;
+      } catch (err) {
+        log.warn(`[router] Gemini force for training failed, falling back to Ollama-chat: ${err instanceof Error ? err.message : String(err)}`);
+        // Fall through to Ollama-chat (still has tools, just weaker)
+      }
+    }
+
     if (isAgent || needsTools) {
       try {
         log.info(`[router] 🦙 Ollama-chat for ${isAgent ? `agent ${chatId}` : "scheduler"}: ${userMessage.slice(0, 100)}...`);
@@ -284,19 +475,26 @@ async function handleMessageInner(
         });
         addTurn(chatId, { role: "assistant", content: result });
         backgroundExtract(chatId, userMessage, result);
+        clearProviderFailures("ollama");
         return result;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        log.warn(`[router] Ollama-chat failed for ${isAgent ? `agent ${chatId}` : "scheduler"}, falling back to Gemini: ${errMsg}`);
+        const errClass = classifyError(err);
+        recordFailure("ollama", errClass);
+        log.warn(`[router] Ollama-chat failed [${errClass}] for ${isAgent ? `agent ${chatId}` : "scheduler"}, falling back to Gemini: ${errMsg}`);
         // Fallback to Gemini (free) instead of Haiku (burns Claude quota)
         try {
           const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId });
           if (geminiResult) {
             addTurn(chatId, { role: "assistant", content: geminiResult });
             backgroundExtract(chatId, userMessage, geminiResult);
+            clearProviderFailures("gemini");
             return geminiResult;
           }
-        } catch { /* Gemini failed too */ }
+        } catch (gemErr) {
+          const gemClass = classifyError(gemErr);
+          recordFailure("gemini", gemClass);
+        }
         // Last resort: Haiku
         const haikuModel = getModelId("haiku");
         const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
@@ -317,10 +515,13 @@ async function handleMessageInner(
       const ollamaResult = await runOllama(chatId, userMessage);
       addTurn(chatId, { role: "assistant", content: ollamaResult.text });
       backgroundExtract(chatId, userMessage, ollamaResult.text);
+      clearProviderFailures("ollama");
       return ollamaResult.text;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log.warn(`[router] Ollama failed, trying Groq: ${errMsg}`);
+      const errClass = classifyError(err);
+      recordFailure("ollama", errClass);
+      log.warn(`[router] Ollama failed [${errClass}], trying Groq: ${errMsg}`);
       // Try Groq before Haiku ($0, text-only)
       const groqResult = await tryGroqFallback(chatId, userMessage, "ollama-fail");
       if (groqResult) {
@@ -356,10 +557,13 @@ async function handleMessageInner(
       });
       addTurn(chatId, { role: "assistant", content: groqResult });
       backgroundExtract(chatId, userMessage, groqResult);
+      clearProviderFailures("groq");
       return groqResult;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log.warn(`[router] Groq-chat failed: ${errMsg} — falling back to Ollama → Claude`);
+      const errClass = classifyError(err);
+      recordFailure("groq", errClass);
+      log.warn(`[router] Groq-chat failed [${errClass}]: ${errMsg} — falling back to Ollama → Claude`);
       // Try Ollama-chat as second option
       if (config.ollamaEnabled) {
         try {
@@ -383,7 +587,7 @@ async function handleMessageInner(
     } else {
       const remaining = rateLimitRemainingMinutes();
       log.info(`[router] Claude rate-limited (${remaining}min left) — bypassing to fallback chain`);
-      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, remaining);
+      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, remaining, model);
     }
   }
 
@@ -397,12 +601,15 @@ async function handleMessageInner(
     // --- Rate limit detection: catch it before passing to user ---
     if (result.text && detectAndSetRateLimit(result.text)) {
       log.warn(`[router] Claude rate-limited — falling back for this message`);
+      recordFailure("claude", "rate_limit");
       const remaining = rateLimitRemainingMinutes();
-      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, remaining);
+      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, remaining, claudeModel);
     }
 
     const isEmpty = !result.text || !result.text.trim() || result.text.includes("(Claude returned an empty response)");
     if (isEmpty) {
+      // Record empty response in failover tracker
+      recordFailure("claude", "empty_response");
       // Auto-recovery: clear corrupt session and retry with fresh context
       log.warn(`[router] Empty CLI response — clearing session ${chatId} and retrying`);
       clearSession(chatId);
@@ -412,7 +619,7 @@ async function handleMessageInner(
       // Check retry for rate limit too
       if (result.type === "message" && result.text && detectAndSetRateLimit(result.text)) {
         log.warn(`[router] Claude rate-limited on retry — falling back`);
-        return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, rateLimitRemainingMinutes());
+        return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, rateLimitRemainingMinutes(), model);
       }
 
       if (result.type === "message") {
@@ -425,19 +632,31 @@ async function handleMessageInner(
       }
       // Retry returned a tool_call — continue to tool chain below
     } else {
-      // Successful Claude response — clear any stale rate limit
+      // Successful Claude response — clear any stale rate limit + failover state
       clearRateLimit();
+      clearProviderFailures("claude");
       addTurn(chatId, { role: "assistant", content: result.text });
       backgroundExtract(chatId, userMessage, result.text);
       return result.text;
     }
   } else {
-    // Tool call succeeded — Claude is working, clear rate limit
+    // Tool call succeeded — Claude is working, clear rate limit + failover state
     clearRateLimit();
+    clearProviderFailures("claude");
   }
 
-  // Tool chaining loop — use sonnet for follow-ups (keeps intelligence + personality)
-  const followUpModel = getModelId("sonnet");
+  // Tool chaining loop — HYBRID MODE: Ollama ($0 local) handles tool routing,
+  // Opus handles ONLY the final conversational response.
+  // Saves ~90% of tool-chain tokens compared to using Sonnet for follow-ups.
+  // Fallback: if Ollama is unavailable, falls back to Sonnet.
+  const followUpTier: ModelTier = "sonnet";
+  const followUpModel = getModelId(followUpTier);
+  const useOllamaRouter = config.ollamaEnabled;
+  log.info(`[router] Tool chain mode: ${useOllamaRouter ? "🦙 Ollama-hybrid ($0)" : `${modelLabel(followUpTier)} (${followUpModel})`}`);
+
+  // Track tool execution history for Ollama router
+  const toolHistory: Array<{ tool: string; result: string }> = [];
+
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -504,6 +723,7 @@ async function handleMessageInner(
     if (isInternalChatId(chatId) && tool.startsWith("browser.") && !AGENT_BROWSER_ALLOWED.includes(tool)) {
       const msg = `Tool "${tool}" is blocked for agents — use browser.snapshot or web.search instead.`;
       log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
+      toolHistory.push({ tool, result: `ERROR: ${msg}` });
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
       addTurn(chatId, { role: "assistant", content: `[blocked ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -525,13 +745,24 @@ async function handleMessageInner(
       return msg;
     }
 
-    // Look up skill — feed error back to Claude so it can retry
+    // Look up skill — feed error back so it can retry
     const skill = getSkill(tool);
     if (!skill) {
       const errorMsg = `Error: Unknown tool "${tool}". Check the tool catalog and try again.`;
       log.warn(`[router] ${errorMsg}`);
       logError(errorMsg, "router:unknown_tool", tool);
       await safeProgress(chatId, `❌ Unknown tool: ${tool}`);
+      toolHistory.push({ tool, result: errorMsg });
+      // For unknown tools, ask Ollama or Sonnet for next step
+      if (useOllamaRouter) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, toolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call", tool: ollamaNext.tool, args: ollamaNext.args || {}, text: "" };
+          continue;
+        }
+        // Ollama returned summary — feed to Opus for final polish
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -563,13 +794,22 @@ async function handleMessageInner(
       }
     }
 
-    // Validate args — feed error back to Claude so it can fix & retry
+    // Validate args — feed error back so it can fix & retry
     const validationError = validateArgs(safeArgs, skill.argsSchema);
     if (validationError) {
       const errorMsg = `Tool "${tool}" argument error: ${validationError}. Fix the arguments and try again.`;
       log.warn(`[router] ${errorMsg}`);
       logError(errorMsg, "router:validation", tool);
       await safeProgress(chatId, `❌ Arg error on ${tool}`);
+      toolHistory.push({ tool, result: `ERROR: ${errorMsg}` });
+      if (useOllamaRouter) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, toolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call", tool: ollamaNext.tool, args: ollamaNext.args || {}, text: "" };
+          continue;
+        }
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -589,6 +829,15 @@ async function handleMessageInner(
         const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
         if (placeholderRe.test(textArg)) {
           log.warn(`[router] Blocked ${tool} — placeholder detected: "${textArg.slice(0, 120)}"`);
+          toolHistory.push({ tool, result: `ERROR: Placeholder detected — blocked.` });
+          if (useOllamaRouter) {
+            const ollamaNext = await runOllamaToolRouter(chatId, userMessage, toolHistory, userIsAdmin);
+            if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+              result = { type: "tool_call", tool: ollamaNext.tool, args: ollamaNext.args || {}, text: "" };
+              continue;
+            }
+            break;
+          }
           const followUp = `[Tool "${tool}" error]:\nError: Message contains placeholder brackets like [RÉSUMÉ]. Get REAL data from tools first, then compose the message.`;
           addTurn(chatId, { role: "assistant", content: `[blocked ${tool} — placeholder]` });
           addTurn(chatId, { role: "user", content: followUp });
@@ -602,13 +851,19 @@ async function handleMessageInner(
       }
     }
 
-    // Execute skill — feed errors back to Claude so it can adapt
+    // Execute skill — feed errors back so it can adapt
     log.info(`Executing tool (step ${step + 1}/${config.maxToolChain}): ${tool}`);
     let toolResult: string;
     const toolStart = Date.now();
+    const isSlowTool = tool.startsWith("browser.") || tool.startsWith("image.") || tool.startsWith("video.") || tool === "shell.exec";
+    const batchToolTimeout = isSlowTool ? 180_000 : 120_000;
     emitHook("tool:before", { chatId, tool, args: safeArgs }).catch(() => {});
     try {
-      toolResult = await skill.execute(safeArgs);
+      const execPromise = skill.execute(safeArgs);
+      const execTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Tool "${tool}" execution timed out (${batchToolTimeout / 1000}s)`)), batchToolTimeout)
+      );
+      toolResult = await Promise.race([execPromise, execTimeout]);
       emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: true }).catch(() => {});
     } catch (err) {
       emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: false, error: String(err) }).catch(() => {});
@@ -616,6 +871,15 @@ async function handleMessageInner(
       log.error(errorMsg);
       logError(err instanceof Error ? err : errorMsg, `router:exec:${tool}`, tool);
       await safeProgress(chatId, `❌ ${tool} failed`);
+      toolHistory.push({ tool, result: `ERROR: ${errorMsg}` });
+      if (useOllamaRouter) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, toolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call", tool: ollamaNext.tool, args: ollamaNext.args || {}, text: "" };
+          continue;
+        }
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -628,17 +892,36 @@ async function handleMessageInner(
     }
 
     log.debug(`Tool result (${tool}):`, toolResult.slice(0, 200));
+    toolHistory.push({ tool, result: toolResult });
 
     // Heartbeat: send intermediate progress to Telegram (skip dashboard/agent chatIds)
     const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
     await safeProgress(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
 
-    // Feed tool result back to Claude for next step or final answer
-    // Include skill schema hint so Claude knows the exact params for this tool
+    // --- HYBRID ROUTING: use Ollama ($0) for tool routing decisions ---
+    if (useOllamaRouter) {
+      log.info(`[router] 🦙 Asking Ollama for next step (step ${step + 1})...`);
+      const ollamaNext = await runOllamaToolRouter(chatId, userMessage, toolHistory, userIsAdmin);
+
+      if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+        // Ollama wants another tool — continue the loop
+        log.info(`[router] 🦙 Ollama requests next tool: ${ollamaNext.tool}`);
+        addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+        result = { type: "tool_call", tool: ollamaNext.tool, args: ollamaNext.args || {}, text: "" };
+        continue;
+      }
+
+      // Ollama returned a summary or failed — break to send to Opus for final response
+      log.info(`[router] 🦙 Ollama says task is complete — sending to Opus for final response`);
+      break;
+    }
+
+    // --- FALLBACK: use Sonnet for tool follow-ups (original behavior) ---
     const schemaHint = getSkillSchema(tool);
+    const reflectionSuffix = `\n\nÉvalue ce résultat et AGIS:\n→ Tâche complète? Envoie un message FINAL résumant ce qui a été fait à Nicolas. OBLIGATOIRE.\n→ Prochaine étape nécessaire? Appelle le tool suivant IMMÉDIATEMENT.\n→ Erreur? Diagnostique et essaie une alternative.\nRAPPEL: Tu DOIS terminer par un message texte lisible pour Nicolas. JAMAIS terminer sur un tool_call sans réponse.`;
     const followUp = schemaHint
-      ? `[Tool "${tool}" — schema: ${schemaHint}]\n${toolResult}`
-      : `[Tool "${tool}" returned]:\n${toolResult}`;
+      ? `[Tool "${tool}" — schema: ${schemaHint}]\n${toolResult}${reflectionSuffix}`
+      : `[Tool "${tool}" résultat]:\n${toolResult}${reflectionSuffix}`;
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
@@ -657,13 +940,34 @@ async function handleMessageInner(
     log.info(`[router] Continuing chain — next tool: ${result.type === "tool_call" ? result.tool : "unknown"}`);
   }
 
-  // If we exhausted the chain limit and still got a tool_call
+  // --- HYBRID FINAL RESPONSE: Opus crafts the conversational reply from tool results ---
+  if (useOllamaRouter && toolHistory.length > 0) {
+    log.info(`[router] 🎯 Opus final response — summarizing ${toolHistory.length} tool results`);
+    const toolSummary = toolHistory.map(t => `• ${t.tool}: ${t.result.slice(0, 500)}`).join("\n");
+    const finalPrompt = `[RÉSULTATS DES OUTILS — résume à Nicolas de façon concise et naturelle]\nMessage original: "${userMessage}"\n\n${toolSummary}\n\nRédige une réponse finale CONCISE pour Nicolas. Pas de tool_call. Texte seulement.`;
+    addTurn(chatId, { role: "user", content: finalPrompt });
+    const finalResult = await runClaude(chatId, finalPrompt, userIsAdmin, claudeModel);
+    const finalText = finalResult.type === "message" && finalResult.text?.trim()
+      ? finalResult.text
+      : `J'ai exécuté ${toolHistory.length} outils. Résultats:\n${toolHistory.map(t => `• ${t.tool}: OK`).join("\n")}`;
+    addTurn(chatId, { role: "assistant", content: finalText });
+    backgroundExtract(chatId, userMessage, finalText);
+    return finalText;
+  }
+
+  // If we exhausted the chain limit and still got a tool_call, force a final summary
   if (result.type === "tool_call") {
-    const msg = `Reached tool chain limit (${config.maxToolChain} steps). Last pending tool: ${result.tool}.`;
-    logError(msg, "router:chain_limit");
-    await safeProgress(chatId, `⚠️ Chain limit reached (${config.maxToolChain} steps)`);
-    addTurn(chatId, { role: "assistant", content: msg });
-    return msg;
+    log.warn(`[router] Chain limit reached (${config.maxToolChain} steps) — forcing final summary`);
+    await safeProgress(chatId, `⚠️ Chain limit reached — requesting summary`);
+    const summaryPrompt = `[SYSTEM] La chaîne de tools a atteint la limite de ${config.maxToolChain} étapes. Résume à Nicolas ce que tu as accompli jusqu'ici et ce qui reste à faire. NE fais PAS d'autre tool_call — réponds en texte seulement.`;
+    addTurn(chatId, { role: "user", content: summaryPrompt });
+    const summaryResult = await runClaude(chatId, summaryPrompt, userIsAdmin, followUpModel);
+    const summaryText = summaryResult.type === "message" && summaryResult.text?.trim()
+      ? summaryResult.text
+      : `J'ai exécuté ${config.maxToolChain} étapes. Le dernier outil en attente était: ${result.tool}. Réessaie pour continuer.`;
+    addTurn(chatId, { role: "assistant", content: summaryText });
+    backgroundExtract(chatId, userMessage, summaryText);
+    return summaryText;
   }
 
   // Shouldn't reach here, but safety fallback
@@ -697,7 +1001,35 @@ async function handleMessageStreamingInner(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  // Mood detection for streaming path too
+  if (!isInternalChatId(chatId) && chatId > 10) {
+    const mood = detectMood(userMessage);
+    logMood(mood, chatId);
+    setCurrentMoodContext(getToneInstructions(mood));
+  } else {
+    setCurrentMoodContext("");
+  }
+
   addTurn(chatId, { role: "user", content: userMessage });
+
+  // --- Parallel dispatch (multi-task detection) ---
+  if (!isInternalChatId(chatId) && config.groqApiKey) {
+    try {
+      const parallel = await tryParallelDispatch(
+        chatId, userMessage, userId, userIsAdmin,
+        async (cid, msg) => safeProgress(cid, msg),
+      );
+      if (parallel.attempted && parallel.merged) {
+        await draft.update(parallel.merged);
+        await draft.finalize();
+        addTurn(chatId, { role: "assistant", content: parallel.merged });
+        backgroundExtract(chatId, userMessage, parallel.merged);
+        return parallel.merged;
+      }
+    } catch (err) {
+      log.warn(`[router-stream] Parallel dispatch failed, falling through: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // --- Gemini path (batch mode — Gemini doesn't support streaming + function calling) ---
   if (shouldUseGemini(chatId)) {
@@ -723,6 +1055,9 @@ async function handleMessageStreamingInner(
       logError(err instanceof Error ? err : errMsg, "router:gemini_stream_fallback");
       // Cancel any partial draft from Gemini attempt
       await draft.cancel();
+      // Force fresh session so Claude gets full system prompt + tool catalog
+      // (resumed sessions may have stale context where Kingston was confused)
+      clearSession(chatId);
     }
   }
 
@@ -766,16 +1101,22 @@ async function handleMessageStreamingInner(
         backgroundExtract(chatId, userMessage, result);
         return result;
       } catch (err) {
-        log.warn(`[router-stream] Ollama-chat failed for ${isAgentStream ? `agent ${chatId}` : "scheduler"}: ${err instanceof Error ? err.message : String(err)}`);
+        const ollamaErrClass = classifyError(err);
+        recordFailure("ollama", ollamaErrClass);
+        log.warn(`[router-stream] Ollama-chat failed [${ollamaErrClass}] for ${isAgentStream ? `agent ${chatId}` : "scheduler"}: ${err instanceof Error ? err.message : String(err)}`);
         await draft.cancel();
         // Fallback to Gemini (free) instead of Haiku
         try {
           const geminiResult = await runGemini({ chatId, userMessage, isAdmin: userIsAdmin, userId });
           if (geminiResult) {
             addTurn(chatId, { role: "assistant", content: geminiResult });
+            clearProviderFailures("gemini");
             return geminiResult;
           }
-        } catch { /* Gemini failed too */ }
+        } catch (gemErr) {
+          const gemClass = classifyError(gemErr);
+          recordFailure("gemini", gemClass);
+        }
         const haikuModel = getModelId("haiku");
         const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
         if (haikuResult.type === "message") {
@@ -796,9 +1137,12 @@ async function handleMessageStreamingInner(
       await draft.finalize();
       addTurn(chatId, { role: "assistant", content: ollamaResult.text });
       backgroundExtract(chatId, userMessage, ollamaResult.text);
+      clearProviderFailures("ollama");
       return ollamaResult.text;
     } catch (err) {
-      log.warn(`[router-stream] Ollama failed, trying Groq: ${err instanceof Error ? err.message : String(err)}`);
+      const ollamaStreamErrClass = classifyError(err);
+      recordFailure("ollama", ollamaStreamErrClass);
+      log.warn(`[router-stream] Ollama failed [${ollamaStreamErrClass}], trying Groq: ${err instanceof Error ? err.message : String(err)}`);
       // Try Groq before Haiku ($0, text-only)
       const groqResult = await tryGroqFallback(chatId, userMessage, "stream-ollama-fail");
       if (groqResult) {
@@ -838,10 +1182,13 @@ async function handleMessageStreamingInner(
       });
       addTurn(chatId, { role: "assistant", content: groqResult });
       backgroundExtract(chatId, userMessage, groqResult);
+      clearProviderFailures("groq");
       return groqResult;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log.warn(`[router-stream] Groq-chat failed: ${errMsg} — falling back`);
+      const groqStreamErrClass = classifyError(err);
+      recordFailure("groq", groqStreamErrClass);
+      log.warn(`[router-stream] Groq-chat failed [${groqStreamErrClass}]: ${errMsg} — falling back`);
       await draft.cancel();
       // Try Ollama, then fall through to Claude streaming
       if (config.ollamaEnabled) {
@@ -867,7 +1214,7 @@ async function handleMessageStreamingInner(
       const remaining = rateLimitRemainingMinutes();
       log.info(`[router-stream] Claude rate-limited (${remaining}min left) — bypassing to fallback`);
       await draft.cancel();
-      const fallbackResult = await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, remaining);
+      const fallbackResult = await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, remaining, model);
       return fallbackResult;
     }
   }
@@ -887,17 +1234,19 @@ async function handleMessageStreamingInner(
   } catch (streamErr) {
     const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
     const isStallOrTimeout = errMsg.includes("stalled") || errMsg.includes("timeout") || errMsg.includes("safety timeout");
+    const streamErrClass = classifyError(streamErr);
+    recordFailure("claude", streamErrClass);
     await draft.cancel();
     clearSession(chatId);
 
     if (isStallOrTimeout) {
       // Claude CLI stalled/timed out — likely rate-limited. Use Gemini/Ollama/Groq instead of retrying Claude.
-      log.warn(`[router-stream] Stream stalled/timed out: ${errMsg} — falling back to non-Claude chain`);
-      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, 5);
+      log.warn(`[router-stream] Stream stalled/timed out [${streamErrClass}]: ${errMsg} — falling back to non-Claude chain`);
+      return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, 5, streamClaudeModel);
     }
 
     // Other errors (spawn failure, etc.) — try batch Claude once
-    log.warn(`[router-stream] Stream failed: ${errMsg} — falling back to batch`);
+    log.warn(`[router-stream] Stream failed [${streamErrClass}]: ${errMsg} — falling back to batch`);
     const batchResponse = await runClaude(chatId, userMessage, userIsAdmin, model);
     if (batchResponse.type === "message") {
       const text = batchResponse.text && batchResponse.text.trim() ? batchResponse.text : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
@@ -921,13 +1270,67 @@ async function handleMessageStreamingInner(
     // --- Rate limit detection in streaming response ---
     if (streamResult.text && detectAndSetRateLimit(streamResult.text)) {
       log.warn(`[router-stream] Claude rate-limited in stream — falling back`);
+      recordFailure("claude", "rate_limit");
       await draft.cancel();
-      const fallbackResult = await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, rateLimitRemainingMinutes());
+      const fallbackResult = await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, rateLimitRemainingMinutes(), streamClaudeModel);
       return fallbackResult;
+    }
+
+    // Identity confusion detection: Kingston thinks it's in Claude Code CLI
+    const confusedPatterns = /claude code|environnement cli|interface cli|pas accès.*bastilon|pas accès.*système|separate environment|port 4242/i;
+    if (streamResult.text && confusedPatterns.test(streamResult.text)) {
+      log.warn(`[router-stream] Identity confusion detected — clearing session and retrying`);
+      await draft.cancel();
+      clearSession(chatId);
+      const retryResult = await runClaude(chatId, userMessage, userIsAdmin, model);
+      const retryText = retryResult.type === "message" && retryResult.text?.trim()
+        ? retryResult.text
+        : "Un moment — je me recalibre.";
+      // Don't save confused response, only save retry
+      addTurn(chatId, { role: "assistant", content: retryText });
+      backgroundExtract(chatId, userMessage, retryText);
+      return retryText;
+    }
+
+    // --- Missed tool-call detection ---
+    // Claude sometimes hallucinate success without actually calling tools.
+    // Detect when the response claims to have done something that requires a tool
+    // (e.g., "Mème généré", "Image créée") and retry via Gemini which has native function calling.
+    if (streamResult.text && !isInternalChatId(chatId) && config.geminiApiKey && !isProviderCoolingDown("gemini")) {
+      const responseLC = streamResult.text.toLowerCase();
+      const requestLC = userMessage.toLowerCase();
+      // Check if user asked for an action that requires tool execution
+      const actionRequested = /\b(meme|mème|image|photo|genere|génère|dessine|crée une? image|screenshot|capture)\b/i.test(requestLC)
+        || /\b(envoie|envoyer|poste|poster|publie|publier|déploie|deploy)\b/i.test(requestLC);
+      // Check if response falsely claims success without evidence of tool execution
+      const claimsSuccess = /\b(généré|créé|envoyé|posté|publié|déployé|voilà|voici (ton|ta|le|la)|here'?s your)\b/i.test(responseLC);
+      const hasToolEvidence = /\btool_call\b|Tool ".*" execution|Error:|HTTP \d{3}|\[called |ftp\.verify|telegram\.send/i.test(streamResult.text);
+      const isShortResponse = streamResult.text.length < 200;
+
+      if (actionRequested && claimsSuccess && !hasToolEvidence && isShortResponse) {
+        log.warn(`[router-stream] Missed tool-call detected: Claude claimed "${streamResult.text.slice(0, 80)}" without calling tools — retrying via Gemini`);
+        await draft.cancel();
+        try {
+          const geminiResult = await runGemini({
+            chatId,
+            userMessage,
+            isAdmin: userIsAdmin,
+            userId,
+            onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+          });
+          addTurn(chatId, { role: "assistant", content: geminiResult });
+          backgroundExtract(chatId, userMessage, geminiResult);
+          return geminiResult;
+        } catch (err) {
+          log.warn(`[router-stream] Gemini retry also failed: ${err instanceof Error ? err.message : String(err)}`);
+          // Fall through to return Claude's original response
+        }
+      }
     }
 
     // Guard against empty responses sneaking through
     if (!streamResult.text || !streamResult.text.trim()) {
+      recordFailure("claude", "empty_response");
       // Auto-recovery: clear session and retry once
       log.warn(`[router-stream] Empty stream response — clearing session and retrying`);
       await draft.cancel();
@@ -936,7 +1339,7 @@ async function handleMessageStreamingInner(
 
       // Check retry for rate limit
       if (retryResult.type === "message" && retryResult.text && detectAndSetRateLimit(retryResult.text)) {
-        return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, rateLimitRemainingMinutes());
+        return await fallbackWithoutClaude(chatId, userMessage, userIsAdmin, userId, rateLimitRemainingMinutes(), streamClaudeModel);
       }
 
       const retryText = retryResult.type === "message" && retryResult.text?.trim()
@@ -946,8 +1349,9 @@ async function handleMessageStreamingInner(
       backgroundExtract(chatId, userMessage, retryText);
       return retryText;
     }
-    // Successful response — clear stale rate limit
+    // Successful response — clear stale rate limit + failover state
     clearRateLimit();
+    clearProviderFailures("claude");
     addTurn(chatId, { role: "assistant", content: streamResult.text });
     await draft.finalize();
     backgroundExtract(chatId, userMessage, streamResult.text);
@@ -967,11 +1371,19 @@ async function handleMessageStreamingInner(
     session_id: streamResult.session_id,
   };
 
-  // Tool chaining loop — sonnet for follow-ups (keeps intelligence + personality)
+  // Tool chaining loop — HYBRID MODE: Ollama ($0 local) handles tool routing,
+  // Opus handles ONLY the final conversational response.
   // Global timeout prevents the chain from blocking the chat lock forever.
-  const TOOL_CHAIN_TIMEOUT_MS = 180_000; // 3 minutes max for entire tool chain
+  const TOOL_CHAIN_TIMEOUT_MS = 300_000; // 5 minutes max for entire tool chain
   const toolChainStart = Date.now();
-  const streamFollowUpModel = getModelId("sonnet");
+  const streamFollowUpTier: ModelTier = "sonnet";
+  const streamFollowUpModel = getModelId(streamFollowUpTier);
+  const useOllamaRouterStream = config.ollamaEnabled;
+  log.info(`[router-stream] Tool chain mode: ${useOllamaRouterStream ? "🦙 Ollama-hybrid ($0)" : `${modelLabel(streamFollowUpTier)} (${streamFollowUpModel})`}`);
+
+  // Track tool execution history for Ollama router
+  const streamToolHistory: Array<{ tool: string; result: string }> = [];
+
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -1025,6 +1437,15 @@ async function handleMessageStreamingInner(
     if (isInternalChatId(chatId) && tool.startsWith("browser.") && !AGENT_BROWSER_ALLOWED_STREAM.includes(tool)) {
       const msg = `Tool "${tool}" is blocked for agents — use browser.snapshot or web.search instead.`;
       log.warn(`[router-stream] Agent chatId=${chatId} tried to call ${tool} — blocked`);
+      streamToolHistory.push({ tool, result: `ERROR: ${msg}` });
+      if (useOllamaRouterStream) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, streamToolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call" as const, text: "", tool: ollamaNext.tool, args: ollamaNext.args || {} };
+          continue;
+        }
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\n${msg}`;
       addTurn(chatId, { role: "assistant", content: `[blocked ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -1046,6 +1467,15 @@ async function handleMessageStreamingInner(
 
     const skill = getSkill(tool);
     if (!skill) {
+      streamToolHistory.push({ tool, result: `ERROR: Unknown tool "${tool}".` });
+      if (useOllamaRouterStream) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, streamToolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call" as const, text: "", tool: ollamaNext.tool, args: ollamaNext.args || {} };
+          continue;
+        }
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\nUnknown tool "${tool}".`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -1078,6 +1508,15 @@ async function handleMessageStreamingInner(
 
     const validationError = validateArgs(safeArgs, skill.argsSchema);
     if (validationError) {
+      streamToolHistory.push({ tool, result: `ERROR: ${validationError}` });
+      if (useOllamaRouterStream) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, streamToolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call" as const, text: "", tool: ollamaNext.tool, args: ollamaNext.args || {} };
+          continue;
+        }
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\nArgument error: ${validationError}.`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -1099,6 +1538,15 @@ async function handleMessageStreamingInner(
         const placeholderRe = /\[[A-ZÀ-ÜÉÈ][A-ZÀ-ÜÉÈ\s_\-]{2,}\]/;
         if (placeholderRe.test(textArg)) {
           log.warn(`[router-stream] Blocked ${tool} — placeholder detected: "${textArg.slice(0, 120)}"`);
+          streamToolHistory.push({ tool, result: `ERROR: Placeholder detected — blocked.` });
+          if (useOllamaRouterStream) {
+            const ollamaNext = await runOllamaToolRouter(chatId, userMessage, streamToolHistory, userIsAdmin);
+            if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+              result = { type: "tool_call" as const, text: "", tool: ollamaNext.tool, args: ollamaNext.args || {} };
+              continue;
+            }
+            break;
+          }
           const followUp = `[Tool "${tool}" error]:\nError: Message contains placeholder brackets. Get REAL data from tools first.`;
           addTurn(chatId, { role: "assistant", content: `[blocked ${tool} — placeholder]` });
           addTurn(chatId, { role: "user", content: followUp });
@@ -1118,10 +1566,12 @@ async function handleMessageStreamingInner(
     const toolStart = Date.now();
     emitHook("tool:before", { chatId, tool, args: safeArgs }).catch(() => {});
     try {
-      // Timeout individual tool execution (2 minutes max per tool)
+      // Timeout individual tool execution — browser/image tools get extra time
+      const isSlow = tool.startsWith("browser.") || tool.startsWith("image.") || tool.startsWith("video.") || tool === "shell.exec";
+      const TOOL_EXEC_TIMEOUT = isSlow ? 180_000 : 120_000;
       const execPromise = skill.execute(safeArgs);
       const execTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Tool "${tool}" execution timed out (120s)`)), 120_000)
+        setTimeout(() => reject(new Error(`Tool "${tool}" execution timed out (${TOOL_EXEC_TIMEOUT / 1000}s)`)), TOOL_EXEC_TIMEOUT)
       );
       toolResult = await Promise.race([execPromise, execTimeout]);
       emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: true }).catch(() => {});
@@ -1129,6 +1579,15 @@ async function handleMessageStreamingInner(
       emitHook("tool:after", { chatId, tool, durationMs: Date.now() - toolStart, success: false, error: String(err) }).catch(() => {});
       const errorMsg = `Tool "${tool}" failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(`[router-stream] ${errorMsg}`);
+      streamToolHistory.push({ tool, result: `ERROR: ${errorMsg}` });
+      if (useOllamaRouterStream) {
+        const ollamaNext = await runOllamaToolRouter(chatId, userMessage, streamToolHistory, userIsAdmin);
+        if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+          result = { type: "tool_call" as const, text: "", tool: ollamaNext.tool, args: ollamaNext.args || {} };
+          continue;
+        }
+        break;
+      }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -1143,14 +1602,32 @@ async function handleMessageStreamingInner(
     }
 
     log.info(`[router-stream] Tool ${tool} completed (${toolResult.length} chars)`);
+    streamToolHistory.push({ tool, result: toolResult });
     const sPreview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
     await safeProgress(chatId, `⚙️ **${tool}**\n\`\`\`\n${sPreview}\n\`\`\``);
 
-    // Include skill schema hint so Claude knows the exact params for this tool
+    // --- HYBRID ROUTING: use Ollama ($0) for tool routing decisions ---
+    if (useOllamaRouterStream) {
+      log.info(`[router-stream] 🦙 Asking Ollama for next step (step ${step + 1})...`);
+      const ollamaNext = await runOllamaToolRouter(chatId, userMessage, streamToolHistory, userIsAdmin);
+
+      if (ollamaNext.type === "tool_call" && ollamaNext.tool) {
+        log.info(`[router-stream] 🦙 Ollama requests next tool: ${ollamaNext.tool}`);
+        addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+        result = { type: "tool_call" as const, text: "", tool: ollamaNext.tool, args: ollamaNext.args || {} };
+        continue;
+      }
+
+      log.info(`[router-stream] 🦙 Ollama says task is complete — sending to Opus for final response`);
+      break;
+    }
+
+    // --- FALLBACK: use Sonnet for tool follow-ups (original behavior) ---
     const sSchemaHint = getSkillSchema(tool);
+    const sReflectionSuffix = `\n\nÉvalue ce résultat et AGIS:\n→ Tâche complète? Envoie un message FINAL résumant ce qui a été fait à Nicolas. OBLIGATOIRE.\n→ Prochaine étape nécessaire? Appelle le tool suivant IMMÉDIATEMENT.\n→ Erreur? Diagnostique et essaie une alternative.\nRAPPEL: Tu DOIS terminer par un message texte lisible pour Nicolas. JAMAIS terminer sur un tool_call sans réponse.`;
     const followUp = sSchemaHint
-      ? `[Tool "${tool}" — schema: ${sSchemaHint}]\n${toolResult}`
-      : `[Tool "${tool}" returned]:\n${toolResult}`;
+      ? `[Tool "${tool}" — schema: ${sSchemaHint}]\n${toolResult}${sReflectionSuffix}`
+      : `[Tool "${tool}" résultat]:\n${toolResult}${sReflectionSuffix}`;
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
@@ -1167,11 +1644,32 @@ async function handleMessageStreamingInner(
     result = batchResultToRouterResult(batchResult);
   }
 
+  // --- HYBRID FINAL RESPONSE: Opus crafts the conversational reply from tool results ---
+  if (useOllamaRouterStream && streamToolHistory.length > 0) {
+    log.info(`[router-stream] 🎯 Opus final response — summarizing ${streamToolHistory.length} tool results`);
+    const toolSummary = streamToolHistory.map(t => `• ${t.tool}: ${t.result.slice(0, 500)}`).join("\n");
+    const finalPrompt = `[RÉSULTATS DES OUTILS — résume à Nicolas de façon concise et naturelle]\nMessage original: "${userMessage}"\n\n${toolSummary}\n\nRédige une réponse finale CONCISE pour Nicolas. Pas de tool_call. Texte seulement.`;
+    addTurn(chatId, { role: "user", content: finalPrompt });
+    const finalResult = await runClaude(chatId, finalPrompt, userIsAdmin, streamClaudeModel);
+    const finalText = finalResult.type === "message" && finalResult.text?.trim()
+      ? finalResult.text
+      : `J'ai exécuté ${streamToolHistory.length} outils. Résultats:\n${streamToolHistory.map(t => `• ${t.tool}: OK`).join("\n")}`;
+    addTurn(chatId, { role: "assistant", content: finalText });
+    backgroundExtract(chatId, userMessage, finalText);
+    return finalText;
+  }
+
   if (result.type === "tool_call") {
-    const msg = `Reached tool chain limit (${config.maxToolChain} steps).`;
-    log.warn(`[router-stream] ${msg}`);
-    addTurn(chatId, { role: "assistant", content: msg });
-    return msg;
+    log.warn(`[router-stream] Chain limit reached (${config.maxToolChain} steps) — forcing final summary`);
+    const summaryPrompt = `[SYSTEM] La chaîne de tools a atteint la limite. Résume ce que tu as accompli et ce qui reste à faire. NE fais PAS d'autre tool_call — réponds en texte seulement.`;
+    addTurn(chatId, { role: "user", content: summaryPrompt });
+    const summaryResult = await runClaude(chatId, summaryPrompt, userIsAdmin, streamFollowUpModel);
+    const summaryText = summaryResult.type === "message" && summaryResult.text?.trim()
+      ? summaryResult.text
+      : `J'ai exécuté ${config.maxToolChain} étapes. Le dernier outil en attente était: ${result.tool}. Réessaie pour continuer.`;
+    addTurn(chatId, { role: "assistant", content: summaryText });
+    backgroundExtract(chatId, userMessage, summaryText);
+    return summaryText;
   }
 
   const text = result.type === "message" ? (result.text || "(unexpected state)") : "(unexpected state)";

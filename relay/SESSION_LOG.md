@@ -10,7 +10,7 @@
 - **Telegram**: @kingston_lev_bot (actif)
 - **Claude API**: Max plan, Opus/Sonnet/Haiku (actif)
 - **Gemini**: Flash + Live audio (actif)
-- **Ollama**: qwen2.5:14b local (actif)
+- **Ollama**: qwen3:14b local (actif)
 - **Groq**: llama-3.3-70b (actif, clé configurée)
 - **ElevenLabs**: TTS voix Daniel (actif, free tier)
 - **Edge TTS**: Microsoft TTS gratuit illimité (actif, fr-FR-HenriNeural)
@@ -24,7 +24,7 @@
 - **Facebook/Instagram**: page configurée
 - **Gmail**: Kingston.orchestrator@gmail.com
 - **FTP**: qplus.plus (hébergement web)
-- **Twilio**: appels téléphoniques +15813003299
+- **Twilio**: appels téléphoniques +18198004718
 
 ## Améliorations Récentes (par Claude Code)
 
@@ -56,7 +56,7 @@
 - Kingston Mind (agent autonome 4 cycles)
 - Knowledge Graph + Episodic Memory + Rules Engine
 - Wake Word browser (Picovoice abandonné → Web Speech API)
-- 357 skills enregistrés, 7 agents actifs
+- 599 skills enregistrés, 7 agents actifs
 - bastilon.org v2 mis à jour
 
 ## Notes Importantes

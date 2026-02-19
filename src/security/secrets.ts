@@ -66,7 +66,7 @@ export function deleteSecret(key: string): boolean {
   secretValues.delete(val);
   try {
     fs.writeFileSync(SECRETS_PATH, JSON.stringify(secrets, null, 2));
-  } catch {}
+  } catch (e) { log.warn(`[secrets] Failed to save after delete: ${e}`); }
   return true;
 }
 

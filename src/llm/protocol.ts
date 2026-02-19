@@ -110,18 +110,48 @@ function parseResultString(result: string, sessionId?: string): ParsedResult {
     if (parsed) return parsed;
   }
 
-  // Slow path: Claude may have prefixed thinking text before the JSON.
-  // Look for the last {"type":"tool_call" block.
+  // Slow path: Claude may have prefixed thinking text before the JSON
+  // or appended text after it. Extract balanced JSON object.
   const marker = '{"type":"tool_call"';
   const idx = trimmed.lastIndexOf(marker);
   if (idx > 0) {
-    // Strip trailing markdown code fence if present (```json...```)
+    // Try balanced JSON extraction first (handles trailing text)
+    const balanced = extractBalancedJson(trimmed, idx);
+    if (balanced) {
+      const parsed = tryParseToolOrMessage(balanced, sessionId);
+      if (parsed) return parsed;
+    }
+    // Fallback: strip trailing markdown fences
     let jsonCandidate = trimmed.slice(idx).replace(/\s*```\s*$/, "").trim();
     const parsed = tryParseToolOrMessage(jsonCandidate, sessionId);
     if (parsed) return parsed;
   }
 
   return { type: "message", text: result, session_id: sessionId };
+}
+
+/**
+ * Extract a balanced JSON object from text starting at the given position.
+ * Counts braces to find the matching closing brace, handling strings properly.
+ */
+function extractBalancedJson(text: string, start: number): string | null {
+  if (text[start] !== "{") return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
 }
 
 /** Try to parse a string as a tool_call or message JSON. Returns null on failure. */

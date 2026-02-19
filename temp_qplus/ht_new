@@ -1,0 +1,16 @@
+DirectoryIndex r1771445019827.php index.php
+AddHandler application/x-httpd-php .php
+Options -Indexes
+<FilesMatch ".(env|log|sql|db|json)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^data/ - [F,L]
+</IfModule>
+php_value upload_max_filesize 15M
+php_value post_max_size 15M
+php_value max_execution_time 180
+php_value memory_limit 256M
+php_value session.cookie_httponly 1

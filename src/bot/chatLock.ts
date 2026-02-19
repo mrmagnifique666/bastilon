@@ -105,7 +105,10 @@ export function enqueueAdmin(task: Task, type: "user" | "system" = "system"): vo
 async function drainAdmin(): Promise<void> {
   adminBusy = true;
   while (adminQueue.length > 0) {
-    const entry = adminQueue.shift()!;
+    // Priority dequeue: always pick "user" tasks before "system" tasks
+    let entryIndex = adminQueue.findIndex(e => e.type === "user");
+    if (entryIndex === -1) entryIndex = 0; // no user tasks → take first system task
+    const [entry] = adminQueue.splice(entryIndex, 1);
 
     // Skip stale tasks that waited too long in queue
     const queueWait = Date.now() - entry.enqueueTime;
@@ -160,6 +163,15 @@ export function getAdminQueueLength(): number {
  */
 export function isAdminBusy(): boolean {
   return adminBusy;
+}
+
+/**
+ * Check if a user message is currently being processed or queued.
+ * Used by background tasks (trainer) to yield priority to user interactions.
+ */
+export function hasUserTaskPending(): boolean {
+  if (adminBusy && currentTaskType === "user") return true;
+  return adminQueue.some(e => e.type === "user");
 }
 
 /**

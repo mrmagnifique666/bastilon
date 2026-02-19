@@ -141,6 +141,13 @@ async function main() {
 
   process.on("SIGINT", () => gracefulShutdown("SIGINT"));
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  // Trace ALL exits — console.error is synchronous and guaranteed to flush before exit
+  process.on("exit", (code) => {
+    if (code !== 0) {
+      console.error(`[EXIT] Kingston exiting with code ${code} at ${new Date().toISOString()}`);
+      console.error(`[EXIT] Stack: ${new Error().stack}`);
+    }
+  });
   // Catch unhandled errors — prevent silent crashes
   process.on("uncaughtException", (err) => {
     log.error("[FATAL] Uncaught exception:", err);
@@ -154,6 +161,10 @@ async function main() {
 
   // Process any pending code requests from Kingston
   await processCodeRequests();
+
+  // Create organized upload directories
+  const { ensureUploadDirs } = await import("./utils/uploads.js");
+  ensureUploadDirs();
 
   // Load skills
   await loadBuiltinSkills();

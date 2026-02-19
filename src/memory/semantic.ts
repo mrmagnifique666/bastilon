@@ -209,12 +209,34 @@ RESULT: [merged text if MERGE, new text if REPLACE, empty if KEEP_SEPARATE]`;
 
 // --- CRUD ---
 
+/** Patterns that indicate identity confusion — must never be saved to long-term memory */
+const POISONED_PATTERNS = [
+  /claude code cli/i,
+  /\bémile\b/i,
+  /environnement cli/i,
+  /interface cli/i,
+  /separate environment/i,
+  /pas acc[eè]s.*tool/i,
+  /pas acc[eè]s.*bastilon/i,
+  /pas acc[eè]s.*syst[eè]me/i,
+  /tool calls.*do not execute/i,
+  /port 4242.*not accessible/i,
+  /\bcli tool\b/i,
+  /n'ai pas d'outil/i,
+];
+
 export async function addMemory(
   content: string,
   category: MemoryCategory = "knowledge",
   source: string = "manual",
   chatId?: number
 ): Promise<number> {
+  // Anti-poisoning filter: reject identity-confused memories
+  if (POISONED_PATTERNS.some(p => p.test(content))) {
+    log.debug(`[semantic] Blocked poisoned memory: ${content.slice(0, 80)}`);
+    return -1;
+  }
+
   const db = getDb();
   const hash = hashContent(content);
 

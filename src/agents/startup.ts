@@ -10,6 +10,7 @@ import { createExecutorConfig } from "./definitions/executor.js";
 import { createTradingMonitorConfig } from "./definitions/trading-monitor.js";
 import { createSentinelConfig } from "./definitions/sentinel.js";
 import { createMindConfig } from "./definitions/mind.js";
+import { createNightWorkerConfig } from "./definitions/night-worker.js";
 import { log } from "../utils/log.js";
 
 export function startAgents(): void {
@@ -36,7 +37,10 @@ export function startAgents(): void {
   const mindConfig = createMindConfig();
   registerAgent(mindConfig);
 
-  log.info("[agents] Agent bootstrap complete");
+  const nightWorkerConfig = createNightWorkerConfig();
+  registerAgent(nightWorkerConfig);
+
+  log.info("[agents] Agent bootstrap complete (8 agents)");
 }
 
 export function shutdownAgents(): void {

@@ -3,6 +3,11 @@
  */
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { wrapSkillExecution } from "./tool-pipeline.js";
+
+// Re-export pipeline utilities for consumers (e.g. analytics, dashboard)
+export { getSkillMetrics, getSkillStats } from "./tool-pipeline.js";
+export type { SkillMetric, PipelineResult, ErrorClass } from "./tool-pipeline.js";
 
 export interface ToolSchema {
   type: "object";
@@ -19,13 +24,22 @@ export interface Skill {
   argsSchema: ToolSchema;
   /** If true, only admin users can invoke this skill */
   adminOnly?: boolean;
+  /** Per-skill timeout override in ms (default 30s from pipeline) */
+  timeoutMs?: number;
   /** Execute the skill and return a text result */
   execute(args: Record<string, unknown>): Promise<string>;
 }
 
 const registry = new Map<string, Skill>();
 
+/**
+ * Register a skill with the global registry.
+ * Automatically wraps execute() with the tool validation pipeline
+ * (input validation, timeout, error classification, metrics logging).
+ */
 export function registerSkill(skill: Skill): void {
+  // Wrap execute() with the validation pipeline before registration
+  wrapSkillExecution(skill);
   registry.set(skill.name, skill);
   log.debug(`Registered skill: ${skill.name}${skill.adminOnly ? " (admin)" : ""}`);
 }
@@ -104,10 +118,44 @@ export function getToolCatalogPrompt(isAdmin: boolean = false): string {
   return lines.join("\n");
 }
 
+/** Example calls for top skills — helps LLMs understand expected arg formats */
+const SKILL_EXAMPLES: Record<string, string> = {
+  "binance.price": 'symbol:"bitcoin"',
+  "binance.top": 'direction:"gainers"',
+  "binance.buy": 'symbol:"ETH", amount:500, reasoning:"support bounce"',
+  "binance.sell": 'symbol:"bitcoin", quantity:"all", reasoning:"take profit"',
+  "binance.klines": 'symbol:"SOLUSDT", interval:"1h"',
+  "crypto_paper.buy": 'symbol:"bitcoin", amount:1000, reasoning:"momentum breakout"',
+  "crypto_paper.sell": 'symbol:"ethereum", quantity:"all", reasoning:"target hit"',
+  "crypto_paper.scan": "",
+  "web.search": 'query:"latest AI news 2026"',
+  "web.fetch": 'url:"https://example.com"',
+  "notes.add": 'text:"Important finding about..."',
+  "notes.list": "",
+  "files.read_anywhere": 'path:"/path/to/file.txt"',
+  "files.write_anywhere": 'path:"/path/to/file.txt", content:"..."',
+  "telegram.send": 'text:"Message à envoyer"',
+  "shell.exec": 'command:"npm run build"',
+  "ftp.upload_dir": 'localPath:"./dist", remotePath:"/public_html"',
+  "ftp.verify": 'remotePath:"/public_html/index.html", search:"expected text"',
+  "image.generate": 'prompt:"a sunset over mountains"',
+  "memory.search": 'query:"trading strategy"',
+  "code.request": 'description:"Add error handling to X"',
+  "dungeon.start": 'system:"shadowrun", mode:"co-op"',
+  "dungeon.play": 'action:"I search the room for traps"',
+  "trading.positions": "",
+  "content.draft": 'text:"Post about...", channel:"moltbook"',
+  "weather.now": 'city:"Gatineau"',
+  "calendar.auto_schedule": 'task:"Meeting with client", duration:60',
+  "goals.set": 'title:"Launch MVP", description:"..."',
+  "cron.list": "",
+};
+
 /**
  * Compact tool catalog — groups skills by namespace, one line per namespace.
  * Reduces prompt from ~50KB to ~3-5KB. Used by Claude CLI path.
- * Format: `namespace: method(params), method2(params) — description`
+ * Top skills include example args to help the LLM understand expected formats.
+ * Format: `namespace: method(params), method2(params)`
  */
 export function getCompactToolCatalog(isAdmin: boolean = false): string {
   const skills = getAllSkills().filter((s) => !s.adminOnly || isAdmin);
@@ -119,10 +167,17 @@ export function getCompactToolCatalog(isAdmin: boolean = false): string {
     const dotIdx = s.name.indexOf(".");
     const ns = dotIdx > 0 ? s.name.slice(0, dotIdx) : s.name;
     const method = dotIdx > 0 ? s.name.slice(dotIdx + 1) : s.name;
-    const params = Object.entries(s.argsSchema.properties)
-      .map(([k, v]) => `${k}:${v.type}`)
-      .join(", ");
-    const entry = `${method}(${params})`;
+    const example = SKILL_EXAMPLES[s.name];
+    let entry: string;
+    if (example !== undefined) {
+      // Has example: show it instead of bare types
+      entry = example ? `${method}(${example})` : `${method}()`;
+    } else {
+      const params = Object.entries(s.argsSchema.properties)
+        .map(([k, v]) => `${k}:${v.type}`)
+        .join(", ");
+      entry = `${method}(${params})`;
+    }
     if (!groups.has(ns)) groups.set(ns, []);
     groups.get(ns)!.push(entry);
   }
@@ -176,54 +231,37 @@ interface GeminiFunctionDeclaration {
 const TIER1_PREFIXES = [
   "help", "notes.", "files.", "shell.", "web.", "telegram.", "system.", "code.",
   "scheduler.", "errors.", "image.", "time.", "translate.", "git.", "memory.",
-  "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
-  "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
-  "trading.", "mood.", "soul.", "cron.", "mind.", "kg.", "episodic.", "rules.",
-  "planner.", "revenue.", "client.", "selfimprove.", "content.", "dungeon.",
-  "news.", "forex.", "nlp.", "solutions.", "google.", "validate.", "geo.",
-  "cohere.", "mistral.", "together.", "replicate.", "workflow.", "xp.",
-  "notify.", "goals.", "goal.", "autofix.", "brand.", "invoice.", "price.",
-  "autonomous.",
+  "skills.", "ftp.", "contacts.", "phone.", "agents.", "config.", "weather.",
+  "math.", "hash.", "convert.", "trading.", "cron.", "mind.", "kg.",
+  "episodic.", "rules.", "content.", "dungeon.", "forex.", "nlp.",
+  "notify.", "goals.", "goal.", "autonomous.", "train.", "sms.",
+  "crypto.", "crypto_paper.", "binance.", "stocks.", "analytics.", "learn.",
+  "social.", "facebook.", "instagram.",
+  "reflect.", "crag.", "mnemosyne.",
+  "printful.", "shopify.",
+  "site.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
 const TIER2_KEYWORDS: Array<{ keywords: string[]; prefix: string }> = [
-  { keywords: ["twitter", "tweet", "x.com"], prefix: "twitter." },
-  { keywords: ["linkedin", "professionnel"], prefix: "linkedin." },
-  { keywords: ["reddit", "subreddit"], prefix: "reddit." },
-  { keywords: ["discord", "serveur"], prefix: "discord." },
   { keywords: ["moltbook", "agent social"], prefix: "moltbook." },
-  { keywords: ["stripe", "paiement", "payment", "facture"], prefix: "stripe." },
-  { keywords: ["hubspot", "crm", "client"], prefix: "hubspot." },
+  { keywords: ["facebook", "fb", "meta", "page facebook"], prefix: "facebook." },
+  { keywords: ["instagram", "ig", "insta", "story"], prefix: "instagram." },
+  { keywords: ["social media", "réseau social", "poster", "publier", "réseaux sociaux"], prefix: "social." },
   { keywords: ["browser", "navigateur", "page web", "screenshot", "playwright"], prefix: "browser." },
-  { keywords: ["analytics", "analyse", "statistique"], prefix: "analytics." },
-  { keywords: ["optimize", "optimis", "a/b test"], prefix: "optimize." },
-  { keywords: ["learn", "apprendre", "api", "documentation"], prefix: "learn." },
-  { keywords: ["market", "marché", "concurren"], prefix: "market." },
-  { keywords: ["facebook", "meta", "fb"], prefix: "facebook." },
-  { keywords: ["instagram", "insta", "ig"], prefix: "instagram." },
   { keywords: ["sms", "texto"], prefix: "sms." },
-  { keywords: ["booking", "réservation", "rendez-vous"], prefix: "booking." },
-  { keywords: ["whatsapp"], prefix: "whatsapp." },
-  { keywords: ["experiment", "expérien"], prefix: "experiment." },
-  { keywords: ["crypto", "bitcoin", "ethereum"], prefix: "crypto." },
+  { keywords: ["crypto", "bitcoin", "ethereum", "btc", "eth"], prefix: "crypto." },
+  { keywords: ["binance", "usdt"], prefix: "binance." },
   { keywords: ["stocks", "bourse", "action"], prefix: "stocks." },
   { keywords: ["trading", "trade", "picks", "day trading", "alpaca", "acheter", "vendre"], prefix: "trading." },
   { keywords: ["dungeon", "d&d", "donjons", "dragons", "campagne", "personnage"], prefix: "dungeon." },
+  { keywords: ["shadowrun", "returns", "jouer", "game", "jeu vidéo"], prefix: "shadowrun." },
+  { keywords: ["computer", "desktop", "screen", "souris", "mouse", "écran"], prefix: "computer." },
+  { keywords: ["site", "website", "poster sur", "publier sur", "facebook post", "naviguer", "web action", "chrome"], prefix: "site." },
   { keywords: ["ingest", "rag", "knowledge base", "ingérer", "recall"], prefix: "memory." },
-  { keywords: ["security", "sécurité", "scan"], prefix: "security." },
-  { keywords: ["audit"], prefix: "audit." },
-  { keywords: ["health", "santé", "sommeil", "sleep", "wearable", "oura", "fitbit"], prefix: "health." },
-  { keywords: ["db", "database", "sqlite"], prefix: "db." },
-  { keywords: ["api."], prefix: "api." },
-  { keywords: ["travel", "voyage", "itinéraire", "itinerary", "packing", "bagages"], prefix: "travel." },
-  { keywords: ["tutor", "language", "langue", "quiz", "practice", "apprendre une langue"], prefix: "tutor." },
-  { keywords: ["job", "emploi", "freelance", "opportunité", "opportunity", "hiring"], prefix: "jobs." },
-  { keywords: ["youtube", "competitor", "concurren", "chaîne"], prefix: "youtube." },
-  { keywords: ["calendar", "agenda", "schedule", "planifier", "auto-schedule"], prefix: "calendar." },
-  { keywords: ["vault", "import", "chat export", "whatsapp export"], prefix: "memory." },
-  { keywords: ["printful", "merch", "merchandise", "print-on-demand", "pod"], prefix: "printful." },
-  { keywords: ["shopify", "boutique", "e-commerce", "ecommerce", "magasin en ligne"], prefix: "shopify." },
+  { keywords: ["reflect", "réflexion", "lesson", "leçon", "mistake", "erreur passée"], prefix: "reflect." },
+  { keywords: ["crag", "grade", "relevance", "pertinence", "document quality"], prefix: "crag." },
+  { keywords: ["mnemosyne", "decay", "memory health", "archive", "duplicat"], prefix: "mnemosyne." },
 ];
 
 /**
@@ -255,6 +293,37 @@ export function getSkillsForGemini(
     }
   }
 
+  // Training mode: extract namespace from [TRAINING: S_namespace_*] and force-include it
+  const trainingMatch = (userMessage || "").match(/\[TRAINING:\s*S_([a-zA-Z]+)_/);
+  if (trainingMatch) {
+    const trainNs = trainingMatch[1] + ".";
+    // Force-include the namespace being tested
+    const forced: Skill[] = [];
+    const remaining: Skill[] = [];
+    for (const s of tier2Pool) {
+      if (s.name.startsWith(trainNs)) {
+        forced.push(s);
+      } else {
+        remaining.push(s);
+      }
+    }
+    if (forced.length > 0) {
+      tier1.push(...forced);
+      tier2Pool.length = 0;
+      tier2Pool.push(...remaining);
+    }
+  }
+  // Also force-include skill mentioned explicitly in message (e.g. "Appelle le skill X.Y")
+  const explicitSkillMatch = (userMessage || "").match(/skill\s+([a-zA-Z_]+\.[a-zA-Z_]+)/i);
+  if (explicitSkillMatch) {
+    const explicitNs = explicitSkillMatch[1].split(".")[0] + ".";
+    for (const s of tier2Pool) {
+      if (s.name.startsWith(explicitNs) && !tier1.includes(s)) {
+        tier1.push(s);
+      }
+    }
+  }
+
   // Tier 2: match by keywords in user message
   const lowerMessage = (userMessage || "").toLowerCase();
   const matchedPrefixes = new Set<string>();
@@ -269,7 +338,15 @@ export function getSkillsForGemini(
     Array.from(matchedPrefixes).some((p) => s.name.startsWith(p))
   );
 
-  const selected = [...tier1, ...tier2Matched];
+  let selected = [...tier1, ...tier2Matched];
+
+  // For training: ensure the tested skill's namespace is at the FRONT (survives 128 cap)
+  if (trainingMatch) {
+    const trainNs = trainingMatch[1] + ".";
+    const prioritized = selected.filter(s => s.name.startsWith(trainNs));
+    const rest = selected.filter(s => !s.name.startsWith(trainNs));
+    selected = [...prioritized, ...rest];
+  }
 
   // Safety: cap at 128
   const capped = selected.slice(0, 128);
@@ -318,13 +395,17 @@ interface OllamaFunctionDeclaration {
 /** Tier 1 for Ollama: agent-focused essentials (smaller set than Gemini) */
 const OLLAMA_TIER1_PREFIXES = [
   "help", "notes.", "files.read", "files.list", "files.write",
-  "shell.exec", "web.search", "web.fetch", "telegram.",
+  "shell.exec", "web.search", "web.fetch",
   "system.status", "code.", "memory.", "analytics.",
   "contacts.", "errors.", "ftp.", "git.", "time.", "cron.", "mind.",
   "kg.", "episodic.", "rules.",
-  "planner.", "selfimprove.", "client.", "revenue.", "content.", "nlp.",
-  "notify.", "goals.", "goal.", "autofix.", "brand.",
-  "autonomous.",
+  "content.", "nlp.",
+  "notify.", "goals.", "goal.",
+  "autonomous.", "learn.",
+  "social.", "facebook.", "instagram.",
+  "reflect.", "crag.", "mnemosyne.",
+  "site.",
+  // NOTE: telegram.* excluded — agents use sendAlert(), not telegram.send
 ];
 
 /**
@@ -417,7 +498,7 @@ function skillToOllamaDecl(skill: Skill): OllamaFunctionDeclaration {
  * Load all built-in skills.
  */
 export async function loadBuiltinSkills(): Promise<void> {
-  // Dynamic imports to keep this file dependency-light
+  // ═══ CORE — Platform essentials ═══
   await import("./builtin/help.js");
   await import("./builtin/notes.js");
   await import("./builtin/files.js");
@@ -427,134 +508,184 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/web.js");
   await import("./builtin/system.js");
   await import("./builtin/code.js");
-  await import("./builtin/api.js");
-  await import("./builtin/db.js");
   await import("./builtin/telegram.js");
   await import("./builtin/scheduler.js");
   await import("./builtin/errors.js");
   await import("./builtin/config.js");
-  await import("./builtin/audit.js");
-  await import("./builtin/phone.js");
-  await import("./builtin/image.js");
-  await import("./builtin/browser.js");
-  await import("./builtin/gmail.js");
-  await import("./builtin/calendar.js");
+  await import("./builtin/config-control.js");
   await import("./builtin/time.js");
-  await import("./builtin/crypto.js");
-  await import("./builtin/stocks.js");
-  await import("./builtin/weather.js");
-  await import("./builtin/contacts.js");
-  await import("./builtin/security-scan.js");
-  await import("./builtin/network.js");
-  await import("./builtin/rss.js");
   await import("./builtin/translate.js");
   await import("./builtin/utils.js");
-  await import("./builtin/health.js");
-  await import("./builtin/market.js");
-  await import("./builtin/trading.js");
-  await import("./builtin/twitter.js");
-  await import("./builtin/linkedin.js");
-  await import("./builtin/reddit.js");
-  await import("./builtin/discord.js");
-  await import("./builtin/facebook.js");
-  await import("./builtin/instagram.js");
-  await import("./builtin/stripe.js");
-  await import("./builtin/sms.js");
-  await import("./builtin/booking.js");
-  await import("./builtin/hubspot.js");
-  await import("./builtin/whatsapp.js");
-  await import("./builtin/analytics.js");
-  await import("./builtin/experiment.js");
-  await import("./builtin/optimize.js");
-  await import("./builtin/learn.js");
-  await import("./builtin/learnApi.js");
-  await import("./builtin/agents.js");
-  await import("./builtin/git.js");
+
+  // ═══ MEMORY — Knowledge systems ═══
   await import("./builtin/memory-ops.js");
   await import("./builtin/semantic-memory.js");
-  await import("./builtin/ftp.js");
-  await import("./builtin/office.js");
-  await import("./builtin/desktop.js");
-  await import("./builtin/system-control.js");
-  await import("./builtin/app-control.js");
-  await import("./builtin/files-power.js");
-  await import("./builtin/package-manager.js");
-  await import("./builtin/pdf.js");
-  await import("./builtin/image-ops.js");
-  await import("./builtin/ollama.js");
-  await import("./builtin/tunnel.js");
-  await import("./builtin/clipboard.js");
-  await import("./builtin/power-tools.js");
-  await import("./builtin/soul.js");
-  await import("./builtin/mood.js");
-  await import("./builtin/cron.js");
-  await import("./builtin/mind.js");
   await import("./builtin/knowledge-graph.js");
   await import("./builtin/episodic.js");
   await import("./builtin/rules.js");
-  await import("./builtin/wakeword.js");
-  await import("./builtin/planner.js");
-  await import("./builtin/revenue.js");
-  await import("./builtin/client.js");
-  await import("./builtin/selfimprove.js");
-  await import("./builtin/content.js");
-  await import("./builtin/youtube.js");
-  await import("./builtin/printful.js");
-  await import("./builtin/shopify.js");
-  await import("./builtin/voice-clone.js");
-  await import("./builtin/news.js");
-  await import("./builtin/forex.js");
-  await import("./builtin/huggingface.js");
-  await import("./builtin/solutions.js");
-  await import("./builtin/serper.js");
-  await import("./builtin/abstract-api.js");
-  await import("./builtin/skill-create.js");
-  await import("./builtin/cohere.js");
-  await import("./builtin/mistral.js");
-  await import("./builtin/together.js");
-  await import("./builtin/replicate.js");
-  await import("./builtin/workflow.js");
-  await import("./builtin/agent-profiles.js");
-  await import("./builtin/secrets.js");
-  await import("./builtin/marketing.js");
-  await import("./builtin/hooks.js");
-  await import("./builtin/mcp.js");
-  await import("./builtin/xp.js");
-  await import("./builtin/freeapis.js");
-  await import("./builtin/freeapis-tier2.js");
-  await import("./builtin/freeapis-tier3.js");
-  await import("./builtin/dungeon.js");
-  await import("./builtin/humanize.js");
   await import("./builtin/knowledge-ingest.js");
-  await import("./builtin/briefing-council.js");
-  await import("./builtin/notify.js");
+  await import("./builtin/ignorance.js");
+
+  // ═══ AGENTS — Autonomous systems ═══
+  await import("./builtin/agents.js");
+  await import("./builtin/mind.js");
+  await import("./builtin/cron.js");
   await import("./builtin/goals.js");
-  await import("./builtin/calendar-scheduler.js");
-  await import("./builtin/brand-voice.js");
-  await import("./builtin/autofix.js");
-  await import("./builtin/invoice.js");
-  await import("./builtin/youtube-tracker.js");
-  await import("./builtin/price-tracker.js");
-  await import("./builtin/knowledge-vault.js");
-  await import("./builtin/language-tutor.js");
-  await import("./builtin/job-scout.js");
-  await import("./builtin/travel.js");
-  await import("./builtin/health-wearable.js");
+  await import("./builtin/goal-tree.js");
   await import("./builtin/autonomous.js");
   await import("./builtin/peodc.js");
-  await import("./builtin/goal-tree.js");
-  await import("./custom/code-request.js");
-  await import("./custom/moltbook.js");
-  await import("./custom/openweather.js");
+  await import("./builtin/observe.js");
+  await import("./builtin/notify.js");
+  await import("./builtin/analytics.js");
+  await import("./builtin/agent-memory.js");
 
-  // Load dynamic SKILL.md files (hot-reloadable by Kingston)
-  try {
-    const { loadMarkdownSkills } = await import("./markdown/loader.js");
-    const mdCount = loadMarkdownSkills();
-    if (mdCount > 0) log.info(`Loaded ${mdCount} markdown skill(s) from relay/skills/`);
-  } catch (err) {
-    log.debug(`[skill:md] No markdown skills loaded: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  // ═══ TRADING — Financial monitoring ═══
+  await import("./builtin/trading.js");
+  await import("./builtin/stocks.js");
+  await import("./builtin/crypto.js");
+  await import("./builtin/crypto-paper.js");
+  await import("./builtin/crypto-autonomous.js");
+  await import("./builtin/stocks-autonomous.js");
+  await import("./builtin/binance.js");
+  await import("./builtin/forex.js");
+  await import("./builtin/trading-advanced.js");
+  await import("./builtin/trading-alerts.js");
+  await import("./builtin/trading-screener.js");
+
+  // ═══ COGNITION — Debate, trends, relationship ═══
+  await import("./builtin/debate.js");
+  await import("./builtin/trend-detect.js");
+  await import("./builtin/relationship-pulse.js");
+
+  // ═══ CONTENT — Moltbook + creation ═══
+  await import("./builtin/content.js");
+  await import("./builtin/humanize.js");
+  await import("./builtin/image.js");
+  await import("./custom/moltbook.js");
+
+  // ═══ TOOLS — Actually used utilities ═══
+  await import("./builtin/git.js");
+  await import("./builtin/ftp.js");
+  await import("./builtin/weather.js");
+  await import("./builtin/contacts.js");
+  await import("./builtin/sms.js");
+  await import("./builtin/phone.js");
+  await import("./builtin/skill-create.js");
+  await import("./builtin/browser.js");
+  await import("./builtin/googleAuth.js");
+  await import("./builtin/anyWebsite.js");
+  await import("./builtin/accountTraining.js");
+  await import("./builtin/freeapis.js");
+
+  // ═══ FUN — D&D + Games ═══
+  await import("./builtin/dungeon.js");
+  await import("./builtin/computer-use.js");
+  await import("./builtin/site-act.js");
+  await import("./builtin/shadowrun-player.js");
+
+  // ═══ RECEPTIONIST — Email, Office, Desktop, Calendar ═══
+  await import("./builtin/gmail.js");
+  await import("./builtin/calendar.js");
+  await import("./builtin/office.js");
+  await import("./builtin/desktop.js");
+
+  // ═══ SOCIAL — Facebook, Instagram, Social Pipeline ═══
+  await import("./builtin/facebook.js");
+  await import("./builtin/instagram.js");
+  await import("./builtin/social-pipeline.js");
+
+  // ═══ INTELLIGENCE — Reflexion, CRAG, Mnemosyne ═══
+  await import("./builtin/intelligence.js");
+
+  // ═══ BRAIN — Smart escalation to Claude ═══
+  await import("./builtin/brain.js");
+
+  // ═══ SUPERVISOR — Accountability & outcome verification ═══
+  await import("./builtin/supervisor-skills.js");
+
+  // ═══ PRINTFUL + SHOPIFY — Print-on-demand & E-commerce ═══
+  await import("./builtin/printful.js");
+  await import("./builtin/shopify.js");
+
+  // ═══ AUTOFIX — Health watchdog & diagnostics ═══
+  await import("./builtin/autofix.js");
+
+  // ═══ TRAINING — Self-improvement ═══
+  await import("../training/trainer.js");
+  await import("./custom/code-request.js");
+
+  // ═══ IDENTITY — Soul & self-awareness ═══
+  await import("./builtin/soul.js");
+  await import("./builtin/mood.js");
+
+  // ═══ COGNITION — Advanced reasoning ═══
+  await import("./builtin/metacognition.js");
+  await import("./builtin/theory-of-mind.js");
+  await import("./builtin/self-modify.js");
+  await import("./builtin/causal.js");
+  await import("./builtin/world-model.js");
+
+  // ═══ LEARNING — Self-improvement ═══
+  await import("./builtin/learn.js");
+  await import("./builtin/learnApi.js");
+  await import("./builtin/selfimprove.js");
+  await import("./builtin/planner.js");
+
+  // ═══ POWER TOOLS — Extended capabilities ═══
+  await import("./builtin/power-tools.js");
+  await import("./builtin/files-power.js");
+  await import("./builtin/pdf.js");
+  await import("./builtin/image-ops.js");
+  await import("./builtin/video.js");
+  await import("./builtin/clipboard.js");
+
+  // ═══ WEB & API — Extended connectivity ═══
+  await import("./builtin/api.js");
+  await import("./builtin/rss.js");
+  await import("./builtin/news.js");
+
+  // ═══ BUSINESS — Revenue & clients ═══
+  await import("./builtin/revenue.js");
+  await import("./builtin/client.js");
+  await import("./builtin/leads.js");
+  await import("./builtin/landing.js");
+  await import("./builtin/marketing.js");
+  await import("./builtin/invoice.js");
+  await import("./builtin/pipeline.js");
+  await import("./builtin/revenue-dashboard.js");
+
+  // ═══ WORKFLOW — Orchestration ═══
+  await import("./builtin/workflow.js");
+  await import("./builtin/agent-profiles.js");
+  await import("./builtin/hooks.js");
+  await import("./builtin/secrets.js");
+  await import("./builtin/skill-verify.js");
+  await import("./builtin/plugin.js");
+
+  // ═══ MONITORING — Price & market tracking ═══
+  await import("./builtin/price-tracker.js");
+  await import("./builtin/knowledge-vault.js");
+
+  // ═══ EXTENDED APIS — Free tier services ═══
+  await import("./builtin/freeapis-tier2.js");
+  await import("./builtin/freeapis-tier3.js");
+
+  // ═══ OPENCLAW-INSPIRED — Ralph Wiggum, Soul Improve, Safety, Growth ═══
+  await import("./builtin/ralph-wiggum.js");
+  await import("./builtin/soul-improve.js");
+  await import("./builtin/safety-hooks.js");
+  await import("./builtin/moltbook-growth.js");
+  await import("./builtin/memory-maintain.js");
+
+  // ═══ STILL CUT — Truly unused (no API keys / no demand) ═══
+  // twitter, linkedin, reddit, discord, stripe, booking, hubspot,
+  // whatsapp, experiment, optimize, db, audit, security-scan, network,
+  // health, market, system-control, app-control, package-manager,
+  // ollama, tunnel, cohere, mistral, together, replicate, serper,
+  // abstract-api, huggingface, solutions, mcp, xp, game,
+  // briefing-council, calendar-scheduler, brand-voice, youtube,
+  // youtube-tracker, voice-clone, language-tutor, job-scout, travel,
+  // health-wearable, wakeword, openweather, training
 
   log.info(`Loaded ${registry.size} built-in skills.`);
 }

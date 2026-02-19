@@ -1,0 +1,1 @@
+<?php echo "PATH: " . __DIR__ . " | FILE: " . __FILE__; ?>

@@ -1,0 +1,46 @@
+# Security: prevent direct access to sensitive files
+<FilesMatch "\.(env|log|sql|db|json)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Prevent directory listing
+Options -Indexes
+
+# Enable PHP
+AddHandler application/x-httpd-php .php
+DirectoryIndex index.php index.html
+
+# DISABLE ALL CACHING for PHP
+<IfModule LiteSpeed>
+CacheDisable public /
+CacheDisable private /
+</IfModule>
+
+<IfModule mod_headers.c>
+    <FilesMatch "\.php$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate, max-age=0"
+        Header set Pragma "no-cache"
+        Header set Expires "Thu, 01 Jan 1970 00:00:00 GMT"
+    </FilesMatch>
+</IfModule>
+
+# Disable PHP OPcache for this directory
+php_flag opcache.enable 0
+
+# Protect data directory
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^data/ - [F,L]
+</IfModule>
+
+# Allow PHP sessions
+php_value session.cookie_httponly 1
+php_value session.cookie_secure 0
+php_value session.use_strict_mode 1
+
+# Upload limits for photo editor
+php_value upload_max_filesize 15M
+php_value post_max_size 15M
+php_value max_execution_time 180
+php_value memory_limit 256M

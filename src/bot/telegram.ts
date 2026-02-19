@@ -3,7 +3,7 @@
  * Handles text messages, photos, documents, user allowlist checks, and rate limiting.
  * Features: reactions, debouncing, dedup, streaming, chat lock, advanced formatting.
  */
-import { Bot, InputFile } from "grammy";
+import { Bot, InputFile, InlineKeyboard } from "grammy";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config/env.js";
@@ -11,7 +11,11 @@ import { isUserAllowed, tryAdminAuth, isAdmin } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
 import { handleMessage, handleMessageStreaming, setProgressCallback } from "../orchestrator/router.js";
 import { clearTurns, clearSession, getTurns, getSession, logError } from "../storage/store.js";
-import { setBotSendFn, setBotVoiceFn, setBotPhotoFn } from "../skills/builtin/telegram.js";
+import { setBotSendFn, setBotVoiceFn, setBotPhotoFn, setBotSendWithKeyboardFn } from "../skills/builtin/telegram.js";
+import { handleVetoCallback } from "../skills/builtin/mind.js";
+import { setBotVideoFn } from "../skills/builtin/video.js";
+import { setBotPhotoFnForCU } from "../skills/builtin/computer-use.js";
+import { setShadowrunBotFns } from "../skills/builtin/shadowrun-player.js";
 import { log } from "../utils/log.js";
 import { debounce } from "./debouncer.js";
 import { enqueueAdmin, interruptCurrent, isAdminBusy } from "./chatLock.js";
@@ -142,19 +146,17 @@ export function createBot(): Bot {
   // Setup progress callback for heartbeat messages
   setProgressCallback(async (chatId, message) => {
     try {
-      await bot.api.sendMessage(chatId, message, { parse_mode: "Markdown" });
-    } catch {
-      try {
-        await bot.api.sendMessage(chatId, message);
-      } catch (err) {
-        log.error("Failed to send progress update:", err);
-      }
+      await sendFormatted(
+        (chunk, parseMode) => bot.api.sendMessage(chatId, chunk, parseMode ? { parse_mode: parseMode as any } : undefined),
+        message
+      );
+    } catch (err) {
+      log.error("Failed to send progress update:", err);
     }
   });
 
-  // Wire bot API into telegram.send skill
+  // Wire bot API into telegram.send skill — uses sendFormatted for auto-splitting
   setBotSendFn(async (chatId, text) => {
-    // Prepend timestamp to all messages
     const now = new Date();
     const timeStr = now.toLocaleTimeString("en-US", {
       hour12: false,
@@ -164,12 +166,10 @@ export function createBot(): Bot {
       timeZone: "America/Toronto"
     });
     const textWithTime = `[${timeStr}] ${text}`;
-    try {
-      await bot.api.sendMessage(chatId, textWithTime, { parse_mode: "Markdown" });
-    } catch {
-      // Fallback: send without Markdown if parsing fails (e.g. unescaped special chars)
-      await bot.api.sendMessage(chatId, textWithTime);
-    }
+    await sendFormatted(
+      (chunk, parseMode) => bot.api.sendMessage(chatId, chunk, parseMode ? { parse_mode: parseMode as any } : undefined),
+      textWithTime
+    );
   });
 
   // Wire bot API into telegram.voice skill
@@ -181,6 +181,67 @@ export function createBot(): Bot {
   setBotPhotoFn(async (chatId, photo, caption) => {
     const source = typeof photo === "string" ? new InputFile(photo) : new InputFile(photo, "image.png");
     await bot.api.sendPhoto(chatId, source, caption ? { caption } : undefined);
+  });
+
+  // Wire bot API into video.generate skill
+  setBotVideoFn(async (chatId, videoPath, caption) => {
+    await bot.api.sendVideo(chatId, new InputFile(videoPath), caption ? { caption } : undefined);
+  });
+
+  // Wire bot API into computer.use skill (desktop screenshots)
+  setBotPhotoFnForCU(async (chatId, photo, caption) => {
+    const source = new InputFile(photo, "desktop.png");
+    await bot.api.sendPhoto(chatId, source, caption ? { caption } : undefined);
+  });
+
+  // Wire bot API into Shadowrun player
+  setShadowrunBotFns(
+    async (chatId, photo, caption) => {
+      const source = new InputFile(photo, "shadowrun.png");
+      await bot.api.sendPhoto(chatId, source, caption ? { caption } : undefined);
+    },
+    async (chatId, text) => {
+      await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    },
+  );
+
+  // Wire bot API for inline keyboard messages (veto system)
+  setBotSendWithKeyboardFn(async (chatId, text, keyboard) => {
+    const kb = new InlineKeyboard();
+    for (const row of keyboard) {
+      for (const btn of row) {
+        kb.text(btn.text, btn.callback_data);
+      }
+      kb.row();
+    }
+    const msg = await bot.api.sendMessage(chatId, text, { reply_markup: kb });
+    return msg.message_id;
+  });
+
+  // --- Callback Query Handler (veto/approve buttons) ---
+
+  bot.on("callback_query:data", async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    const match = data.match(/^(approve|veto)_(\d+)$/);
+    if (!match) {
+      await ctx.answerCallbackQuery({ text: "Action inconnue" });
+      return;
+    }
+    const [, action, idStr] = match;
+    const decisionId = Number(idStr);
+    const approved = action === "approve";
+
+    const result = handleVetoCallback(decisionId, approved);
+    await ctx.answerCallbackQuery({ text: result.slice(0, 200) });
+
+    // Edit the original message to show the result
+    try {
+      const icon = approved ? "✅" : "❌";
+      const statusText = approved ? "APPROUVÉ par Nicolas" : "VETO par Nicolas";
+      await ctx.editMessageText(
+        `${ctx.callbackQuery.message?.text}\n\n${icon} ${statusText}`,
+      );
+    } catch { /* message may have been deleted */ }
   });
 
   // --- Commands ---

@@ -259,7 +259,7 @@ registerSkill({
             log.info(`[voice.speak] Sent XTTS voice to Telegram chat ${chatId}`);
             return `Voice message sent with cloned voice${voice ? ` (${voice})` : ""}.`;
           }
-        } catch {}
+        } catch (e) { log.debug(`[voice.speak] Failed to send via Telegram: ${e}`); }
       }
 
       // Save to uploads for dashboard display

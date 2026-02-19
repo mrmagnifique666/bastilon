@@ -547,3 +547,310 @@ registerSkill({
     return `${key} saved to .env and loaded into environment. Value: ${value.slice(0, 4)}${"*".repeat(Math.max(0, value.length - 4))}`;
   },
 });
+
+// ─── learn.discover ─────────────────────────────────────────────────
+// Exhaustive free API search — finds, categorizes, and evaluates APIs
+
+const PUBLIC_APIS_URL = "https://api.publicapis.org/entries";
+const FREE_API_LISTS = [
+  "https://raw.githubusercontent.com/public-apis/public-apis/master/README.md",
+  "https://free-apis.github.io/api/list.json",
+];
+
+interface ApiEntry {
+  name: string;
+  description: string;
+  url: string;
+  category: string;
+  auth: string;
+  https: boolean;
+  cors: string;
+  free: boolean;
+  rateLimit?: string;
+}
+
+registerSkill({
+  name: "learn.discover",
+  description:
+    "Exhaustive search for free/freemium APIs by need or category. Searches multiple directories (public-apis, free-apis, Brave, Gemini) and returns scored results with integration readiness. Use this to find ALL available APIs for any purpose.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      need: {
+        type: "string",
+        description:
+          'What you need (e.g. "weather data", "stock prices", "send emails", "image generation", "news")',
+      },
+      category: {
+        type: "string",
+        description:
+          'Optional category filter (e.g. "finance", "social", "ai", "data", "communication")',
+      },
+      max_results: {
+        type: "number",
+        description: "Max results to return (default: 15)",
+      },
+    },
+    required: ["need"],
+  },
+  async execute(args): Promise<string> {
+    const need = String(args.need);
+    const category = args.category ? String(args.category) : "";
+    const maxResults = Number(args.max_results) || 15;
+
+    log.info(`[learn.discover] Searching APIs for: "${need}" (category: ${category || "any"})`);
+
+    const allApis: ApiEntry[] = [];
+    const errors: string[] = [];
+
+    // ─── Source 1: public-apis.org directory ─────────────────────
+    try {
+      const url = `${PUBLIC_APIS_URL}?title=${encodeURIComponent(need)}&description=${encodeURIComponent(need)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          count?: number;
+          entries?: Array<{
+            API: string;
+            Description: string;
+            Link: string;
+            Category: string;
+            Auth: string;
+            HTTPS: boolean;
+            Cors: string;
+          }>;
+        };
+        for (const e of data.entries || []) {
+          allApis.push({
+            name: e.API,
+            description: e.Description,
+            url: e.Link,
+            category: e.Category,
+            auth: e.Auth || "none",
+            https: e.HTTPS,
+            cors: e.Cors || "unknown",
+            free: !e.Auth || e.Auth === "" || e.Auth === "apiKey",
+          });
+        }
+        log.debug(`[learn.discover] public-apis: ${data.entries?.length || 0} results`);
+      }
+    } catch (err) {
+      errors.push(`public-apis: ${String(err).slice(0, 80)}`);
+    }
+
+    // ─── Source 2: GitHub public-apis README (category scan) ─────
+    if (allApis.length < maxResults) {
+      try {
+        const readmeRes = await fetch(FREE_API_LISTS[0], { signal: AbortSignal.timeout(10000) });
+        if (readmeRes.ok) {
+          const readme = await readmeRes.text();
+          const needLower = need.toLowerCase();
+          const catLower = category.toLowerCase();
+          const lines = readme.split("\n");
+          let currentCategory = "";
+          for (const line of lines) {
+            const catMatch = line.match(/^###\s+(.+)/);
+            if (catMatch) {
+              currentCategory = catMatch[1].trim();
+              continue;
+            }
+            const apiMatch = line.match(
+              /\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|\s*([^|]*)\|\s*([^|]*)\|\s*([^|]*)\|\s*([^|]*)\|/,
+            );
+            if (apiMatch) {
+              const [, apiName, apiUrl, desc, authType, httpsStr, corsStr] = apiMatch;
+              const matchesNeed =
+                apiName.toLowerCase().includes(needLower) ||
+                desc.toLowerCase().includes(needLower) ||
+                currentCategory.toLowerCase().includes(needLower);
+              const matchesCat =
+                !catLower || currentCategory.toLowerCase().includes(catLower);
+              if (matchesNeed && matchesCat) {
+                const isDup = allApis.some(
+                  (a) => a.name.toLowerCase() === apiName.toLowerCase(),
+                );
+                if (!isDup) {
+                  allApis.push({
+                    name: apiName,
+                    description: desc.trim(),
+                    url: apiUrl,
+                    category: currentCategory,
+                    auth: authType.trim() || "none",
+                    https: httpsStr.trim().toLowerCase() === "yes",
+                    cors: corsStr.trim() || "unknown",
+                    free: !authType.trim() || authType.trim().toLowerCase() === "apikey",
+                  });
+                }
+              }
+            }
+          }
+          log.debug(`[learn.discover] GitHub readme: total ${allApis.length} after merge`);
+        }
+      } catch (err) {
+        errors.push(`github-readme: ${String(err).slice(0, 80)}`);
+      }
+    }
+
+    // ─── Source 3: Brave Search for additional APIs ───────────────
+    if (config.braveSearchApiKey && allApis.length < maxResults) {
+      try {
+        const q = `free API ${need} ${category} no authentication OR free tier`;
+        const searchUrl = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=10`;
+        const res = await fetch(searchUrl, {
+          headers: {
+            Accept: "application/json",
+            "X-Subscription-Token": config.braveSearchApiKey,
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            web?: {
+              results?: Array<{ title: string; url: string; description: string }>;
+            };
+          };
+          for (const r of data.web?.results || []) {
+            const isDup = allApis.some(
+              (a) =>
+                a.url === r.url || a.name.toLowerCase() === r.title.toLowerCase(),
+            );
+            if (!isDup) {
+              allApis.push({
+                name: r.title.replace(/ API.*$/i, "").slice(0, 40),
+                description: r.description.slice(0, 150),
+                url: r.url,
+                category: category || "web-search",
+                auth: "unknown",
+                https: r.url.startsWith("https"),
+                cors: "unknown",
+                free: true,
+              });
+            }
+          }
+          log.debug(`[learn.discover] Brave search: total ${allApis.length} after merge`);
+        }
+      } catch (err) {
+        errors.push(`brave: ${String(err).slice(0, 80)}`);
+      }
+    }
+
+    // ─── Source 4: Gemini knowledge for niche APIs ────────────────
+    if (allApis.length < 5) {
+      try {
+        const geminiResult = await askGemini(
+          `List 10 FREE APIs (no payment required, or generous free tier) for: "${need}" ${category ? `(category: ${category})` : ""}\n\n` +
+            `For each API, provide EXACTLY this JSON format:\n` +
+            `[{"name":"...", "url":"...", "description":"...", "auth":"none|apiKey|oauth", "free_tier":"...", "rate_limit":"..."}]\n\n` +
+            `Only include APIs you are CONFIDENT exist and are currently operational. Return valid JSON array only.`,
+          2048,
+        );
+        try {
+          const parsed = JSON.parse(extractJson(geminiResult)) as Array<{
+            name: string;
+            url: string;
+            description: string;
+            auth: string;
+            free_tier?: string;
+            rate_limit?: string;
+          }>;
+          for (const api of parsed) {
+            const isDup = allApis.some(
+              (a) => a.name.toLowerCase() === api.name.toLowerCase(),
+            );
+            if (!isDup) {
+              allApis.push({
+                name: api.name,
+                description: api.description,
+                url: api.url,
+                category: category || "gemini-suggested",
+                auth: api.auth || "unknown",
+                https: api.url.startsWith("https"),
+                cors: "unknown",
+                free: true,
+                rateLimit: api.rate_limit,
+              });
+            }
+          }
+        } catch {
+          // Gemini didn't return valid JSON, skip
+        }
+        log.debug(`[learn.discover] Gemini: total ${allApis.length} after merge`);
+      } catch (err) {
+        errors.push(`gemini: ${String(err).slice(0, 80)}`);
+      }
+    }
+
+    // ─── Score & rank results ────────────────────────────────────
+    const scored = allApis.map((api) => {
+      let score = 50; // base score
+      if (api.auth === "none" || api.auth === "") score += 25;
+      else if (api.auth === "apiKey" || api.auth === "apikey") score += 15;
+      else if (api.auth === "oauth" || api.auth === "OAuth") score += 5;
+      if (api.https) score += 10;
+      if (api.cors === "yes") score += 10;
+      if (api.free) score += 10;
+      // Boost exact need matches
+      const needWords = need.toLowerCase().split(/\s+/);
+      for (const w of needWords) {
+        if (api.name.toLowerCase().includes(w)) score += 10;
+        if (api.description.toLowerCase().includes(w)) score += 5;
+      }
+      return { ...api, score: Math.min(100, score) };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, maxResults);
+
+    // ─── Format output ──────────────────────────────────────────
+    if (top.length === 0) {
+      return `Aucune API trouvée pour "${need}". Essaie avec des termes plus larges, ou utilise brain.find_api pour une recherche assistée par Claude.`;
+    }
+
+    const lines: string[] = [
+      `**${top.length} APIs trouvées pour "${need}"**`,
+      `(${allApis.length} total, top ${maxResults} affichés)\n`,
+    ];
+
+    for (const api of top) {
+      const authIcon =
+        api.auth === "none" || api.auth === ""
+          ? "🟢 aucune"
+          : api.auth === "apiKey" || api.auth === "apikey"
+            ? "🔑 apiKey"
+            : `🔒 ${api.auth}`;
+      lines.push(
+        `**${api.name}** (score: ${api.score}/100)`,
+        `  ${api.description}`,
+        `  Auth: ${authIcon} | HTTPS: ${api.https ? "✅" : "❌"} | CORS: ${api.cors}`,
+        `  ${api.url}`,
+        `  Catégorie: ${api.category}${api.rateLimit ? ` | Limite: ${api.rateLimit}` : ""}`,
+        "",
+      );
+    }
+
+    lines.push("---");
+    lines.push("Pour intégrer une API: `learn.api(url, name)`");
+    lines.push("Pour stocker une clé: `learn.credential(key, value)`");
+    if (errors.length > 0) {
+      lines.push(`\n⚠ Sources en erreur: ${errors.join(", ")}`);
+    }
+
+    // Save results for future reference
+    saveAnalysis(`discover-${need.replace(/\s+/g, "-").toLowerCase()}`, {
+      query: need,
+      category,
+      timestamp: new Date().toISOString(),
+      total: allApis.length,
+      top: top.map(({ name, url, score, auth, category: cat }) => ({
+        name,
+        url,
+        score,
+        auth,
+        category: cat,
+      })),
+    });
+
+    return lines.join("\n");
+  },
+});

@@ -76,6 +76,7 @@ function startBot() {
     stdio: "inherit",
     shell: true,
     cwd: process.cwd(),
+    env: { ...process.env, __KINGSTON_WRAPPER: "1" },
   });
 
   child.on("exit", (code) => {

@@ -24,6 +24,8 @@ import { clearTurns, clearSession } from "../storage/store.js";
 import { log } from "../utils/log.js";
 import { getBotSendFn } from "../skills/builtin/telegram.js";
 import { config } from "../config/env.js";
+import { diagnoseFailure } from "../skills/builtin/ignorance.js";
+import { logReflection, getRelevantReflections, getCrossTrialLearnings } from "../intelligence/reflexion.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -92,6 +94,12 @@ export function startGoalRunner(rootGoalId: number): { success: boolean; message
     .catch(err => {
       log.error(`[goal-runner] Fatal error for goal #${rootGoalId}: ${err}`);
       notify(`❌ Goal Runner crash pour #${rootGoalId}: ${err instanceof Error ? err.message : String(err)}`);
+      diagnoseFailure({
+        what_failed: `Goal Runner crash — goal #${rootGoalId}`,
+        error_message: err instanceof Error ? err.message : String(err),
+        context: `Goal Runner fatal error during execution of root goal #${rootGoalId}`,
+        source: "goal-runner",
+      });
     })
     .finally(() => {
       activeRunners.delete(rootGoalId);
@@ -129,10 +137,9 @@ export function getActiveRunners(): Array<{ goalId: number; startedAt: number; e
 // ── Helpers ──────────────────────────────────────────────────
 
 function notify(message: string): void {
-  const send = getBotSendFn();
-  if (send && config.adminChatId) {
-    send(config.adminChatId, message).catch(() => {});
-  }
+  // DÉSACTIVÉ — notifications consolidées dans briefings (7h/12h/20h)
+  // Les updates importants sont loggés dans notes.add
+  log.info(`[goal-runner] (silent notification) ${message.slice(0, 100)}`);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -254,6 +261,14 @@ function buildIterationPrompt(
     lines.push(``, `═══ SCRATCHPAD ═══`, scratchpad);
   }
 
+  // Inject reflexion context (past learnings)
+  const reflexions = getRelevantReflections(focus.goal);
+  if (reflexions) lines.push(reflexions);
+
+  // Inject cross-trial learnings (past failures on similar goals)
+  const crossTrial = getCrossTrialLearnings(focus.goal);
+  if (crossTrial) lines.push(crossTrial);
+
   // Phase instructions
   lines.push(``, `═══ INSTRUCTIONS PHASE ${focus.peodc_phase} ═══`);
 
@@ -303,7 +318,7 @@ function buildIterationPrompt(
     `- EXÉCUTE avec des tool_calls. Ne dis pas "je vais faire X" — FAIS X.`,
     `- Quand une phase est finie, appelle goal.advance() ou goal.complete()/goal.fail()`,
     `- Sauvegarde tes découvertes: goal.scratch(id=${focus.id}, action="append", content="...")`,
-    `- Envoie un update à Nicolas via telegram.send pour progrès important`,
+    `- SILENCIEUX: Pas de telegram.send automatique — seulement via notes.add`,
     `- Si Plan A échoue, goal.fail() essaie automatiquement Plan B`,
   );
 
@@ -368,8 +383,25 @@ async function runGoalLoop(rootGoalId: number, isCancelled: () => boolean): Prom
       log.warn(`[goal-runner] Focus #${focus.id} didn't progress (stuck ${stuckCount}/${STUCK_THRESHOLD})`);
 
       if (stuckCount >= STUCK_THRESHOLD) {
+        // Log reflexion for this failure
+        logReflection({
+          goalId: focus.id,
+          task: focus.goal,
+          outcome: "Bloqué — aucun progrès après plusieurs tentatives",
+          error: focus.last_error || undefined,
+          strategy: getStrategies(focus)[focus.current_strategy] || undefined,
+        });
+
         // Force-fail to trigger next strategy
         notify(`⚠️ Goal #${focus.id} bloqué après ${STUCK_THRESHOLD} tentatives\n${focus.goal.slice(0, 60)}`);
+
+        // Log ignorance: WHY is this goal stuck?
+        diagnoseFailure({
+          what_failed: `Goal #${focus.id}: ${focus.goal.slice(0, 80)}`,
+          error_message: `Bloqué après ${STUCK_THRESHOLD} tentatives en phase ${focus.peodc_phase}. Aucun progrès détecté.${focus.last_error ? ` Dernière erreur: ${focus.last_error}` : ""}`,
+          context: `Goal Runner, sous-objectif #${focus.id}, stratégie en cours, phase PEODC: ${focus.peodc_phase}`,
+          source: "goal-runner",
+        });
 
         clearTurns(RUNNER_CHAT_ID);
         clearSession(RUNNER_CHAT_ID);
@@ -402,7 +434,14 @@ async function runGoalLoop(rootGoalId: number, isCancelled: () => boolean): Prom
     const { pct } = getProgress(rootGoalId);
     if (rootGoal?.status === "completed") {
       notify(`✅ Goal Runner terminé: #${rootGoalId}\n${rootGoal.goal}\n${pct}% complété\n\n${buildQuickTree(rootGoalId)}`);
-    } else {
+    } else if (rootGoal?.status !== "completed") {
+      // Log reflexion for incomplete goal
+      logReflection({
+        goalId: rootGoalId,
+        task: rootGoal?.goal || "unknown",
+        outcome: `Goal Runner arrêté — ${getProgress(rootGoalId).pct}% complété`,
+        error: rootGoal?.last_error || "Arrêté avant complétion",
+      });
       notify(`📊 Goal Runner arrêté: #${rootGoalId}\n${pct}% complété\n\n${buildQuickTree(rootGoalId)}`);
     }
   } else {

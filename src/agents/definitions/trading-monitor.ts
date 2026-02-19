@@ -48,6 +48,77 @@ let POSITIONS: AlertLevel[] = [];
 let lastPositionSync = 0;
 const POSITION_SYNC_INTERVAL_MS = 60_000; // Re-sync every 60s
 
+// ── Crypto monitoring (24/7, CoinGecko free API) ──
+const CRYPTO_WATCHLIST = ["bitcoin", "ethereum", "solana"];
+const CRYPTO_SYMBOLS: Record<string, string> = { bitcoin: "BTC", ethereum: "ETH", solana: "SOL" };
+const CRYPTO_ALERT_THRESHOLD = 8; // % change to trigger alert (was 3 — too noisy)
+let lastCryptoPrices: Record<string, number> = {};
+let lastCryptoAlert = 0;
+let lastCryptoAlertPrices: Record<string, number> = {}; // Track prices at last alert to avoid re-alerting
+const CRYPTO_ALERT_COOLDOWN_MS = 14_400_000; // 4 hours between alerts (was 5 min — way too noisy)
+
+async function checkCrypto(sendAlert: (msg: string) => void): Promise<void> {
+  try {
+    const ids = CRYPTO_WATCHLIST.join(",");
+    const resp = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+    if (!resp.ok) {
+      log.debug(`[trading-monitor] CoinGecko ${resp.status}`);
+      return;
+    }
+    const data = await resp.json() as Record<string, { usd: number; usd_24h_change?: number }>;
+
+    const lines: string[] = [];
+    let hasSignificant = false;
+
+    for (const [id, info] of Object.entries(data)) {
+      const sym = CRYPTO_SYMBOLS[id] || id.toUpperCase();
+      const price = info.usd;
+      const change24h = info.usd_24h_change ?? 0;
+      const prev = lastCryptoPrices[id];
+      lastCryptoPrices[id] = price;
+
+      // Detect significant moves
+      if (Math.abs(change24h) >= CRYPTO_ALERT_THRESHOLD) {
+        hasSignificant = true;
+      }
+
+      const arrow = change24h >= 0 ? "📈" : "📉";
+      const sign = change24h >= 0 ? "+" : "";
+      lines.push(`${arrow} ${sym}: $${price.toLocaleString("en-US", { maximumFractionDigits: 2 })} (${sign}${change24h.toFixed(1)}% 24h)`);
+    }
+
+    // Always log
+    if (lines.length > 0) {
+      log.debug(`[trading-monitor] Crypto: ${lines.join(" | ")}`);
+    }
+
+    // Alert Nicolas only on significant moves (with cooldown + price change gate)
+    if (hasSignificant && Date.now() - lastCryptoAlert > CRYPTO_ALERT_COOLDOWN_MS) {
+      // Check if prices actually moved since last alert (avoid re-alerting same level)
+      let newMoveDetected = false;
+      for (const [id, info] of Object.entries(data)) {
+        const prev = lastCryptoAlertPrices[id];
+        if (!prev || Math.abs((info.usd - prev) / prev) > 0.03) {
+          newMoveDetected = true;
+          break;
+        }
+      }
+      if (newMoveDetected) {
+        lastCryptoAlert = Date.now();
+        lastCryptoAlertPrices = Object.fromEntries(
+          Object.entries(data).map(([id, info]) => [id, info.usd])
+        );
+        sendAlert(`🪙 Crypto Alert\n${lines.join("\n")}`);
+      }
+    }
+  } catch (err) {
+    log.debug(`[trading-monitor] Crypto check failed: ${(err as Error).message}`);
+  }
+}
+
 async function syncPositionsFromAlpaca(): Promise<void> {
   const now = Date.now();
   if (now - lastPositionSync < POSITION_SYNC_INTERVAL_MS) return;
@@ -820,12 +891,11 @@ async function executeDecision(decision: TradeDecision, sendAlert: (msg: string)
       pnlPct,
     });
 
-    // Send clean summary to Nicolas (no technical noise)
+    // Log summary silently (no Telegram push — Nicolas prefers silent trading)
     const summary = formatCleanSummary(side, decision.symbol, decision.qty, fillPrice, decision.reason, entryPrice);
-    sendAlert(summary);
+    log.info(`[trading-monitor] ${summary}`);
   } catch (err) {
     log.error(`[trading-monitor] Auto-trade failed: ${err}`);
-    sendAlert(`🚫 Trade échoué: ${decision.action} ${decision.symbol} — ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -836,6 +906,10 @@ const signalCooldowns: Map<string, number> = new Map(); // symbol → last signa
 const SIGNAL_COOLDOWN_MS = 15 * 60 * 1000; // 15 min cooldown for SIGNAL-type alerts
 
 async function onTick(cycle: number, sendAlert: (msg: string) => void): Promise<void> {
+  // Crypto monitoring — runs 24/7 regardless of market hours, every tick (~5 min)
+  await checkCrypto(sendAlert);
+
+  // Stock monitoring — only during market hours
   if (!isMarketHours()) return;
 
   // Sync positions from Alpaca (dynamic — no hardcoded symbols)

@@ -6,21 +6,61 @@
 import { registerSkill } from "../loader.js";
 import { log } from "../../utils/log.js";
 
-const API = "https://graph.facebook.com/v19.0";
+const API = "https://graph.facebook.com/v22.0";
 
 function getToken(): string | null {
   return process.env.FACEBOOK_PAGE_ACCESS_TOKEN || null;
 }
 
+let cachedIgAccountId: string | null = null;
+
 function getIgAccountId(): string | null {
-  return process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID || null;
+  return cachedIgAccountId || process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID || null;
 }
 
-function checkConfig(): string | null {
+/**
+ * Auto-discover Instagram Business Account ID from the Facebook Page token.
+ * Caches the result so we only call the API once.
+ */
+async function discoverIgAccountId(): Promise<string | null> {
+  if (cachedIgAccountId) return cachedIgAccountId;
+  if (process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID) {
+    cachedIgAccountId = process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
+    return cachedIgAccountId;
+  }
+
+  const token = getToken();
+  const pageId = process.env.FACEBOOK_PAGE_ID;
+  if (!token || !pageId) return null;
+
+  try {
+    const res = await fetch(
+      `${API}/${pageId}?fields=instagram_business_account&access_token=${token}`
+    );
+    const data = await res.json() as { instagram_business_account?: { id: string }; error?: { message: string } };
+    if (data.instagram_business_account?.id) {
+      cachedIgAccountId = data.instagram_business_account.id;
+      log.info(`[instagram] Auto-discovered IG Business Account ID: ${cachedIgAccountId}`);
+      return cachedIgAccountId;
+    }
+    log.debug(`[instagram] No Instagram Business Account linked to Page ${pageId}`);
+    return null;
+  } catch (err) {
+    log.debug(`[instagram] Failed to discover IG account: ${err}`);
+    return null;
+  }
+}
+
+async function checkConfig(): Promise<string | null> {
   if (!getToken()) return "Instagram not configured. Set FACEBOOK_PAGE_ACCESS_TOKEN in .env (same token as Facebook, needs instagram_basic + instagram_content_publish permissions)";
-  if (!getIgAccountId()) return "Instagram account ID missing. Set INSTAGRAM_BUSINESS_ACCOUNT_ID in .env";
+  // Try auto-discovery if not set
+  const igId = getIgAccountId() || await discoverIgAccountId();
+  if (!igId) return "Instagram account ID not found. Link an Instagram Business account to your Facebook Page, or set INSTAGRAM_BUSINESS_ACCOUNT_ID in .env";
   return null;
 }
+
+// Export for use by social.post pipeline
+export { discoverIgAccountId, getIgAccountId as getInstagramAccountId };
 
 async function igFetch(method: string, path: string, params?: Record<string, string>, body?: Record<string, string>): Promise<any> {
   const token = getToken()!;
@@ -56,7 +96,7 @@ registerSkill({
     required: ["imageUrl", "caption"],
   },
   async execute(args): Promise<string> {
-    const err = checkConfig();
+    const err = await checkConfig();
     if (err) return err;
     const igId = getIgAccountId()!;
 
@@ -110,7 +150,7 @@ registerSkill({
     required: ["imageUrl"],
   },
   async execute(args): Promise<string> {
-    const err = checkConfig();
+    const err = await checkConfig();
     if (err) return err;
     const igId = getIgAccountId()!;
 
@@ -159,7 +199,7 @@ registerSkill({
     required: ["mediaId", "text"],
   },
   async execute(args): Promise<string> {
-    const err = checkConfig();
+    const err = await checkConfig();
     if (err) return err;
 
     try {

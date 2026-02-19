@@ -76,6 +76,7 @@ registerSkill({
       if (!res.ok) return `ExchangeRate API error: ${res.status}`;
 
       const data = (await res.json()) as ExchangeRateResponse;
+      if (!data.rates) return `API error: rates not available for ${from}`;
       const rate = data.rates[to];
       if (rate === undefined) return `Devise inconnue: ${to}`;
 

@@ -8,7 +8,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import SysTray from "systray2";
+import SysTrayModule from "systray2";
+const SysTray = (SysTrayModule as any).default || SysTrayModule;
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const LOG_FILE = path.join(ROOT, "relay", "kingston.log");
@@ -38,7 +39,7 @@ function startKingston(): void {
 
   logStream.write(`\n[${timestamp()}] === Kingston starting via tray ===\n`);
 
-  kingston = spawn("npx", ["tsx", "src/index.ts"], {
+  kingston = spawn("npx", ["tsx", "src/wrapper.ts"], {
     cwd: ROOT,
     stdio: ["ignore", "pipe", "pipe"],
     shell: true,

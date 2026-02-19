@@ -14,7 +14,7 @@ import { registerSkill } from "../loader.js";
 import { config, reloadEnv } from "../../config/env.js";
 import { log } from "../../utils/log.js";
 
-const API = "https://graph.facebook.com/v21.0";
+const API = "https://graph.facebook.com/v22.0";
 
 function getToken(): string | null {
   return config.facebookPageAccessToken || null;

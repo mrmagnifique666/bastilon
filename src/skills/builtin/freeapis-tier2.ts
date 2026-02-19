@@ -350,7 +350,7 @@ registerSkill({
     const prompt = encodeURIComponent(String(args.prompt));
     const width = (args.width as number) || 1024;
     const height = (args.height as number) || 1024;
-    let url = `https://image.pollinations.ai/prompt/${prompt}?width=${width}&height=${height}&nologo=true`;
+    let url = `https://image.pollinations.ai/prompt/${prompt}?width=${width}&height=${height}&model=flux&nologo=true`;
     if (args.seed) url += `&seed=${args.seed}`;
     return `Image generee:\n![AI Image](${url})\n\nLien direct: ${url}`;
   },

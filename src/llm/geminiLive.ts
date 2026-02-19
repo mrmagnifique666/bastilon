@@ -31,6 +31,7 @@ const MODEL = "gemini-2.5-flash-native-audio-latest";
 const SESSION_TIMEOUT_MS = 14 * 60 * 1000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const MAX_LIVE_TOOLS = 80;
+const MAX_PHONE_TOOLS = 25; // Phone calls: enough tools to be useful, truncated results prevent 1008
 
 /** Paths for persistent voice session files */
 const VOICE_CONV_FILE = path.resolve("relay/voice-conversation.json");
@@ -38,6 +39,25 @@ const VOICE_DND_FILE = path.resolve("relay/voice-dnd-state.md");
 
 /** Blocked prefixes for voice mode — too heavy, slow, or crash-prone */
 const BLOCKED_PREFIXES = ["browser.", "ollama.", "pdf."];
+
+/** Additional blocked prefixes for phone calls — prevent infinite loops + reduce tool count */
+const PHONE_BLOCKED_PREFIXES = [
+  "phone.", "sms.", "wakeword.", "dungeon.", "printful.", "shopify.",
+  "cohere.", "mistral.", "together.", "replicate.", "workflow.",
+  "tutor.", "jobs.", "travel.", "health.", "invoice.", "youtube.",
+  "brand.", "autofix.", "price.", "plugin.", "verify.", "xp.",
+  "hackernews.", "wiki.", "books.", "archive.", "food.", "worldbank.",
+  "finnhub.", "stackexchange.", "nasa.", "pollinations.", "newsdata.",
+  "dns.", "dict.", "words.", "holidays.", "qr.", "url.",
+  "mcp.", "hooks.", "secrets.", "marketing.", "clients.", "content.",
+  "kg.", "episodic.", "rules.", "goal.", "autonomous.", "notify.",
+  "planner.", "revenue.", "selfimprove.", "experiment.", "optimize.",
+  "linkedin.", "reddit.", "discord.", "facebook.", "instagram.",
+  "stripe.", "booking.", "hubspot.", "whatsapp.",
+  "registry.", "task_scheduler.", "power.", "windows.", "winget.",
+  "pip.", "npm.", "ssh.", "wsl.", "tunnel.", "mouse.", "keyboard.",
+  "screenshot.", "desktop.", "app.", "process.",
+];
 
 /** Priority prefixes — included first (order matters) */
 const PRIORITY_PREFIXES = [
@@ -127,12 +147,13 @@ function getSpecialTools(): { decl: LiveToolDecl; handler: string }[] {
  * Build all tool declarations dynamically from the Kingston registry + special tools.
  * Priority skills first, capped at MAX_LIVE_TOOLS.
  */
-function buildLiveTools(): {
+function buildLiveTools(isPhoneCall = false): {
   decls: LiveToolDecl[];
   nameMap: Map<string, string>;
 } {
+  const blocked = [...BLOCKED_PREFIXES, ...(isPhoneCall ? PHONE_BLOCKED_PREFIXES : [])];
   const allSkills = getAllSkills().filter(
-    (s) => !BLOCKED_PREFIXES.some((p) => s.name.startsWith(p)),
+    (s) => !blocked.some((p) => s.name.startsWith(p)),
   );
 
   // Sort: priority prefixes first, then rest
@@ -147,7 +168,8 @@ function buildLiveTools(): {
   }
 
   const specials = getSpecialTools();
-  const cap = MAX_LIVE_TOOLS - specials.length;
+  const maxTools = isPhoneCall ? MAX_PHONE_TOOLS : MAX_LIVE_TOOLS;
+  const cap = maxTools - specials.length;
   const selected = [...priority, ...rest].slice(0, cap);
 
   const decls: LiveToolDecl[] = [];
@@ -195,6 +217,8 @@ export interface LiveSessionOptions {
   callbacks: LiveCallbacks;
   voiceName?: string;
   language?: string;
+  /** When true, adds phone-specific instructions and blocks telegram.* tools */
+  isPhoneCall?: boolean;
 }
 
 // ── GeminiLiveSession ──────────────────────────────────────────────
@@ -208,6 +232,7 @@ export class GeminiLiveSession {
   private reconnectAttempts = 0;
   private cachedMemoryContext = "";
   private conversationLog: string[] = [];
+  private lastConnectTime = 0;
 
   /** Compressed summary of the conversation so far (generated before reconnect). */
   private conversationSummary = "";
@@ -232,7 +257,7 @@ export class GeminiLiveSession {
 
   /** Rebuild tool declarations from the live registry. */
   private rebuildTools(): void {
-    const { decls, nameMap } = buildLiveTools();
+    const { decls, nameMap } = buildLiveTools(this.opts.isPhoneCall);
     this.toolDecls = decls;
     this.toolNameMap = nameMap;
   }
@@ -264,6 +289,7 @@ export class GeminiLiveSession {
 
     this.ws.on("open", () => {
       this.reconnectAttempts = 0;
+      this.lastConnectTime = Date.now();
       // Rebuild tools on each connection (picks up any newly registered skills)
       this.rebuildTools();
       const setup = this.buildSetup();
@@ -271,6 +297,9 @@ export class GeminiLiveSession {
       log.info(
         `[gemini-live] WebSocket open, sending setup (${payload.length} bytes, ${this.toolDecls.length} tools)...`,
       );
+      if (payload.length > 15000 && this.opts.isPhoneCall) {
+        log.warn(`[gemini-live] ⚠️ Phone setup payload is ${payload.length} bytes — may cause 1008. Consider reducing tools/context.`);
+      }
       this.ws!.send(payload);
 
       // Auto-reconnect before 15min session limit
@@ -284,7 +313,10 @@ export class GeminiLiveSession {
 
     this.ws.on("message", (raw) => {
       try {
-        this.handleMessage(JSON.parse(raw.toString()));
+        const msg = JSON.parse(raw.toString());
+        this.handleMessage(msg).catch((err) => {
+          log.error(`[gemini-live] Async message handler error: ${(err as Error).message}`);
+        });
       } catch (err) {
         log.warn(
           `[gemini-live] Failed to parse message: ${(err as Error).message}`,
@@ -299,12 +331,24 @@ export class GeminiLiveSession {
 
     this.ws.on("close", (code, reason) => {
       const reasonStr = reason ? reason.toString() : "";
+      const sessionDuration = Date.now() - this.lastConnectTime;
       log.info(
-        `[gemini-live] WS closed (code=${code}${reasonStr ? ", reason=" + reasonStr : ""})`,
+        `[gemini-live] WS closed (code=${code}${reasonStr ? ", reason=" + reasonStr : ""}, after ${Math.round(sessionDuration / 1000)}s)`,
       );
       this.connected = false;
       this.clearTimer();
-      if (!this.closed) this.opts.callbacks.onClose();
+      // Auto-reconnect on ANY non-intentional close (this.closed is only true when close() is called explicitly)
+      if (!this.closed) {
+        // If 1008 happens within 15s of connect, it's likely a payload/model issue, not transient
+        if (code === 1008 && sessionDuration < 15000 && this.reconnectAttempts >= 1) {
+          log.warn(`[gemini-live] Fast 1008 crash (${Math.round(sessionDuration / 1000)}s) — likely payload issue, not retrying`);
+          this.opts.callbacks.onError("Connection rejected — try reducing context or tools");
+          return;
+        }
+        log.info(`[gemini-live] Session ended (code=${code}), attempting reconnect...`);
+        this.reconnect();
+        return;
+      }
     });
   }
 
@@ -322,11 +366,15 @@ export class GeminiLiveSession {
     );
   }
 
-  /** Send a text message (for typed input). */
+  /** Send a text message (for typed input or system triggers). */
   sendText(text: string): void {
     if (!this.connected || !this.ws) return;
-    this.currentUserText += (this.currentUserText ? " " : "") + text;
-    this.conversationLog.push(`[Nicolas] ${text}`);
+    // Don't pollute user text tracking with system triggers
+    const isSystem = text.startsWith("[SYSTÈME") || text.startsWith("[SYSTEM");
+    if (!isSystem) {
+      this.currentUserText += (this.currentUserText ? " " : "") + text;
+    }
+    this.conversationLog.push(isSystem ? `[System] ${text.slice(0, 100)}` : `[Nicolas] ${text}`);
     this.ws.send(
       JSON.stringify({
         clientContent: {
@@ -365,7 +413,7 @@ export class GeminiLiveSession {
     this.saveEpisodicSummary();
     this.persistConversation();
     // Clean up conversation file after close (session is over)
-    try { fs.unlinkSync(VOICE_CONV_FILE); } catch {}
+    try { fs.unlinkSync(VOICE_CONV_FILE); } catch (e) { log.debug(`[gemini-live] Cleanup: ${e}`); }
     // Emit voice session end hook (fire-and-forget)
     emitHookAsync("voice:session:end", {
       chatId: this.opts.chatId,
@@ -376,7 +424,7 @@ export class GeminiLiveSession {
     if (this.ws) {
       try {
         this.ws.close();
-      } catch {}
+      } catch (e) { log.debug(`[gemini-live] Cleanup: ${e}`); }
       this.ws = null;
     }
     this.connected = false;
@@ -398,15 +446,17 @@ export class GeminiLiveSession {
   /** Build rich context: memories + recent Telegram + episodic events + notes. */
   private async buildRichContext(): Promise<string> {
     const parts: string[] = [];
+    const isPhone = this.opts.isPhoneCall;
 
-    // 1. Semantic memories — broad query, more results
+    // 1. Semantic memories — phone uses focused query to avoid agent pollution
     try {
-      const mem = await buildSemanticContext(
-        "Nicolas profil préférences projets activités récentes travail aujourd'hui Kingston Bastilon",
-        15,
-      );
+      const query = isPhone
+        ? "Nicolas préférences projets personnels trading agenda rendez-vous"
+        : "Nicolas profil préférences projets activités récentes travail aujourd'hui Kingston Bastilon";
+      const limit = isPhone ? 8 : 15;
+      const mem = await buildSemanticContext(query, limit);
       if (mem) parts.push(mem);
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to load semantic memories: ${e}`); }
 
     // 2. Recent Telegram conversation (last 20 turns from main chat)
     try {
@@ -419,7 +469,7 @@ export class GeminiLiveSession {
         );
         parts.push(`\n[HISTORIQUE TELEGRAM RÉCENT — ${recent.length} messages]\n${lines.join("\n")}`);
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to load Telegram history: ${e}`); }
 
     // 2b. Previous voice conversation turns (chatId 5)
     try {
@@ -431,55 +481,59 @@ export class GeminiLiveSession {
         );
         parts.push(`\n[HISTORIQUE VOICE RÉCENT — ${recentVoice.length} messages]\n${lines.join("\n")}`);
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to load voice history: ${e}`); }
 
     // 3. Recent episodic events (today)
     try {
       const db = getDb();
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
+      // Phone: exclude agent-generated events to prevent identity confusion
+      const agentExclude = isPhone
+        ? ` AND event_type NOT IN ('agent_cycle', 'agent_action', 'cron_execution', 'content_posted', 'moltbook_post', 'engagement_batch')`
+        : "";
       const events = db
         .prepare(
-          `SELECT description, event_type, importance FROM episodic_events
-           WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 10`,
+          `SELECT summary, event_type, importance FROM episodic_events
+           WHERE created_at > ?${agentExclude} ORDER BY created_at DESC LIMIT ${isPhone ? 5 : 10}`,
         )
-        .all(todayStart.toISOString()) as { description: string; event_type: string; importance: number }[];
+        .all(Math.floor(todayStart.getTime() / 1000)) as { summary: string; event_type: string; importance: number }[];
       if (events.length > 0) {
         const lines = events.map(
-          (e) => `- [${e.event_type}] ${e.description.slice(0, 150)}`,
+          (e) => `- [${e.event_type}] ${e.summary.slice(0, 150)}`,
         );
         parts.push(`\n[ÉVÉNEMENTS AUJOURD'HUI]\n${lines.join("\n")}`);
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to load episodic events: ${e}`); }
 
     // 3b. Previous voice session summaries (last 3) for cross-session memory
     try {
       const db = getDb();
       const voiceSessions = db
         .prepare(
-          `SELECT description, details FROM episodic_events
-           WHERE event_type = 'voice_session' ORDER BY timestamp DESC LIMIT 3`,
+          `SELECT summary, details FROM episodic_events
+           WHERE event_type = 'voice_session' ORDER BY created_at DESC LIMIT 3`,
         )
-        .all() as { description: string; details: string }[];
+        .all() as { summary: string; details: string }[];
       if (voiceSessions.length > 0) {
         const lines = voiceSessions.map(
-          (s) => `- ${s.description}: ${(s.details || "").slice(0, 300)}`,
+          (s) => `- ${s.summary}: ${(s.details || "").slice(0, 300)}`,
         );
         parts.push(`\n[SESSIONS VOICE PRÉCÉDENTES]\n${lines.join("\n")}`);
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to load voice session history: ${e}`); }
 
-    // 4. Recent notes (last 5)
+    // 4. Recent notes (last 5, fewer for phone)
     try {
       const db = getDb();
       const notes = db
-        .prepare(`SELECT text FROM notes ORDER BY created_at DESC LIMIT 5`)
+        .prepare(`SELECT text FROM notes ORDER BY created_at DESC LIMIT ${isPhone ? 3 : 5}`)
         .all() as { text: string }[];
       if (notes.length > 0) {
         const lines = notes.map((n) => `- ${n.text.slice(0, 150)}`);
         parts.push(`\n[NOTES RÉCENTES]\n${lines.join("\n")}`);
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to load recent notes: ${e}`); }
 
     const ctx = parts.join("\n");
     log.info(`[gemini-live] Rich context: ${ctx.length} chars (mem+telegram+episodic+notes)`);
@@ -535,7 +589,7 @@ export class GeminiLiveSession {
           })
           .catch(() => {});
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to save conversation summary: ${e}`); }
   }
 
   /** Save a consolidated episodic memory of the voice session for cross-session recall. */
@@ -569,7 +623,7 @@ export class GeminiLiveSession {
           this.opts.chatId,
         ).catch(() => {});
       }
-    } catch {}
+    } catch (e) { log.warn(`[gemini-live] Failed to save episodic summary: ${e}`); }
   }
 
   private reconnect(): void {
@@ -577,7 +631,7 @@ export class GeminiLiveSession {
     if (this.ws) {
       try {
         this.ws.close();
-      } catch {}
+      } catch (e) { log.debug(`[gemini-live] Cleanup: ${e}`); }
       this.ws = null;
     }
     this.connected = false;
@@ -634,13 +688,49 @@ export class GeminiLiveSession {
 
     // Rich system prompt — same level of context as Telegram Kingston
     const systemParts: string[] = [
-      `Tu es Kingston, une IA autonome sur Bastilon OS.`,
+      `## IDENTITÉ (OBLIGATOIRE)`,
+      `Tu es Kingston, l'assistant IA personnel de Nicolas. Tu fais partie de Bastilon OS.`,
+      `Tu n'es PAS un agent automatisé. Tu n'es PAS le "Moltbook agent", le "Scout", le "Sentinel", ni aucun autre agent.`,
+      `Tu es Kingston, l'IA principale qui parle DIRECTEMENT à Nicolas.`,
       `Ton utilisateur est Nicolas, entrepreneur francophone au Canada (Gatineau, Québec).`,
       `Personnalité: direct, proactif, honnête, loyal à Nicolas. Tu tutoies Nicolas.`,
       ``,
-      `## Mode vocal`,
-      `Conversation vocale temps réel. Parle ${lang === "fr" ? "français" : "anglais"} naturellement.`,
-      `Sois concis — pas de markdown, pas de listes. Tu PARLES, tu n'écris pas.`,
+      `## DATE ET HEURE (OBLIGATOIRE — NE JAMAIS CALCULER TOI-MÊME)`,
+      `Date: ${dateStr}`,
+      `Heure: ${timeStr} (heure de l'Est / America/Toronto, fuseau de Gatineau)`,
+      `UTILISE UNIQUEMENT cette heure. Ne calcule PAS l'heure toi-même, ne devine pas, ne dis pas une autre heure.`,
+      ``,
+    ];
+
+    if (this.opts.isPhoneCall) {
+      systemParts.push(
+        `## MODE APPEL TÉLÉPHONIQUE (CRITIQUE)`,
+        `Tu es en APPEL TÉLÉPHONIQUE avec Nicolas via Twilio.`,
+        `RAPPEL: Tu es KINGSTON, l'assistant personnel de Nicolas. Tu n'es PAS un agent (Scout, Analyst, Mind, Sentinel, etc.). Les agents sont des sous-systèmes qui travaillent en arrière-plan. TOI tu es Kingston, celui qui parle à Nicolas.`,
+        `IMMÉDIAT: Dès que la session audio démarre, parle IMMÉDIATEMENT pour te présenter. Dis "Bonjour, ici Kingston." d'une voix chaleureuse. N'attends PAS que l'utilisateur parle en premier.`,
+        `RÈGLE #1: Tes RÉPONSES doivent être VOCALES. Tu parles, l'audio sort dans le téléphone. Ne réponds PAS par telegram.send ou telegram.voice — parle directement.`,
+        `RÈGLE #2: Si Nicolas te demande d'ENVOYER quelque chose sur Telegram (image, meme, message, lien), utilise telegram.send ou image.generate — c'est OK. Mais confirme vocalement que tu l'as fait.`,
+        `RÈGLE #3: Sois CONCIS. Phrases courtes, naturelles, comme une vraie conversation téléphonique.`,
+        `RÈGLE #4: Pas de markdown, pas de listes, pas de formatage. Tu PARLES, tu n'écris pas. Ne génère JAMAIS de texte markdown comme **bold** ou des listes. Tout ce que tu produis doit être de la parole naturelle.`,
+        `RÈGLE #5: Ne raccroche JAMAIS. Reste en ligne tant que Nicolas n'a pas dit au revoir.`,
+        `RÈGLE #6: Tu te présentes UNE SEULE FOIS au début de l'appel. Après ça, NE RÉPÈTE PLUS JAMAIS la salutation. Même après un outil, une pause, ou une reconnexion, continue la conversation naturellement.`,
+        ``,
+      );
+    } else {
+      systemParts.push(
+        `## Mode vocal`,
+        `Conversation vocale temps réel. Parle ${lang === "fr" ? "français" : "anglais"} naturellement.`,
+        `Sois concis — pas de markdown, pas de listes. Tu PARLES, tu n'écris pas.`,
+        ``,
+      );
+    }
+
+    systemParts.push(
+      `## FLUIDITÉ VOCALE (CRITIQUE)`,
+      `- AVANT d'appeler un outil, dis une courte phrase naturelle: "Un instant...", "Laisse-moi vérifier...", "Je regarde ça..."`,
+      `- Ne reste JAMAIS silencieux. Parle d'abord, PUIS appelle l'outil.`,
+      `- Si tu appelles PLUSIEURS outils, mentionne-le: "Je vérifie plusieurs choses..."`,
+      `- Quand tu reçois le résultat d'un outil, reformule-le naturellement. Ne lis pas le JSON brut.`,
       ``,
       `## RÈGLES ANTI-HALLUCINATION (CRITIQUE)`,
       `1. **JAMAIS inventer de données.** Si tu ne sais pas → utilise un outil pour vérifier.`,
@@ -656,29 +746,33 @@ export class GeminiLiveSession {
       `- Chercher dans ta mémoire (memory_search), consulter le web (web_search)`,
       `- Consulter l'historique (telegram_history) — TOUJOURS utiliser avant de répondre sur les activités récentes`,
       `- Lire/écrire des fichiers, exécuter du code, gérer des notes`,
-      `- Envoyer des messages Telegram, gérer les emails, le calendrier`,
       `- Consulter les agents, le trading, les positions`,
       `- Gérer des cron jobs, des rappels, des plans`,
       `Quand Nicolas te demande quelque chose, FAIS-LE avec les outils. Ne dis pas "je ne peux pas".`,
       `**Règle d'or: Appelle un outil AVANT de répondre. Ne réponds jamais avec des données que tu n'as pas vérifiées.**`,
-      ``,
-      `## Date et heure`,
-      `${dateStr}, ${timeStr} (heure de l'Est / America/Toronto).`,
-    ];
+    );
 
-    // Inject session log (unified cross-channel knowledge — services, API keys, recent improvements)
-    const sessionLog = loadSessionLog();
-    if (sessionLog) {
-      systemParts.push(``, `## Session Log`, sessionLog);
+    // For phone calls: keep prompt SHORT to avoid 1008 crashes (target < 8K chars)
+    // For dashboard voice: full context is fine
+    if (!this.opts.isPhoneCall) {
+      // Inject session log (unified cross-channel knowledge)
+      const sessionLog = loadSessionLog();
+      if (sessionLog) {
+        systemParts.push(``, `## Session Log`, sessionLog);
+      }
     }
 
     // Inject rich context (memories + telegram history + episodic + notes)
+    // For phone: truncate aggressively to keep setup payload small (avoid 1008)
     if (this.cachedMemoryContext) {
-      systemParts.push(``, `## Contexte`, this.cachedMemoryContext);
+      const ctx = this.opts.isPhoneCall
+        ? this.cachedMemoryContext.slice(0, 2000)
+        : this.cachedMemoryContext;
+      systemParts.push(``, `## Contexte`, ctx);
     }
 
-    // Inject D&D context if a session is active
-    if (this.dndContext) {
+    // Inject D&D context if a session is active (skip for phone — too heavy)
+    if (this.dndContext && !this.opts.isPhoneCall) {
       systemParts.push(``, `## PARTIE D&D EN COURS`, this.dndContext);
       systemParts.push(
         `Tu es aussi le Dungeon Master. Continue la narration en cours.`,
@@ -692,9 +786,10 @@ export class GeminiLiveSession {
       systemParts.push(``, `## Résumé de la conversation précédente`, this.conversationSummary);
     }
 
-    // Inject recent conversation log for continuity across reconnects (40 entries, not 10)
+    // Inject recent conversation log for continuity across reconnects
     if (this.conversationLog.length > 0) {
-      const recent = this.conversationLog.slice(-40).join("\n");
+      const maxEntries = this.opts.isPhoneCall ? 8 : 40;
+      const recent = this.conversationLog.slice(-maxEntries).join("\n");
       systemParts.push(``, `## Conversation vocale en cours (${this.conversationLog.length} échanges total)`, recent);
     }
 
@@ -725,7 +820,7 @@ export class GeminiLiveSession {
     };
   }
 
-  private handleMessage(msg: any): void {
+  private async handleMessage(msg: any): Promise<void> {
     // Setup complete
     if (msg.setupComplete) {
       log.info("[gemini-live] Session ready");
@@ -780,11 +875,15 @@ export class GeminiLiveSession {
       return;
     }
 
-    // Tool calls
+    // Tool calls — execute in parallel for speed
     if (msg.toolCall?.functionCalls) {
-      for (const fc of msg.toolCall.functionCalls) {
-        this.executeToolCall(fc.id, fc.name, fc.args || {});
-      }
+      const calls = msg.toolCall.functionCalls;
+      // Fire all tool calls concurrently (don't wait sequentially)
+      await Promise.all(
+        calls.map((fc: { id: string; name: string; args?: Record<string, unknown> }) =>
+          this.executeToolCall(fc.id, fc.name, fc.args || {}),
+        ),
+      );
       return;
     }
 
@@ -860,7 +959,7 @@ export class GeminiLiveSession {
       return;
     }
 
-    // ── Standard Kingston skill execution ──
+    // ── Standard Kingston skill execution (non-blocking for slow tools) ──
     try {
       // Permission check
       if (!isToolPermitted(skillName, userId)) {
@@ -898,46 +997,100 @@ export class GeminiLiveSession {
         return;
       }
 
-      // Execute
-      const result = await skill.execute(normalized);
-      const truncated =
-        typeof result === "string"
-          ? result.slice(0, 4000)
-          : JSON.stringify(result).slice(0, 4000);
+      // Tool execution: wait for the result with a generous timeout.
+      // Phone calls use a longer timeout (8s) because injecting deferred results
+      // via clientContent can confuse Gemini Live and cause session restarts.
+      // Dashboard voice uses the original fast path (500ms) since it's more tolerant.
+      const TOOL_TIMEOUT_MS = this.opts.isPhoneCall ? 8000 : 500;
+      const execPromise = skill.execute(normalized);
 
-      this.sendToolResponse(id, geminiName, { result: truncated });
-      callbacks.onToolResult(skillName, truncated);
-      this.conversationLog.push(`[Result] ${truncated.slice(0, 100)}`);
+      const race = await Promise.race([
+        execPromise.then((r) => ({ done: true as const, result: r })),
+        new Promise<{ done: false }>((resolve) =>
+          setTimeout(() => resolve({ done: false }), TOOL_TIMEOUT_MS),
+        ),
+      ]);
 
-      // Detect image generation results and forward to dashboard + Telegram
-      if (skillName.startsWith("image.") || skillName === "pollinations.image") {
-        const imageUrlMatch = truncated.match(/!\[.*?\]\((.*?)\)/);
-        const uploadMatch = truncated.match(/\/uploads\/[^\s)]+/);
-        const imageUrl = imageUrlMatch?.[1] || (uploadMatch ? `http://localhost:3200${uploadMatch[0]}` : null);
-        if (imageUrl) {
-          const caption = String(normalized.prompt || normalized.concept || "Generated image");
-          callbacks.onImageGenerated?.(imageUrl, caption);
-          // Also send to Nicolas's Telegram so he sees it on his phone
-          try {
-            const telegramSkill = getSkill("telegram.send");
-            const adminChatId = config.allowedUsers?.[0] || this.opts.userId;
-            if (telegramSkill && adminChatId) {
-              telegramSkill.execute({
-                chatId: String(adminChatId),
-                text: `🖼️ Image générée (voice): ${caption}\n${imageUrl}`,
-              }).catch(() => {});
+      if (race.done) {
+        // Got result in time — send via proper toolResponse
+        const maxLen = this.opts.isPhoneCall ? 2000 : 4000;
+        const truncated =
+          typeof race.result === "string"
+            ? race.result.slice(0, maxLen)
+            : JSON.stringify(race.result).slice(0, maxLen);
+        this.sendToolResponse(id, geminiName, { result: truncated });
+        callbacks.onToolResult(skillName, truncated);
+        this.conversationLog.push(`[Result] ${truncated.slice(0, 100)}`);
+        this.handleImageResult(skillName, truncated, normalized);
+        log.info(`[gemini-live] Tool result (fast): ${skillName} → ${truncated.slice(0, 80)}...`);
+      } else {
+        // Tool is too slow — send a brief ack so Gemini doesn't hang
+        log.info(`[gemini-live] Tool slow (>${TOOL_TIMEOUT_MS}ms), sending ack: ${skillName}`);
+        this.sendToolResponse(id, geminiName, {
+          result: `L'outil ${skillName} prend plus de temps que prévu. Le résultat sera disponible sous peu.`,
+        });
+
+        // For phone calls: DON'T inject deferred result via clientContent
+        // (causes session instability / conversation restarts).
+        // Just log it for the conversation history.
+        // For dashboard voice: inject as before (more tolerant).
+        execPromise
+          .then((result) => {
+            const truncated =
+              typeof result === "string"
+                ? result.slice(0, 2000)
+                : JSON.stringify(result).slice(0, 2000);
+            callbacks.onToolResult(skillName, truncated);
+            this.conversationLog.push(`[Result] ${truncated.slice(0, 100)}`);
+            this.handleImageResult(skillName, truncated, normalized);
+
+            if (!this.opts.isPhoneCall && this.connected && this.ws) {
+              // Dashboard voice: inject as context (safe)
+              this.ws.send(JSON.stringify({
+                clientContent: {
+                  turns: [{ role: "user", parts: [{ text: `[RÉSULTAT ${skillName}]: ${truncated}` }] }],
+                  turnComplete: true,
+                },
+              }));
             }
-          } catch {}
-        }
+            log.info(`[gemini-live] Tool result (deferred): ${skillName} → ${truncated.slice(0, 80)}...`);
+          })
+          .catch((err) => {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            callbacks.onToolResult(skillName, `Error: ${errMsg}`);
+            log.error(`[gemini-live] Tool error (deferred): ${skillName} → ${errMsg}`);
+          });
       }
-
-      log.info(
-        `[gemini-live] Tool result: ${skillName} → ${truncated.slice(0, 80)}...`,
-      );
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.sendToolResponse(id, geminiName, { error: errMsg });
       callbacks.onToolResult(skillName, `Error: ${errMsg}`);
+    }
+  }
+
+  /** Handle image results — forward to dashboard + Telegram */
+  private handleImageResult(
+    skillName: string,
+    truncated: string,
+    normalized: Record<string, unknown>,
+  ): void {
+    if (!skillName.startsWith("image.") && skillName !== "pollinations.image") return;
+    const imageUrlMatch = truncated.match(/!\[.*?\]\((.*?)\)/);
+    const uploadMatch = truncated.match(/\/uploads\/[^\s)]+/);
+    const imageUrl = imageUrlMatch?.[1] || (uploadMatch ? `http://localhost:3200${uploadMatch[0]}` : null);
+    if (imageUrl) {
+      const caption = String(normalized.prompt || normalized.concept || "Generated image");
+      this.opts.callbacks.onImageGenerated?.(imageUrl, caption);
+      try {
+        const telegramSkill = getSkill("telegram.send");
+        const adminChatId = config.allowedUsers?.[0] || this.opts.userId;
+        if (telegramSkill && adminChatId) {
+          telegramSkill.execute({
+            chatId: String(adminChatId),
+            text: `🖼️ Image générée (voice): ${caption}\n${imageUrl}`,
+          }).catch(() => {});
+        }
+      } catch (e) { log.warn(`[gemini-live] Telegram image forward failed: ${e}`); }
     }
   }
 
@@ -995,8 +1148,8 @@ export class GeminiLiveSession {
         this.conversationSummary = data.summary || "";
         log.info(`[gemini-live] Restored ${data.log.length} conversation entries from disk (${Math.round(age / 1000)}s old)`);
       }
-    } catch {
-      // File corrupt or missing — start fresh
+    } catch (e) {
+      log.warn(`[gemini-live] Failed to load conversation file: ${e}`);
     }
   }
 
@@ -1141,6 +1294,6 @@ ${charSection}
 ${turnSection}
 `;
       fs.writeFileSync(VOICE_DND_FILE, md);
-    } catch {}
+    } catch (e) { log.debug(`[gemini-live] Cleanup: ${e}`); }
   }
 }

@@ -9,8 +9,14 @@
  * Auto-closes/disconnects after idle timeout.
  */
 import { chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from "playwright";
+import path from "node:path";
+import fs from "node:fs";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { ENHANCED_STEALTH_SCRIPTS, handleCaptchaIfPresent, waitForCfClearance } from "./captcha-solver.js";
+
+/** Persistent profile directory — stores cookies, localStorage, sessions */
+export const BROWSER_PROFILE_DIR = path.join(process.cwd(), "relay", "browser-profile");
 
 // Re-export Page type for consumers
 export type { Page } from "playwright";
@@ -48,18 +54,16 @@ export async function humanType(page: Page, selector: string, text: string): Pro
   }
 }
 
-/** Stealth scripts injected into every page context */
-const STEALTH_SCRIPTS = `
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  if (!window.chrome) window.chrome = { runtime: {} };
-  const origQuery = Permissions.prototype.query;
-  Permissions.prototype.query = function(params) {
-    if (params.name === 'notifications') return Promise.resolve({ state: 'denied' });
-    return origQuery.call(this, params);
-  };
-  Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en', 'fr'] });
-`;
+/** Stealth scripts injected into every page context.
+ *  Uses ENHANCED_STEALTH_SCRIPTS from captcha-solver.ts which includes:
+ *  - WebGL vendor/renderer spoofing (realistic NVIDIA GPU)
+ *  - Realistic plugins/mimeTypes arrays
+ *  - Hardware concurrency & device memory spoofing
+ *  - Chrome runtime API spoofing
+ *  - cdc_ automation property removal
+ *  - Platform, language, and screen depth spoofing
+ */
+const STEALTH_SCRIPTS = ENHANCED_STEALTH_SCRIPTS;
 
 /** Try to discover CDP WebSocket endpoint from a running Chrome */
 async function discoverCdpEndpoint(url: string): Promise<string | null> {
@@ -149,16 +153,30 @@ class BrowserManager {
           viewport: { width: config.browserViewportWidth, height: config.browserViewportHeight },
         });
       } else {
+        // Try to load saved session state for persistent cookies/localStorage
+        let storageState: string | undefined;
+        try {
+          const stateFile = path.join(BROWSER_PROFILE_DIR, "state.json");
+          if (fs.existsSync(stateFile)) {
+            storageState = stateFile;
+            log.info("[browser] Loading persistent session state from state.json");
+          }
+        } catch { /* no saved state */ }
+
         this.context = await this.browser.newContext({
           viewport: { width: config.browserViewportWidth, height: config.browserViewportHeight },
-          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
           locale: "en-US",
           timezoneId: "America/New_York",
+          ...(storageState ? { storageState } : {}),
         });
       }
 
-      // Inject stealth scripts into every new page
-      await this.context.addInitScript(STEALTH_SCRIPTS);
+      // Inject stealth scripts — but NOT when connected to user's real Chrome via CDP
+      // (stealth scripts can break sites when injected into a real profile)
+      if (this.mode !== "connect") {
+        await this.context.addInitScript(STEALTH_SCRIPTS);
+      }
     }
 
     if (!this.page || this.page.isClosed()) {
@@ -190,10 +208,12 @@ class BrowserManager {
     // getPage() will relaunch
   }
 
-  /** Connect to an existing Chrome with auto-discovery fallback */
+  /** Connect to an existing Chrome with auto-discovery fallback.
+   *  Uses ensureChromeWithCdp() from chrome-cdp.ts to guarantee CDP availability. */
   private async connectToChrome(): Promise<Browser> {
     const url = config.browserCdpUrl || "http://localhost:9222";
 
+    // First try: direct CDP discovery
     const wsEndpoint = await discoverCdpEndpoint(url);
     if (wsEndpoint) {
       log.info(`[browser] Connecting via CDP WebSocket: ${wsEndpoint}`);
@@ -202,6 +222,19 @@ class BrowserManager {
       return browser;
     }
 
+    // Second try: use chrome-cdp.ts to ensure Chrome has CDP enabled
+    try {
+      const { ensureChromeWithCdp } = await import("./chrome-cdp.js");
+      const ws = await ensureChromeWithCdp();
+      log.info(`[browser] Connected via ensureChromeWithCdp: ${ws.slice(0, 50)}...`);
+      const browser = await chromium.connectOverCDP(ws);
+      log.info("[browser] Connected to Nicolas's Chrome via CDP");
+      return browser;
+    } catch (err) {
+      log.warn(`[browser] ensureChromeWithCdp failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Fallback: launch isolated Chromium
     try {
       log.info(`[browser] Connecting via CDP URL: ${url}`);
       const browser = await chromium.connectOverCDP(url);
@@ -270,6 +303,124 @@ class BrowserManager {
     }
   }
 
+  /** Save current session state (cookies, localStorage) to disk */
+  async saveSession(): Promise<string> {
+    if (!this.context) throw new Error("No browser context to save");
+    if (!fs.existsSync(BROWSER_PROFILE_DIR)) {
+      fs.mkdirSync(BROWSER_PROFILE_DIR, { recursive: true });
+    }
+    const stateFile = path.join(BROWSER_PROFILE_DIR, "state.json");
+    await this.context.storageState({ path: stateFile });
+    log.info(`[browser] Session state saved to ${stateFile}`);
+    return stateFile;
+  }
+
+  /**
+   * Save cookies for a specific domain (useful for cf_clearance persistence).
+   * These are saved separately from the full state to allow domain-specific restoring.
+   */
+  async saveDomainCookies(domain: string): Promise<void> {
+    if (!this.context) return;
+    if (!fs.existsSync(BROWSER_PROFILE_DIR)) {
+      fs.mkdirSync(BROWSER_PROFILE_DIR, { recursive: true });
+    }
+    try {
+      const cookies = await this.context.cookies();
+      const domainCookies = cookies.filter(c =>
+        c.domain === domain || c.domain === `.${domain}` || domain.endsWith(c.domain.replace(/^\./, ''))
+      );
+      if (domainCookies.length > 0) {
+        const cookieFile = path.join(BROWSER_PROFILE_DIR, `cookies_${domain.replace(/\./g, '_')}.json`);
+        fs.writeFileSync(cookieFile, JSON.stringify(domainCookies, null, 2));
+        log.info(`[browser] Saved ${domainCookies.length} cookies for ${domain}`);
+      }
+    } catch (err) {
+      log.warn(`[browser] Failed to save domain cookies: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Restore cookies for a specific domain from saved file.
+   * Useful for restoring cf_clearance and login sessions.
+   */
+  async restoreDomainCookies(domain: string): Promise<boolean> {
+    if (!this.context) return false;
+    try {
+      const cookieFile = path.join(BROWSER_PROFILE_DIR, `cookies_${domain.replace(/\./g, '_')}.json`);
+      if (!fs.existsSync(cookieFile)) return false;
+
+      const cookies = JSON.parse(fs.readFileSync(cookieFile, 'utf-8'));
+      // Filter out expired cookies
+      const now = Date.now() / 1000;
+      const validCookies = cookies.filter((c: any) => !c.expires || c.expires > now);
+
+      if (validCookies.length > 0) {
+        await this.context.addCookies(validCookies);
+        log.info(`[browser] Restored ${validCookies.length} cookies for ${domain}`);
+        return true;
+      }
+    } catch (err) {
+      log.warn(`[browser] Failed to restore domain cookies: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return false;
+  }
+
+  /** Launch a VISIBLE browser for the user to log into sites manually.
+   *  Returns the page. Call saveSession() after user is done logging in. */
+  async launchForLogin(url?: string): Promise<Page> {
+    // Close existing browser if any
+    await this.close();
+
+    // Force visible mode
+    this.mode = "visible";
+    log.info("[browser] Launching VISIBLE browser for manual login session...");
+
+    this.server = await chromium.launchServer({
+      headless: false,
+      executablePath: config.browserChromePath || undefined,
+      args: [
+        `--window-size=1280,900`,
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--start-maximized",
+      ],
+    });
+    this.browser = await chromium.connect(this.server.wsEndpoint());
+
+    this.browser.on("disconnected", () => {
+      this.browser = null;
+      this.context = null;
+      this.page = null;
+    });
+
+    // Load existing state if available
+    let storageState: string | undefined;
+    try {
+      const stateFile = path.join(BROWSER_PROFILE_DIR, "state.json");
+      if (fs.existsSync(stateFile)) {
+        storageState = stateFile;
+        log.info("[browser] Loaded existing session state for login browser");
+      }
+    } catch { /* no state */ }
+
+    this.context = await this.browser.newContext({
+      viewport: null, // Use full window
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+      locale: "fr-CA",
+      timezoneId: "America/Toronto",
+      ...(storageState ? { storageState } : {}),
+    });
+    await this.context.addInitScript(STEALTH_SCRIPTS);
+
+    this.page = await this.context.newPage();
+    if (url) await this.page.goto(url, { waitUntil: "domcontentloaded" });
+
+    // No idle timer for login sessions
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+
+    return this.page;
+  }
+
   /** Close browser and server, full cleanup */
   async close(): Promise<void> {
     if (this.idleTimer) {
@@ -278,6 +429,78 @@ class BrowserManager {
     }
     await this.cleanup(true);
     log.info("[browser] Browser and server closed");
+  }
+
+  /**
+   * Navigate to a URL with automatic CAPTCHA detection and solving.
+   * Includes cf_clearance cookie persistence — restores saved cookies
+   * before navigation and saves new ones after solving.
+   */
+  async navigateWithCaptcha(url: string, opts?: { waitUntil?: "load" | "domcontentloaded" | "networkidle"; timeout?: number }): Promise<{ page: Page; captchaResult: any }> {
+    const page = await this.getPage();
+
+    // Try to restore cached cookies for this domain first
+    try {
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname;
+      await this.restoreDomainCookies(domain);
+    } catch {}
+
+    await page.goto(url, {
+      waitUntil: opts?.waitUntil || "domcontentloaded",
+      timeout: opts?.timeout || 30000,
+    });
+
+    // Auto-detect and solve CAPTCHAs
+    const captchaResult = await handleCaptchaIfPresent(page);
+    if (captchaResult && !captchaResult.success) {
+      log.warn(`[browser] CAPTCHA detected but solve failed: ${captchaResult.error}`);
+    }
+
+    // If CAPTCHA was solved, save the cookies (especially cf_clearance)
+    if (captchaResult?.success) {
+      try {
+        const urlObj = new URL(url);
+        await this.saveDomainCookies(urlObj.hostname);
+      } catch {}
+    }
+
+    return { page, captchaResult };
+  }
+
+  /**
+   * Find an existing tab matching a domain, or create a new one.
+   * Useful for site.act to reuse open tabs instead of creating duplicates.
+   */
+  async findOrCreateTab(domain: string, url?: string): Promise<Page> {
+    if (!this.browser || !this.browser.isConnected()) {
+      await this.getPage(); // ensure browser is up
+    }
+
+    // Search existing pages
+    if (this.context) {
+      const pages = this.context.pages();
+      for (const p of pages) {
+        try {
+          if (p.url().includes(domain)) {
+            await p.bringToFront();
+            this.resetIdleTimer();
+            return p;
+          }
+        } catch { /* page may be closed */ }
+      }
+    }
+
+    // Not found — create new tab
+    if (!this.context) {
+      await this.getPage();
+    }
+    const page = await this.context!.newPage();
+    if (url) {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    }
+    this.resetIdleTimer();
+    return page;
   }
 }
 

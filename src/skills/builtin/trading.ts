@@ -27,7 +27,10 @@ function getHeaders(): Record<string, string> {
 // ── Alpaca helpers ──
 
 async function alpacaGet(path: string, base = PAPER_URL): Promise<any> {
-  const resp = await fetch(`${base}${path}`, { headers: getHeaders() });
+  const resp = await fetch(`${base}${path}`, {
+    headers: getHeaders(),
+    signal: AbortSignal.timeout(8000),
+  });
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`Alpaca ${resp.status}: ${text}`);
@@ -1042,5 +1045,111 @@ registerSkill({
 
     lines.push("_Bon trading! 🎯_");
     return lines.join("\n");
+  },
+});
+
+// ── trading.digest ──
+
+registerSkill({
+  name: "trading.digest",
+  description: "Daily trading digest — portfolio, P&L, positions, alerts triggered, top movers. Called by noon cron. Sends summary to Nicolas via Telegram.",
+  adminOnly: true,
+  argsSchema: { type: "object", properties: {} },
+  async execute(): Promise<string> {
+    const lines: string[] = [];
+    const now = new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", day: "numeric", month: "long" });
+    lines.push(`📊 **RÉSUMÉ TRADING — ${now}**\n`);
+
+    // 1. Account
+    try {
+      const acct = await alpacaGet("/v2/account");
+      const equity = Number(acct.equity);
+      const lastEq = Number(acct.last_equity);
+      const dailyPL = equity - lastEq;
+      lines.push(`💰 Equity: $${equity.toFixed(2)} | Cash: $${Number(acct.cash).toFixed(2)}`);
+      lines.push(`📈 P&L jour: ${dailyPL >= 0 ? "+" : ""}$${dailyPL.toFixed(2)}`);
+      lines.push("");
+    } catch (e) {
+      lines.push(`Account: erreur — ${e instanceof Error ? e.message : String(e)}\n`);
+    }
+
+    // 2. Positions
+    try {
+      const positions = await alpacaGet("/v2/positions");
+      if (positions.length > 0) {
+        let totalPL = 0;
+        lines.push(`**Positions (${positions.length}):**`);
+        for (const p of positions) {
+          const pl = Number(p.unrealized_pl);
+          totalPL += pl;
+          const emoji = pl >= 0 ? "🟢" : "🔴";
+          lines.push(`${emoji} ${p.symbol} x${p.qty} — $${Number(p.current_price).toFixed(2)} (${pl >= 0 ? "+" : ""}$${pl.toFixed(2)})`);
+        }
+        lines.push(`**Total unrealized:** ${totalPL >= 0 ? "+" : ""}$${totalPL.toFixed(2)}\n`);
+      } else {
+        lines.push("Positions: aucune (100% cash)\n");
+      }
+    } catch { /* skip */ }
+
+    // 3. Today's orders
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const orders = await alpacaGet(`/v2/orders?status=closed&limit=20&after=${today}T00:00:00Z`);
+      if (orders.length > 0) {
+        lines.push(`**Trades aujourd'hui (${orders.length}):**`);
+        for (const o of orders) {
+          const emoji = o.side === "buy" ? "🟢" : "🔴";
+          const price = o.filled_avg_price ? `@$${Number(o.filled_avg_price).toFixed(2)}` : "";
+          lines.push(`${emoji} ${o.side.toUpperCase()} ${o.symbol} x${o.filled_qty} ${price}`);
+        }
+        lines.push("");
+      }
+    } catch { /* skip */ }
+
+    // 4. Buffered alerts
+    try {
+      const { flushAlertBuffer } = await import("./stocks-autonomous.js");
+      const stockAlerts = flushAlertBuffer();
+      const { flushAlertEventBuffer } = await import("./trading-alerts.js");
+      const priceAlerts = flushAlertEventBuffer();
+      const allAlerts = [...stockAlerts, ...priceAlerts];
+      if (allAlerts.length > 0) {
+        lines.push(`**Alertes (${allAlerts.length}):**`);
+        for (const a of allAlerts.slice(-10)) {
+          lines.push(`• ${a}`);
+        }
+        lines.push("");
+      }
+    } catch { /* no alerts module */ }
+
+    // 5. Market snapshot
+    try {
+      const indices = ["SPY", "QQQ", "IWM"];
+      const indexQuotes = await Promise.all(indices.map(yfQuote));
+      lines.push("**Marché:**");
+      for (const q of indexQuotes) {
+        if (!q) continue;
+        const emoji = q.changePct >= 0 ? "📈" : "📉";
+        lines.push(`${emoji} ${q.symbol}: $${q.price.toFixed(2)} (${q.changePct >= 0 ? "+" : ""}${q.changePct.toFixed(1)}%)`);
+      }
+    } catch { /* skip */ }
+
+    const digest = lines.join("\n");
+
+    // Send via Telegram
+    try {
+      const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID || "8189338836";
+      const token = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN;
+      if (token) {
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: digest }),
+          signal: AbortSignal.timeout(10_000),
+        });
+      }
+    } catch { /* send failed, still return digest */ }
+
+    return digest;
   },
 });

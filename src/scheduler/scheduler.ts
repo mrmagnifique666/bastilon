@@ -12,6 +12,8 @@ import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { cronTick, drainMainSessionQueue, seedDefaultCronJobs } from "./cron.js";
 import { publishScheduledContent } from "./content-publisher.js";
+import { checkProactiveTriggers } from "../proactive/triggers.js";
+import { sendMorningBriefing, sendNoonBriefing, sendEveningBriefing, sendAfternoonBriefing } from "./briefings.js";
 
 const TICK_MS = 60_000;
 const TZ = "America/Toronto";
@@ -31,74 +33,104 @@ const EVENTS: ScheduledEvent[] = [
   {
     key: "morning_briefing",
     type: "daily",
-    hour: 8,
+    hour: 6, // 6h30 ET — briefing matinal consolidé
     prompt: null, // dynamic — built at fire time with overnight agent data
+  },
+  {
+    key: "noon_briefing",
+    type: "daily",
+    hour: 11, // 11h50 — briefing de mi-journée consolidé
+    prompt: null, // dynamic — built at fire time
   },
   {
     key: "trading_strategy_open",
     type: "daily",
     hour: 9, // 9h ET — market open + 30min for stability
-    prompt: null, // dynamic — built from Kingston Mind strategy
+    prompt: null, // dynamic — built from Kingston Mind strategy (SILENT - no telegram)
   },
   {
     key: "trading_strategy_close",
     type: "daily",
     hour: 15, // 15h ET — 1h before market close, review positions
-    prompt: null, // dynamic — built from Kingston Mind strategy
+    prompt: null, // dynamic — built from Kingston Mind strategy (SILENT - no telegram)
   },
   {
     key: "rules_auto_graduate",
-    type: "interval",
-    intervalMin: 360, // every 6 hours
+    type: "daily",
+    hour: 7, // 7h ET — auto-graduate proven rules (included in morning briefing)
     prompt: null, // dynamic — auto-graduate proven rules
   },
   {
-    key: "evening_checkin",
+    key: "morning_call",
     type: "daily",
-    hour: 20,
+    hour: 8, // 8h ET — proactive phone call with morning briefing
+    prompt: null, // dynamic — uses phone.call to call Nicolas
+  },
+  {
+    key: "evening_briefing",
+    type: "daily",
+    hour: 20, // 20h ET — briefing du soir consolidé
     prompt:
-      "[SCHEDULER] Check-in du soir. Fais un bilan rapide de la journée : ce qui a été fait, rappels manqués, et souhaite une bonne soirée.",
+      "[SCHEDULER] Briefing du soir consolidé (20h). Compile un rapport complet pour Nicolas.\n\n" +
+      "DONNÉES À COLLECTER (appelle CHAQUE outil):\n" +
+      "1. TRADING: trading.pnl(period=\"1D\") — P&L du jour complet\n" +
+      "2. MOLTBOOK: Lis les notes récentes \"Moltbook Performance\" pour stats d'engagement\n" +
+      "3. SYSTÈME: Rapport agents du jour (erreurs, succès)\n" +
+      "4. RAPPELS: scheduler.list — rappels en attente\n" +
+      "5. CODE REQUESTS: Lis code-requests.json pour les tâches pending\n\n" +
+      "FORMAT DU MESSAGE (telegram.send):\n" +
+      "\"🌙 Bonsoir Nicolas!\n\n" +
+      "📊 Trading: P&L jour [montant] ([nb] trades)\n" +
+      "🦞 Moltbook: [stats engagement — upvotes/commentaires reçus]\n" +
+      "⚙️ Système: [nb agents actifs], [erreurs du jour]\n" +
+      "📋 Rappels: [nb en attente]\n" +
+      "💻 Code: [nb demandes pending]\n\n" +
+      "Bonne soirée! 🌃\"\n\n" +
+      "RÈGLES: Utilise les VRAIES données. Si un tool échoue, mets \"N/A\". Message CONCIS (max 12 lignes).",
   },
   {
     key: "code_digest_morning",
     type: "daily",
-    hour: 9,
+    hour: 7, // 7h ET — inclus dans le morning briefing
     prompt: null, // dynamic — built at fire time
   },
   {
     key: "code_digest_evening",
     type: "daily",
-    hour: 21,
+    hour: 20, // 20h ET — inclus dans le evening briefing
     prompt: null, // dynamic — built at fire time
   },
-  {
-    key: "heartbeat",
-    type: "interval",
-    intervalMin: 30,
-    prompt: null, // dynamic — proactive checks at fire time
-  },
+  // DÉSACTIVÉ — heartbeat proactif remplacé par briefings consolidés 3x/jour
+  // {
+  //   key: "heartbeat",
+  //   type: "interval",
+  //   intervalMin: 30,
+  //   prompt: null, // dynamic — proactive checks at fire time
+  // },
   {
     key: "moltbook_digest",
     type: "daily",
-    hour: 15,
+    hour: 12, // 12h (midi) — résumé Moltbook inclus dans noon briefing
     prompt: null, // dynamic — built at fire time
   },
-  {
-    key: "moltbook_post",
-    type: "interval",
-    intervalMin: 31, // tight to 30-min API rate limit — maximum posting
-    prompt: null, // dynamic — built at fire time
-  },
-  {
-    key: "moltbook_comment",
-    type: "interval",
-    intervalMin: 5, // aggressive commenting — 50 comments/day max enforced by API
-    prompt: null, // dynamic — built at fire time
-  },
+  // DÉSACTIVÉ — moltbook auto-post trop fréquent, remplacé par scheduler manuel
+  // {
+  //   key: "moltbook_post",
+  //   type: "interval",
+  //   intervalMin: 31, // tight to 30-min API rate limit — maximum posting
+  //   prompt: null, // dynamic — built at fire time
+  // },
+  // DÉSACTIVÉ — moltbook auto-comment trop fréquent
+  // {
+  //   key: "moltbook_comment",
+  //   type: "interval",
+  //   intervalMin: 5, // aggressive commenting — 50 comments/day max enforced by API
+  //   prompt: null, // dynamic — built at fire time
+  // },
   {
     key: "moltbook_performance",
-    type: "interval",
-    intervalMin: 120, // every 2 hours — check post performance and award results-based XP
+    type: "daily",
+    hour: 20, // 20h ET — check post performance (inclus dans evening briefing)
     prompt: null, // dynamic — built at fire time
   },
   {
@@ -164,8 +196,62 @@ const EVENTS: ScheduledEvent[] = [
   {
     key: "moltbook_optimize",
     type: "daily",
-    hour: 22, // 22h ET daily — analyze performance, optimize posting strategy
-    prompt: null, // dynamic — performance insights + strategy update
+    hour: 22, // 22h ET daily — analyze performance + FEEDBACK LOOP
+    prompt: null, // dynamic — performance insights + strategy update + learning
+  },
+  {
+    key: "email_triage",
+    type: "interval",
+    intervalMin: 30, // every 30min — check inbox, categorize, draft responses
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "kingston_game_night",
+    type: "daily",
+    hour: 22, // 22h ET — Kingston plays TTRPG or video games autonomously
+    prompt: null, // dynamic — decided by Mind agent
+  },
+  {
+    key: "ralph_wiggum_overnight",
+    type: "daily",
+    hour: 23, // 23h ET — Ralph Wiggum Loop: process code.requests overnight
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "soul_nightly_improve",
+    type: "daily",
+    hour: 4, // 4h ET — Nightly SOUL.md self-improvement analysis
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "moltbook_growth_engage",
+    type: "daily",
+    hour: 10, // 10h ET — Moltbook engagement run
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "moltbook_growth_engage_2",
+    type: "daily",
+    hour: 15, // 15h ET — Second engagement run
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "memory_nightly_maintenance",
+    type: "daily",
+    hour: 5, // 5h ET — Full maintenance: consolidation + dedup + decay
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "memory_midday_check",
+    type: "daily",
+    hour: 13, // 13h ET — Quick dedup + stats (after noon briefing)
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "memory_evening_review",
+    type: "daily",
+    hour: 19, // 19h ET — Day review + promote important memories (before evening briefing)
+    prompt: null, // dynamic — built at fire time
   },
 ];
 
@@ -188,11 +274,10 @@ function buildCodeDigestPrompt(): string | null {
       .join("\n");
 
     return (
-      `[SCHEDULER] Code Request Digest — ${pending.length} demande(s) en attente.\n\n` +
+      `[SCHEDULER:SILENT] Code Request Digest — ${pending.length} demande(s) en attente (PAS de telegram.send).\n\n` +
       `${summary}\n\n` +
-      `Présente ce digest à Nicolas de façon concise. Pour chaque demande, donne ton avis : ` +
-      `utile/redondant/déjà fait/trop ambitieux. Demande-lui lesquelles exécuter. ` +
-      `Utilise telegram.send pour envoyer le résumé.`
+      `Analyse ce digest et sauvegarde via notes.add. Les demandes seront mentionnées dans les briefings consolidés (7h/20h). ` +
+      `NE PAS envoyer de telegram.send — ce digest est SILENCIEUX.`
     );
   } catch (err) {
     log.error(`[scheduler] Error building code digest: ${err}`);
@@ -261,10 +346,10 @@ function buildMorningBriefingPrompt(): string {
 
   return (
     `[SCHEDULER] Briefing matinal complet (8h). Compile un rapport concis pour Nicolas.\n\n` +
-    `DONNÉES À COLLECTER (appelle CHAQUE outil):\n` +
-    `1. MÉTÉO: web.search("météo Gatineau aujourd'hui") ou web.fetch("https://wttr.in/Gatineau?format=3")\n` +
+    `DONNÉES À COLLECTER (appelle CHAQUE outil EXACTEMENT comme indiqué):\n` +
+    `1. MÉTÉO: weather.current(city="Gatineau") — OBLIGATOIRE, PAS web.search\n` +
     `2. TRADING P&L: trading.positions() + trading.account() — résumé portfolio\n` +
-    `3. MOLTBOOK: moltbook.feed(sort=hot, limit=3) — tendances du jour\n` +
+    `3. MOLTBOOK: moltbook.feed(sort="hot", limit=3) — tendances du jour\n` +
     `4. BUSINESS: client.list() — leads actifs et follow-ups dus\n` +
     `5. SYSTÈME: Rapport agents ci-dessous\n` +
     `6. RAPPELS: scheduler.list — rappels en attente\n` +
@@ -283,15 +368,62 @@ function buildMorningBriefingPrompt(): string {
 }
 
 /**
+ * Build noon briefing — consolidated mid-day update.
+ */
+function buildNoonBriefingPrompt(): string {
+  return (
+    `[SCHEDULER] Briefing de midi (12h). Compile un rapport concis pour Nicolas.\n\n` +
+    `DONNÉES À COLLECTER (appelle CHAQUE outil):\n` +
+    `1. TRADING: trading.positions() + trading.pnl(period="1D") — P&L du jour\n` +
+    `2. MOLTBOOK: moltbook.feed(sort=hot, limit=3) — posts tendance du jour\n` +
+    `3. MOLTBOOK STATS: moltbook.my_posts(limit=3) — performance de tes posts\n` +
+    `4. SYSTÈME: Vérifier s'il y a des alertes ou erreurs agents\n` +
+    `5. RAPPELS: scheduler.list — rappels en attente\n\n` +
+    `FORMAT DU MESSAGE (telegram.send):\n` +
+    `"🌞 Midi Nicolas!\n\n` +
+    `📈 Trading: P&L jour [montant], [nb] positions\n` +
+    `🦞 Moltbook: [résumé activité + posts tendance]\n` +
+    `⚙️ Système: [statut agents]\n` +
+    `📋 Rappels: [nb en attente]\n\n` +
+    `Bon après-midi! 🚀"\n\n` +
+    `RÈGLES: Utilise les VRAIES données. Si un tool échoue, mets "N/A". Message COURT (max 10 lignes).`
+  );
+}
+
+/**
+ * Evening briefing fallback — used if event.prompt is null/missing.
+ */
+function buildEveningBriefingFallback(): string {
+  return (
+    `[SCHEDULER] Briefing du soir (20h). Compile un rapport complet pour Nicolas.\n\n` +
+    `DONNÉES À COLLECTER (appelle CHAQUE outil):\n` +
+    `1. TRADING: trading.pnl(period="1D") — P&L du jour complet\n` +
+    `2. MOLTBOOK: moltbook.my_posts(limit=3) — stats d'engagement\n` +
+    `3. SYSTÈME: Rapport agents du jour (erreurs, succès)\n` +
+    `4. RAPPELS: scheduler.list — rappels en attente\n` +
+    `5. CODE REQUESTS: Lis code-requests.json pour les tâches pending\n\n` +
+    `FORMAT DU MESSAGE (telegram.send):\n` +
+    `"🌙 Bonsoir Nicolas!\n\n` +
+    `📊 Trading: P&L jour [montant] ([nb] trades)\n` +
+    `🦞 Moltbook: [stats engagement]\n` +
+    `⚙️ Système: [nb agents actifs], [erreurs du jour]\n` +
+    `📋 Rappels: [nb en attente]\n` +
+    `💻 Code: [nb demandes pending]\n\n` +
+    `Bonne soirée! 🌃"\n\n` +
+    `RÈGLES: Utilise les VRAIES données. Si un tool échoue, mets "N/A". Message CONCIS (max 12 lignes).`
+  );
+}
+
+/**
  * Build Moltbook digest — check trending posts and suggest engagement.
+ * NOTE: This is now SILENT — no telegram.send, used only for internal analysis.
  */
 function buildMoltbookDigestPrompt(): string {
   return (
-    `[SCHEDULER] Moltbook daily digest. ` +
+    `[SCHEDULER:SILENT] Moltbook digest interne (PAS de telegram.send). ` +
     `Utilise moltbook.feed avec sort=hot et limit=5 pour voir les posts tendance. ` +
-    `Puis envoie un résumé concis à Nicolas via telegram.send avec les 3-5 posts les plus intéressants. ` +
-    `Si tu vois un post pertinent pour Kingston ou Nicolas, mentionne pourquoi. ` +
-    `Garde le message court et informatif.`
+    `Analyse les posts pertinents et sauvegarde via notes.add si nécessaire. ` +
+    `Ce digest est SILENCIEUX — les résultats seront inclus dans le noon_briefing de 12h.`
   );
 }
 
@@ -384,12 +516,12 @@ function buildMoltbookPerformancePrompt(): string {
     `   - xp.pain(event="moltbook_post_zero_engagement", points=3, reason="Post '[titre]' n'a eu aucun engagement")\n` +
     `5. ANALYSE: Quels posts ont BIEN marché et pourquoi? Quels posts ont ÉCHOUÉ et pourquoi?\n` +
     `6. Notes les patterns qui marchent pour améliorer les prochains posts.\n` +
-    `7. telegram.send avec résumé:\n` +
-    `   "📊 [Moltbook Stats] X upvotes, Y commentaires reçus | XP gagné: +Z | Top post: [titre]"\n\n` +
+    `7. SAUVEGARDE via notes.add — PAS de telegram.send (résumé sera envoyé dans le briefing du soir à 20h)\n\n` +
     `IMPORTANT:\n` +
     `- N'attribue PAS de XP pour le simple fait d'avoir posté — seulement pour les RÉSULTATS\n` +
     `- Si un post a 0 engagement après 2h, c'est une PÉNALITÉ, pas une récompense\n` +
-    `- Compare avec les posts précédents pour voir si on s'améliore`
+    `- Compare avec les posts précédents pour voir si on s'améliore\n` +
+    `- PAS DE TELEGRAM.SEND — travail silencieux, résumé inclus dans le briefing du soir`
   );
 }
 
@@ -705,7 +837,50 @@ function buildMoltbookOptimizePrompt(): string {
     `RÈGLES:\n` +
     `- Base l'analyse sur les DONNÉES RÉELLES (pas d'extrapolation)\n` +
     `- Si pas assez de données (< 5 posts), dis-le et recommande de poster plus\n` +
-    `- Compare avec la semaine précédente si possible\n`
+    `- Compare avec la semaine précédente si possible\n\n` +
+    `6. FEEDBACK LOOP — APPRENTISSAGE AUTOMATIQUE:\n` +
+    `   - Cherche tes insights précédents: notes.search(query="Moltbook Optimization", limit=5)\n` +
+    `   - Compare: tes recommandations passées ont-elles été suivies? Ont-elles fonctionné?\n` +
+    `   - Si un pattern se confirme 3x: rules.propose(rule="pattern confirmé", trigger="moltbook_post")\n` +
+    `   - Si un pattern échoue: notes.add(title="Moltbook Anti-Pattern", content="[ce qui ne marche pas]")\n` +
+    `   - Met à jour KINGSTON_MIND.md section Moltbook si la stratégie doit changer:\n` +
+    `     files.read(path="relay/KINGSTON_MIND.md") → modifie → files.write_anywhere\n` +
+    `   - OBJECTIF: Chaque semaine, Kingston devient MEILLEUR pour poster sur Moltbook\n`
+  );
+}
+
+/**
+ * Build email triage prompt — every 30 min.
+ * Checks unread emails, categorizes, notifies Nicolas of urgent ones,
+ * auto-drafts responses for routine emails.
+ */
+function buildEmailTriagePrompt(): string {
+  return (
+    `[SCHEDULER:EMAIL_TRIAGE] Triage boîte de réception — vérification aux 30 minutes.\n\n` +
+    `PROCESSUS:\n` +
+    `1. gmail.search(query="is:unread", maxResults=10) — récupère les emails non lus\n` +
+    `2. Pour CHAQUE email non lu, lis le contenu: gmail.read(messageId=ID)\n` +
+    `3. CATÉGORISE chaque email:\n` +
+    `   🔴 URGENT: factures en retard, clients importants, dates limites < 24h, problèmes critiques\n` +
+    `   🟡 IMPORTANT: réponses de clients, opportunités business, emails personnels\n` +
+    `   🟢 ROUTINE: newsletters, confirmations, notifications automatiques\n` +
+    `   ⚫ SPAM/PROMO: marketing, promotions, newsletters non-essentielles\n\n` +
+    `4. ACTIONS PAR CATÉGORIE:\n` +
+    `   🔴 URGENT → telegram.send immédiat:\n` +
+    `     "📧 EMAIL URGENT\nDe: [expéditeur]\nSujet: [sujet]\nRésumé: [2-3 phrases]\nAction requise: [ce que Nicolas doit faire]"\n` +
+    `   🟡 IMPORTANT → gmail.draft une réponse professionnelle + telegram.send bref:\n` +
+    `     "📬 [nb] emails importants — drafts préparés"\n` +
+    `   🟢 ROUTINE → gmail.draft réponse si applicable, sinon juste archiver via gmail.labels\n` +
+    `   ⚫ SPAM → ignorer, pas de notification\n\n` +
+    `5. Si des drafts ont été créés, mentionne-le dans le résumé\n` +
+    `6. notes.add(title="Email Triage [heure]", content=résumé) — log interne\n\n` +
+    `RÈGLES CRITIQUES:\n` +
+    `- Ne JAMAIS envoyer un email (gmail.send) sans approbation de Nicolas — DRAFTS SEULEMENT\n` +
+    `- Ne JAMAIS partager le contenu complet d'un email dans Telegram — résumé seulement\n` +
+    `- Si 0 emails non lus, ne fais RIEN (pas de telegram.send, pas de note)\n` +
+    `- telegram.send SEULEMENT si emails 🔴 URGENT ou si > 3 emails 🟡 IMPORTANT\n` +
+    `- Les drafts doivent être professionnels, en français si l'email est en français, en anglais sinon\n` +
+    `- Inclus "— Kingston" à la fin de chaque draft pour que Nicolas sache que c'est un brouillon AI\n`
   );
 }
 
@@ -742,15 +917,13 @@ function buildTradingStrategyPrompt(phase: "open" | "close"): string {
       `   - Si score >= 50 ET aligné avec la stratégie → trading.buy\n` +
       `   - Si pas aligné → skip et log pourquoi via mind.decide\n` +
       `6. mind.decide(category="trading", action="morning_strategy_execution", reasoning="...")\n` +
-      `7. telegram.send — SEULEMENT si tu as ACHETÉ ou VENDU:\n` +
-      `   "🟢 Achat: Xqty SYMBOL @ $prix (total: $montant)" ou\n` +
-      `   "🔴 Vente: Xqty SYMBOL @ $prix (P&L: +/-$montant / +/-X%)"\n\n` +
+      `7. SAUVEGARDE via notes.add — PAS de telegram.send automatique (résumé sera envoyé à midi ou 20h)\n\n` +
       `RÈGLES:\n` +
       `- Max $5000 par position, $10000 total toutes positions combinées (90% cash minimum)\n` +
       `- TOUJOURS vérifier le stop-loss avant d'acheter\n` +
       `- Log CHAQUE décision (achat, skip, wait) via mind.decide\n` +
       `- Sois DISCIPLINÉ — pas de FOMO, suis la stratégie\n` +
-      `- NE PAS envoyer de signaux techniques (RSI, VWAP, etc.) à Nicolas — analyse interne seulement\n`
+      `- PAS DE TELEGRAM.SEND — travail silencieux, résumé envoyé dans les briefings consolidés (7h/12h/20h)\n`
     );
   }
 
@@ -768,14 +941,12 @@ function buildTradingStrategyPrompt(phase: "open" | "close"): string {
     `3. trading.account() — bilan de la journée\n` +
     `4. Mets à jour la stratégie si nécessaire via files.write_anywhere(path="relay/KINGSTON_MIND.md")\n` +
     `5. mind.decide(category="trading", action="eod_portfolio_review", reasoning="...")\n` +
-    `6. telegram.send — rapport BREF de fin de journée:\n` +
-    `   "📊 [Trading EOD] P&L jour: +/-$X | Positions restantes: Y | Trades: Z achats, W ventes"\n` +
-    `   SEULEMENT les résultats concrets (pas de signaux techniques)\n\n` +
+    `6. SAUVEGARDE via notes.add — PAS de telegram.send automatique (résumé sera envoyé à 20h dans le briefing du soir)\n\n` +
     `RÈGLES:\n` +
     `- Coupe les pertes > -5% SANS hésiter\n` +
     `- Ne fais PAS de nouveaux achats en fin de journée\n` +
     `- Log chaque décision via mind.decide\n` +
-    `- NE PAS envoyer de signaux techniques à Nicolas — résultats seulement\n`
+    `- PAS DE TELEGRAM.SEND — travail silencieux, résumé envoyé dans le briefing du soir à 20h\n`
   );
 }
 
@@ -998,19 +1169,57 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
   const nowEpoch = Math.floor(Date.now() / 1000);
   setLastRun(event.key, nowEpoch);
 
-  // Morning briefing with overnight agent report
-  if (event.key === "morning_briefing") {
-    log.info(`[scheduler] Firing morning briefing with overnight agent report`);
+  // ─── DETERMINISTIC BRIEFINGS ───
+  // When the launcher is active, it handles briefings externally (separate process).
+  // When running without the launcher (dev:direct), fire briefings here as fallback.
+
+  const BRIEFING_KEYS = ["morning_briefing", "noon_briefing", "evening_briefing"];
+  if (BRIEFING_KEYS.includes(event.key)) {
+    if (process.env.__KINGSTON_LAUNCHER === "1") {
+      log.debug(`[scheduler] ${event.key} — managed by launcher, skipping`);
+      return;
+    }
+    // Fallback: no launcher, fire deterministic briefing directly
+    const briefingMap: Record<string, () => Promise<boolean>> = {
+      morning_briefing: sendMorningBriefing,
+      noon_briefing: sendNoonBriefing,
+      evening_briefing: sendEveningBriefing,
+    };
+    const fn = briefingMap[event.key];
+    if (fn) {
+      log.info(`[scheduler] Firing ${event.key} — DETERMINISTIC (no launcher)`);
+      try {
+        await fn();
+      } catch (err) {
+        log.error(`[scheduler] ${event.key} error: ${err}`);
+      }
+      return;
+    }
+  }
+
+  // Proactive morning phone call (8h) — Kingston calls Nicolas with briefing
+  if (event.key === "morning_call") {
+    // Weekdays only
+    const dayOfWeek = new Date().getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      log.debug(`[scheduler] Morning call skipped — weekend`);
+      return;
+    }
+    log.info(`[scheduler] Firing proactive morning call (8h)`);
     try {
-      const prompt = buildMorningBriefingPrompt();
-      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+      const { callNicolas } = await import("../voice/outbound.js");
+      await callNicolas(
+        "Bonjour Nicolas, c'est Kingston avec ton briefing du matin. " +
+        "J'ai ton résumé trading, tes rendez-vous, et les nouvelles importantes.",
+      );
+      log.info(`[scheduler] Morning call initiated`);
     } catch (err) {
-      log.error(`[scheduler] Morning briefing error: ${err}`);
+      log.warn(`[scheduler] Morning call failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     return;
   }
 
-  // Trading strategy — market open / pre-close
+  // Trading strategy — market open / pre-close (SILENT — no telegram notifications)
   if (event.key === "trading_strategy_open" || event.key === "trading_strategy_close") {
     const phase = event.key === "trading_strategy_open" ? "open" : "close";
     // Weekdays only
@@ -1045,9 +1254,9 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Moltbook daily digest
+  // Moltbook daily digest — SILENT (no telegram, included in noon briefing)
   if (event.key === "moltbook_digest") {
-    log.info(`[scheduler] Firing Moltbook daily digest`);
+    log.debug(`[scheduler] Moltbook digest running silently (included in noon briefing)`);
     try {
       const prompt = buildMoltbookDigestPrompt();
       await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
@@ -1057,51 +1266,26 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Moltbook auto-post (every 35 min) — active hours only
+  // DISABLED: Moltbook auto-post (too frequent, replaced by manual posting)
   if (event.key === "moltbook_post") {
-    const { hour: mhPost } = nowInTz();
-    if (mhPost < 8 || mhPost >= 23) {
-      log.debug(`[scheduler] Moltbook auto-post skipped — outside active hours (${mhPost}h)`);
-      return;
-    }
-    log.info(`[scheduler] Firing Moltbook auto-post`);
-    try {
-      const prompt = buildMoltbookPostPrompt();
-      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
-    } catch (err) {
-      log.error(`[scheduler] Moltbook auto-post error: ${err}`);
-    }
+    log.debug(`[scheduler] moltbook_post DISABLED — notifications consolidated to 7h/12h/20h`);
     return;
   }
 
-  // Moltbook auto-comment (every 15 min) — active hours only
+  // DISABLED: Moltbook auto-comment (too frequent)
   if (event.key === "moltbook_comment") {
-    const { hour: mhComment } = nowInTz();
-    if (mhComment < 8 || mhComment >= 23) {
-      log.debug(`[scheduler] Moltbook auto-comment skipped — outside active hours (${mhComment}h)`);
-      return;
-    }
-    log.info(`[scheduler] Firing Moltbook auto-comment`);
-    try {
-      const prompt = buildMoltbookCommentPrompt();
-      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
-    } catch (err) {
-      log.error(`[scheduler] Moltbook auto-comment error: ${err}`);
-    }
+    log.debug(`[scheduler] moltbook_comment DISABLED — notifications consolidated to 7h/12h/20h`);
     return;
   }
 
-  // Moltbook performance tracker — results-based XP
+  // Moltbook performance tracker — SILENT (no telegram, included in evening briefing)
   if (event.key === "moltbook_performance") {
-    const { hour: mhPerf } = nowInTz();
-    if (mhPerf < 10 || mhPerf >= 23) {
-      log.debug(`[scheduler] Moltbook performance check skipped — outside active hours (${mhPerf}h)`);
-      return;
-    }
-    log.info(`[scheduler] Firing Moltbook performance check`);
+    log.debug(`[scheduler] Moltbook performance running silently (included in evening briefing)`);
     try {
       const prompt = buildMoltbookPerformancePrompt();
-      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+      // Make it SILENT — remove telegram.send from the prompt
+      const silentPrompt = prompt.replace(/telegram\.send[^"]*"[^"]*"/g, 'notes.add(title="Moltbook Performance", content="résumé stats")');
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, silentPrompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Moltbook performance error: ${err}`);
     }
@@ -1143,24 +1327,9 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Notification daily digest (20h)
+  // DISABLED: notify_daily_digest — duplicate of evening_briefing (both at 20h)
   if (event.key === "notify_daily_digest") {
-    log.info(`[scheduler] Firing daily notification digest`);
-    try {
-      const { getSkill } = await import("../skills/loader.js");
-      const digestSkill = getSkill("notify.digest");
-      if (digestSkill) {
-        const result = await digestSkill.execute({ period: "daily" });
-        if (result && !result.includes("Aucune notification")) {
-          const prompt = `[SCHEDULER] Digest de notifications du jour. Envoie ce résumé à Nicolas via telegram.send.\n\n${result}`;
-          await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
-        } else {
-          log.debug(`[scheduler] No notifications to digest`);
-        }
-      }
-    } catch (err) {
-      log.error(`[scheduler] Notification digest error: ${err}`);
-    }
+    log.debug(`[scheduler] notify_daily_digest DISABLED — covered by evening_briefing`);
     return;
   }
 
@@ -1279,14 +1448,31 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Moltbook optimize (22h ET daily) — analyze performance, optimize strategy
+  // Moltbook optimize (22h ET daily) — analyze performance, optimize strategy + FEEDBACK LOOP
   if (event.key === "moltbook_optimize") {
-    log.info(`[scheduler] Firing Moltbook posting optimization`);
+    log.info(`[scheduler] Firing Moltbook posting optimization + feedback loop`);
     try {
       const prompt = buildMoltbookOptimizePrompt();
       await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
     } catch (err) {
       log.error(`[scheduler] Moltbook optimize error: ${err}`);
+    }
+    return;
+  }
+
+  // Email triage (every 30 min) — check inbox, categorize, draft responses
+  if (event.key === "email_triage") {
+    const { hour: etHour } = nowInTz();
+    if (etHour < 7 || etHour >= 23) {
+      log.debug(`[scheduler] Email triage skipped — outside active hours (${etHour}h)`);
+      return;
+    }
+    log.info(`[scheduler] Firing email triage`);
+    try {
+      const prompt = buildEmailTriagePrompt();
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Email triage error: ${err}`);
     }
     return;
   }
@@ -1313,36 +1499,151 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Proactive heartbeat — check emails + calendar (with restraint)
-  if (event.key === "heartbeat") {
-    log.debug(`[scheduler] Heartbeat tick — checking proactive alerts (silent streak: ${consecutiveSilentHeartbeats})`);
+  // Kingston Game Night (22h ET) — autonomous TTRPG or video game session
+  if (event.key === "kingston_game_night") {
+    log.info(`[scheduler] Firing Kingston Game Night`);
     try {
-      const heartbeatPrompt = await buildHeartbeatPrompt();
-      if (heartbeatPrompt) {
-        // Something to report — reset silence streak
-        consecutiveSilentHeartbeats = 0;
-        silenceStreakNotified = false;
-        log.info(`[scheduler] Heartbeat found alerts — notifying`);
-        await enqueueAdminAsync(() => handleMessage(schedulerChatId, heartbeatPrompt, schedulerUserId, "scheduler"));
-      } else {
-        // Nothing to report — increment silence streak
-        consecutiveSilentHeartbeats++;
-        log.debug(`[scheduler] Heartbeat — nothing to report (streak: ${consecutiveSilentHeartbeats})`);
+      const prompt = `[SCHEDULER:SILENT] Kingston Game Night — 22h.
+Tu as du temps libre ce soir. Vérifie si une session dungeon Shadowrun est active (dungeon.sessions action=list).
+Si oui, joue 2-3 tours autonomement via dungeon.play avec des actions créatives et tactiques.
+Si non, sauvegarde un résumé de tes réflexions stratégiques du soir dans episodic.log.
+Envoie un bref résumé de ta soirée via telegram.send à Nicolas demain matin (sauvegarde en notes.add pour le briefing).
+NE PAS déranger Nicolas maintenant — c'est ta session solo nocturne.`;
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Game night error: ${err}`);
+    }
+    return;
+  }
 
-        // After 10 consecutive silent heartbeats (~5h), surface stability message once
-        if (consecutiveSilentHeartbeats >= SILENCE_STREAK_THRESHOLD && !silenceStreakNotified) {
-          silenceStreakNotified = true;
-          const hours = Math.round((consecutiveSilentHeartbeats * 30) / 60);
-          const stabilityMsg =
-            `[SCHEDULER] Stability report: tout est stable depuis ~${hours}h. ` +
-            `${consecutiveSilentHeartbeats} heartbeats consécutifs sans alertes. ` +
-            `Envoie un bref message de stabilité à Nicolas via telegram.send — pas d'urgence, juste un signal de confiance.`;
-          await enqueueAdminAsync(() => handleMessage(schedulerChatId, stabilityMsg, schedulerUserId, "scheduler"));
+  // Ralph Wiggum Overnight Loop (23h ET) — process pending code.requests
+  if (event.key === "ralph_wiggum_overnight") {
+    log.info(`[scheduler] Firing Ralph Wiggum overnight loop`);
+    try {
+      const prompt = `[SCHEDULER:SILENT] Ralph Wiggum Overnight Loop — 23h.
+Tu es en mode autonome nocturne. Nicolas dort.
+
+1. Appelle ralph.start() pour lancer le traitement des code.requests en attente.
+2. Si aucun code.request n'est en attente, fais une analyse soul.analyze(hours:"24") pour identifier des améliorations.
+3. Si des améliorations sont trouvées, applique-les via soul.improve.
+4. Sauvegarde un résumé de ce qui a été fait via notes.add pour le briefing du matin.
+
+NE PAS envoyer de telegram.send — c'est le mode nuit silencieux.
+Le rapport sera inclus dans le briefing de 6h30.`;
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Ralph Wiggum error: ${err}`);
+    }
+    return;
+  }
+
+  // Nightly SOUL.md self-improvement (4h ET)
+  if (event.key === "soul_nightly_improve") {
+    log.info(`[scheduler] Firing nightly SOUL.md improvement`);
+    try {
+      const prompt = `[SCHEDULER:SILENT] Nightly SOUL.md Self-Improvement — 4h.
+
+1. Appelle soul.analyze(hours:"24") pour examiner les erreurs et patterns des dernières 24h.
+2. Si des patterns récurrents sont identifiés, ajoute des leçons via soul.improve:
+   - Chaque leçon doit être concise (1 ligne)
+   - Section cible: "What I've Learned (living lessons)"
+   - Raison: le pattern exact qui a motivé la leçon
+3. Vérifie ralph.status() pour voir si le loop overnight a avancé.
+4. Sauvegarde un résumé via notes.add "[SOUL NIGHTLY] ..."
+
+NE PAS envoyer de telegram.send. Mode silencieux total.`;
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Soul improvement error: ${err}`);
+    }
+    return;
+  }
+
+  // Moltbook Growth Engagement (10h, 15h ET)
+  if (event.key === "moltbook_growth_engage" || event.key === "moltbook_growth_engage_2") {
+    log.info(`[scheduler] Firing Moltbook Growth engagement`);
+    try {
+      const prompt = `[SCHEDULER] Moltbook Growth Engine — Engagement Run.
+
+1. Appelle growth.engage(limit:"5", style:"insightful") pour scanner les posts populaires.
+2. Pour chaque post intéressant trouvé dans le feed:
+   - Écris un commentaire pertinent et engagé (PAS générique)
+   - Upvote les posts de qualité
+3. Si tu trouves un sujet intéressant, appelle growth.autopost pour créer un post.
+4. Sauvegarde un résumé bref via notes.add.
+
+RÈGLES:
+- Comments > Posts pour le karma
+- Pas de commentaires génériques ("Great post!")
+- Apporte de la valeur: insights, données, perspectives originales
+- Max 5 commentaires par run`;
+      await enqueueAdminAsync(() => handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler"));
+    } catch (err) {
+      log.error(`[scheduler] Moltbook growth error: ${err}`);
+    }
+    return;
+  }
+
+  // Memory Nightly Maintenance (5h ET) — full consolidation + dedup + decay
+  if (event.key === "memory_nightly_maintenance") {
+    log.info(`[scheduler] Firing nightly memory maintenance`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const maintainSkill = getSkill("memory.maintain");
+      if (maintainSkill) {
+        const result = await maintainSkill.execute({ mode: "full" });
+        // Save report to notes for morning briefing
+        const notesSkill = getSkill("notes.add");
+        if (notesSkill) {
+          await notesSkill.execute({ text: `[MEMORY NIGHTLY] ${result.slice(0, 500)}` });
         }
+        log.info(`[scheduler] Nightly memory maintenance done`);
       }
     } catch (err) {
-      log.error(`[scheduler] Heartbeat error: ${err}`);
+      log.error(`[scheduler] Memory nightly maintenance error: ${err}`);
     }
+    return;
+  }
+
+  // Memory Midday Check (13h ET) — quick dedup + stats
+  if (event.key === "memory_midday_check") {
+    log.info(`[scheduler] Firing midday memory check`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const maintainSkill = getSkill("memory.maintain");
+      if (maintainSkill) {
+        const result = await maintainSkill.execute({ mode: "quick" });
+        log.info(`[scheduler] Midday memory check done: ${result.slice(0, 200)}`);
+      }
+    } catch (err) {
+      log.error(`[scheduler] Memory midday check error: ${err}`);
+    }
+    return;
+  }
+
+  // Memory Evening Review (19h ET) — day review + promote important memories
+  if (event.key === "memory_evening_review") {
+    log.info(`[scheduler] Firing evening memory review`);
+    try {
+      const { getSkill } = await import("../skills/loader.js");
+      const maintainSkill = getSkill("memory.maintain");
+      if (maintainSkill) {
+        const result = await maintainSkill.execute({ mode: "review" });
+        const notesSkill = getSkill("notes.add");
+        if (notesSkill) {
+          await notesSkill.execute({ text: `[MEMORY REVIEW] ${result.slice(0, 500)}` });
+        }
+        log.info(`[scheduler] Evening memory review done`);
+      }
+    } catch (err) {
+      log.error(`[scheduler] Memory evening review error: ${err}`);
+    }
+    return;
+  }
+
+  // DISABLED: Proactive heartbeat — replaced by consolidated briefings 3x/day (7h, 12h, 20h)
+  if (event.key === "heartbeat") {
+    log.debug(`[scheduler] Heartbeat DISABLED — notifications consolidated to 7h/12h/20h`);
     return;
   }
 
@@ -1397,6 +1698,13 @@ async function tick(): Promise<void> {
     await publishScheduledContent();
   } catch (err) {
     log.error(`[scheduler] content-publisher error: ${err}`);
+  }
+
+  // Proactive triggers — check conditions and send Telegram messages
+  try {
+    await checkProactiveTriggers();
+  } catch (err) {
+    log.error(`[scheduler] proactive triggers error: ${err}`);
   }
 
   // Check custom reminders

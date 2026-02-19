@@ -1,11 +1,11 @@
 {
-  "name": "Kingston Voice",
+  "name": "Kingston Dashboard",
   "short_name": "Kingston",
-  "description": "Kingston AI — assistant vocal avec wake word",
-  "start_url": "/voice.html",
+  "description": "Kingston AI Assistant — Bastilon Platform",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0f",
-  "theme_color": "#6c8cff",
+  "background_color": "#0e0e1a",
+  "theme_color": "#d4a843",
   "orientation": "any",
   "categories": ["utilities", "productivity"],
   "icons": [

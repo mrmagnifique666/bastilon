@@ -77,6 +77,7 @@ registerSkill({
         stdio: ["ignore", "pipe", "pipe"],
         timeout: config.codeTimeout,
         cwd: config.sandboxDir,
+        windowsHide: true,
       });
 
       let stdout = "";

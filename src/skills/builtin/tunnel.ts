@@ -38,6 +38,7 @@ registerSkill({
       const proc = spawn("cloudflared", ["tunnel", "--url", `${protocol}://localhost:${port}`], {
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
+        windowsHide: true,
       });
 
       return new Promise((resolve) => {

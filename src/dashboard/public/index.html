@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bastilon OS — Dashboard</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#d4a843">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <style>
     :root {
       --bg: #0d1117;
@@ -3803,6 +3808,43 @@ window.addEventListener('hashchange', () => {
 });
 
 init();
+
+// ── PWA Service Worker + Push Notifications ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then(reg => console.log('[PWA] Service worker registered', reg.scope))
+    .catch(err => console.warn('[PWA] SW registration failed:', err));
+}
+
+async function enablePushNotifications() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const reg = await navigator.serviceWorker.ready;
+    // Check if already subscribed
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) return; // Already subscribed
+    // Get VAPID key from server
+    const resp = await fetch('/api/push/vapid-key');
+    const { key } = await resp.json();
+    if (!key) return; // No VAPID key configured
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: key
+    });
+    // Send subscription to server
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': AUTH },
+      body: JSON.stringify(sub.toJSON())
+    });
+    console.log('[PWA] Push notifications enabled');
+  } catch (e) {
+    console.warn('[PWA] Push setup failed:', e);
+  }
+}
+
+// Auto-enable push after 3 seconds (non-blocking)
+setTimeout(enablePushNotifications, 3000);
 </script>
 </body>
 </html>

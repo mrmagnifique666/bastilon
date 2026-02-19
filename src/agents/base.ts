@@ -18,6 +18,8 @@ import { broadcast } from "../dashboard/broadcast.js";
 import { emitHook } from "../hooks/hooks.js";
 import { isOllamaAvailable, runOllama } from "../llm/ollamaClient.js";
 import { config } from "../config/env.js";
+import { diagnoseFailure } from "../skills/builtin/ignorance.js";
+import { compactAgentSession, getAgentContext } from "./compaction.js";
 import {
   isClaudeRateLimited,
   getClaudeRateLimitReset,
@@ -25,6 +27,15 @@ import {
   detectAndSetRateLimit,
 } from "../llm/rateLimitState.js";
 import { getBotSendFn } from "../skills/builtin/telegram.js";
+import {
+  classifyError,
+  recordFailure,
+  shouldPenalizeAgent,
+  inferProvider,
+  isProviderHealthy,
+  type ErrorClass,
+  type FailoverProvider,
+} from "../llm/failover.js";
 
 const MAX_CONSECUTIVE_ERRORS = 5;
 
@@ -319,7 +330,13 @@ export class Agent {
     this.cycle++;
 
     if (!prompt) {
-      log.debug(`[agent:${this.id}] Cycle ${this.cycle} — skipped (no prompt)`);
+      // If onTick ran, the agent DID work — just no LLM needed
+      const didWork = !!this.onTickHook;
+      if (didWork) {
+        log.debug(`[agent:${this.id}] Cycle ${this.cycle} — onTick done (no LLM needed)`);
+      } else {
+        log.debug(`[agent:${this.id}] Cycle ${this.cycle} — skipped (no prompt)`);
+      }
       saveState(this); // persist cycle increment
       return;
     }
@@ -329,9 +346,9 @@ export class Agent {
     const startTime = Date.now();
     log.info(`[agent:${this.id}] Cycle ${this.cycle} — executing`);
 
-    // Fresh session every cycle — prevents context bloat from accumulated turns
-    clearTurns(this.chatId);
-    clearSession(this.chatId);
+    // Compact previous session instead of deleting it
+    // This gives agents memory of what they did in previous cycles
+    await compactAgentSession(this.id, this.chatId);
 
     await emitHook("agent:cycle:start", { agentId: this.id, cycle: this.cycle, chatId: this.chatId });
 
@@ -348,7 +365,13 @@ export class Agent {
       })();
 
       // Build agent prompt — anti-spam rules adapt based on active goals
-      const messageRules = hasActiveGoals
+      const notifMuted = config.agentNotificationsMuted;
+      const messageRules = notifMuted
+        ? `NOTIFICATIONS DÉSACTIVÉES (MODE SILENCIEUX):\n` +
+          `- INTERDIT d'utiliser telegram.send, telegram.voice, telegram.call — Nicolas a désactivé les notifications.\n` +
+          `- Utilise UNIQUEMENT notes.add pour TOUT: rapports, résultats, logs, réflexions.\n` +
+          `- Continue ton travail normalement mais AUCUN message Telegram.\n\n`
+        : hasActiveGoals
         ? `COMMUNICATION PENDANT GOAL (MODE ACTIF):\n` +
           `- Tu travailles sur un GOAL ACTIF — tu peux envoyer des messages à Nicolas librement.\n` +
           `- telegram.send POUR: progrès important, questions, résultats, blocages, demandes d'action.\n` +
@@ -361,9 +384,24 @@ export class Agent {
           `- telegram.send UNIQUEMENT si Nicolas DOIT AGIR (décision requise, erreur critique, opportunité urgente).\n` +
           `- Si tu n'es pas sûr → notes.add. Le doute = pas de notification.\n\n`;
 
+      // Inject compacted memory from previous cycles
+      const memoryContext = getAgentContext(this.id);
+      const memoryBlock = memoryContext
+        ? `\nCONTEXTE DES CYCLES PRÉCÉDENTS:\n${memoryContext}\n\n`
+        : "";
+
+      // Adaptive tool hints based on execution history
+      let adaptiveHints = "";
+      try {
+        const { getAdaptiveToolPrompt } = await import("../skills/adaptive-selection.js");
+        adaptiveHints = getAdaptiveToolPrompt("agent", this.id);
+      } catch { /* module not loaded yet */ }
+
       const agentPrompt =
         `[AGENT:${this.id.toUpperCase()}] (${this.name} — ${this.role})\n\n` +
+        memoryBlock +
         messageRules +
+        adaptiveHints +
         prompt;
 
       const result = await enqueueAdminAsync(() => handleMessage(this.chatId, agentPrompt, this.userId, "scheduler"));
@@ -469,16 +507,47 @@ export class Agent {
       const durationMs = Date.now() - startTime;
       this.lastError = msg;
       this.lastRunAt = Date.now();
-      this.consecutiveErrors++;
-      this.status = "error";
 
-      logRun(this.id, this.cycle, startTime, durationMs, "error", msg);
+      // --- Intelligent error classification ---
+      const errorClass = classifyError(err);
+      const provider = inferProvider(msg);
+
+      // Record failure in the centralized health tracker
+      if (provider) {
+        const enteredCooldown = recordFailure(provider, errorClass);
+        if (enteredCooldown) {
+          log.warn(`[agent:${this.id}] Provider ${provider} entered cooldown (${errorClass}) — agent will use fallbacks`);
+        }
+      }
+
+      // Only penalize the agent for errors it could have caused.
+      // Provider outages (auth, rate limit, timeout, billing, transient) are NOT the agent's fault.
+      if (shouldPenalizeAgent(errorClass)) {
+        this.consecutiveErrors++;
+        this.status = "error";
+        log.error(`[agent:${this.id}] Cycle ${this.cycle} — penalized error [${errorClass}] (${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${msg}`);
+      } else {
+        // Provider issue — don't increment error counter, just log and backoff briefly
+        this.status = "backoff";
+        log.warn(`[agent:${this.id}] Cycle ${this.cycle} — provider error [${errorClass}] (NOT penalized, consecutiveErrors stays at ${this.consecutiveErrors}): ${msg}`);
+      }
+
+      logRun(this.id, this.cycle, startTime, durationMs, `error_${errorClass}`, msg);
       saveState(this);
-      log.error(`[agent:${this.id}] Cycle ${this.cycle} — error (${this.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${msg}`);
 
-      // Auto-disable after too many consecutive errors
+      // Log ignorance: why did this agent fail?
+      try {
+        diagnoseFailure({
+          what_failed: `Agent ${this.id} (${this.name}) — cycle ${this.cycle}`,
+          error_message: msg,
+          context: `Agent ${this.id} [${errorClass}] erreur consécutive #${this.consecutiveErrors}. Role: ${this.role}. Provider: ${provider || "unknown"}`,
+          source: `agent-${this.id}`,
+        });
+      } catch { /* don't fail on logging failure */ }
+
+      // Auto-disable after too many consecutive PENALIZED errors
       if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        log.error(`[agent:${this.id}] Disabled after ${MAX_CONSECUTIVE_ERRORS} consecutive errors`);
+        log.error(`[agent:${this.id}] Disabled after ${MAX_CONSECUTIVE_ERRORS} consecutive penalized errors`);
         this.stop();
 
         // Notify admin via Telegram
@@ -486,6 +555,7 @@ export class Agent {
           const alertPrompt =
             `[AGENT:SYSTEM] L'agent ${this.name} (${this.id}) a été désactivé automatiquement après ${MAX_CONSECUTIVE_ERRORS} erreurs consécutives.\n` +
             `Dernière erreur: ${msg}\n` +
+            `Classification: ${errorClass} | Provider: ${provider || "unknown"}\n` +
             `Utilise agents.start(id="${this.id}") pour le redémarrer après investigation.\n` +
             `Envoie cette alerte à Nicolas via telegram.send.`;
           await enqueueAdminAsync(() => handleMessage(this.chatId, alertPrompt, this.userId, "scheduler"));

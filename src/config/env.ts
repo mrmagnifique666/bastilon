@@ -92,6 +92,9 @@ function buildConfig() {
     browserTimeoutMs: Number(optional("BROWSER_TIMEOUT_MS", "30000")),
     browserIdleMs: Number(optional("BROWSER_IDLE_MS", "300000")),
 
+    // CAPTCHA Solving
+    twoCaptchaApiKey: optional("TWO_CAPTCHA_API_KEY", ""),
+
     // Gmail
     gmailCredentialsPath: optional("GMAIL_CREDENTIALS_PATH", "./relay/gmail/credentials.json"),
     gmailTokenPath: optional("GMAIL_TOKEN_PATH", "./relay/gmail/token.json"),
@@ -101,6 +104,7 @@ function buildConfig() {
 
     // Printful
     printfulApiToken: optional("PRINTFUL_API_TOKEN", ""),
+    printfulStoreId: optional("PRINTFUL_STORE_ID", "17697469"),
 
     // Shopify
     shopifyStoreDomain: optional("SHOPIFY_STORE_DOMAIN", ""),
@@ -156,6 +160,9 @@ function buildConfig() {
     facebookPageAccessToken: optional("FACEBOOK_PAGE_ACCESS_TOKEN", ""),
     facebookPageId: optional("FACEBOOK_PAGE_ID", ""),
     instagramBusinessAccountId: optional("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""),
+
+    // Agent notification mute (agents run but don't send to Telegram)
+    agentNotificationsMuted: optional("AGENT_NOTIFICATIONS_MUTED", "false") === "true",
 
     // Agents
     agentScoutEnabled: optional("AGENT_SCOUT_ENABLED", "false") === "true",
@@ -219,13 +226,34 @@ export function validateEnv(): void {
   }
 }
 
-export function reloadEnv(): void {
+export function reloadEnv(): string[] {
+  const before: Record<string, string> = {};
+  for (const key of Object.keys(config) as Array<keyof typeof config>) {
+    before[key] = String(config[key]);
+  }
+
   dotenv.config({ override: true });
   try {
     Object.assign(config, buildConfig());
-    log.info("[config] Environment reloaded");
+
+    // Detect what changed
+    const changed: string[] = [];
+    for (const key of Object.keys(config) as Array<keyof typeof config>) {
+      if (String(config[key]) !== before[key]) {
+        changed.push(key);
+      }
+    }
+
+    if (changed.length > 0) {
+      log.info(`[config] Reloaded — changed: ${changed.join(", ")}`);
+    } else {
+      log.debug("[config] Reloaded — no changes");
+    }
+
+    return changed;
   } catch (err) {
-    log.warn(`[config] Reload failed (missing required var?): ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[config] Reload failed: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
   }
 }
 

@@ -8,13 +8,14 @@ import { registerSkill } from "../loader.js";
 import { config } from "../../config/env.js";
 import { getBotPhotoFn } from "./telegram.js";
 import { log } from "../../utils/log.js";
+import { uploadPath, uploadRelativePath, type UploadCategory } from "../../utils/uploads.js";
 
 const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT) || 3200;
 
 /** For dashboard/voice chatIds (< 1000), return a local URL instead of sending to Telegram. */
 function imageResultForDashboard(filePath: string, caption: string, extra: string, saved: string): string {
-  const filename = path.basename(filePath);
-  const url = `http://localhost:${DASHBOARD_PORT}/uploads/${filename}`;
+  const relPath = uploadRelativePath(filePath);
+  const url = `http://localhost:${DASHBOARD_PORT}/uploads/${relPath}`;
   return `![${caption.slice(0, 80)}](${url})${extra}${saved}`;
 }
 
@@ -44,7 +45,7 @@ function enhancePrompt(prompt: string, retryAttempt = 0): string {
   return prompt;
 }
 
-async function generateImage(prompt: string, temperature = 0.7): Promise<{ filePath: string; textResponse?: string }> {
+async function generateImage(prompt: string, temperature = 0.7, category: UploadCategory = "images"): Promise<{ filePath: string; textResponse?: string }> {
   if (!config.geminiApiKey) {
     throw new Error("GEMINI_API_KEY not configured");
   }
@@ -95,19 +96,13 @@ async function generateImage(prompt: string, temperature = 0.7): Promise<{ fileP
     throw new Error("Gemini returned no image data. Response: " + (textPart?.text || "empty").slice(0, 200));
   }
 
-  // Save image to uploads
-  const uploadsDir = path.resolve(config.uploadsDir);
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-
+  // Save image to organized uploads
   const ext = imagePart.inlineData.mimeType.includes("png") ? "png" : "jpg";
-  const filename = `generated_${Date.now()}.${ext}`;
-  const filePath = path.join(uploadsDir, filename);
+  const filePath = uploadPath(category, "generated", ext);
   const buffer = Buffer.from(imagePart.inlineData.data, "base64");
   fs.writeFileSync(filePath, buffer);
 
-  log.info(`[image] Generated ${filename} (${buffer.length} bytes, temp=${temperature})`);
+  log.info(`[image] Generated ${path.basename(filePath)} → ${category}/ (${buffer.length} bytes, temp=${temperature})`);
   return { filePath, textResponse: textPart?.text };
 }
 
@@ -117,7 +112,8 @@ async function generateImage(prompt: string, temperature = 0.7): Promise<{ fileP
  */
 async function generateImageWithRetry(
   prompt: string,
-  intendedTexts: string[]
+  intendedTexts: string[],
+  category: UploadCategory = "images"
 ): Promise<{ filePath: string; textResponse?: string; verifyWarning: string; attempts: number }> {
   let lastFilePath = "";
   let lastTextResponse: string | undefined;
@@ -127,7 +123,7 @@ async function generateImageWithRetry(
     const enhanced = enhancePrompt(prompt, attempt);
     // Lower temperature progressively on retries for more deterministic output
     const temp = attempt === 0 ? 0.7 : 0.5;
-    const result = await generateImage(enhanced, temp);
+    const result = await generateImage(enhanced, temp, category);
     lastFilePath = result.filePath;
     lastTextResponse = result.textResponse;
 
@@ -349,18 +345,12 @@ async function editImage(
     );
   }
 
-  const uploadsDir = path.resolve(config.uploadsDir);
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-
   const outExt = imagePart.inlineData.mimeType.includes("png") ? "png" : "jpg";
-  const filename = `edited_${Date.now()}.${outExt}`;
-  const filePath = path.join(uploadsDir, filename);
+  const filePath = uploadPath("edits", "edited", outExt);
   const buffer = Buffer.from(imagePart.inlineData.data, "base64");
   fs.writeFileSync(filePath, buffer);
 
-  log.info(`[image.edit] Generated ${filename} (${buffer.length} bytes)`);
+  log.info(`[image.edit] Generated ${path.basename(filePath)} → edits/ (${buffer.length} bytes)`);
   return { filePath, textResponse: textPart?.text };
 }
 
@@ -414,13 +404,12 @@ registerSkill({
         return imageResultForDashboard(filePath, prompt, extra, saved);
       }
 
-      // Real Telegram chat — send via bot
+      // Real Telegram chat — send via bot, keep file in organized dir
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
         const caption = prompt.length > 200 ? prompt.slice(0, 197) + "..." : prompt;
         await sendPhoto(chatId, filePath, caption);
-        fs.unlinkSync(filePath);
-        return `Image edited and sent to chat ${chatId}.${extra}${saved}`;
+        return `Image edited and sent to chat ${chatId}.\nSaved: ${filePath}${extra}${saved}`;
       }
 
       return `Image edited and saved to ${filePath} (bot not available to send).`;
@@ -453,7 +442,7 @@ registerSkill({
 
     try {
       const intendedTexts = extractIntendedTexts(prompt);
-      const { filePath, textResponse, verifyWarning, attempts } = await generateImageWithRetry(prompt, intendedTexts);
+      const { filePath, textResponse, verifyWarning, attempts } = await generateImageWithRetry(prompt, intendedTexts, "images");
 
       // Save a copy if requested
       if (saveTo) {
@@ -476,13 +465,12 @@ registerSkill({
         return imageResultForDashboard(filePath, prompt, extra, saved);
       }
 
-      // Real Telegram chat — send via bot
+      // Real Telegram chat — send via bot, keep file in organized dir
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
         const caption = prompt.length > 200 ? prompt.slice(0, 197) + "..." : prompt;
         await sendPhoto(chatId, filePath, caption);
-        fs.unlinkSync(filePath);
-        return `Image generated and sent to chat ${chatId}.${extra}${saved}`;
+        return `Image generated and sent to chat ${chatId}.\nSaved: ${filePath}${extra}${saved}`;
       }
 
       return `Image generated and saved to ${filePath} (bot not available to send).${verifyWarning}`;
@@ -527,7 +515,7 @@ registerSkill({
 
     try {
       const intendedTexts = [topText, bottomText].filter(Boolean);
-      const { filePath, textResponse, verifyWarning, attempts } = await generateImageWithRetry(memePrompt, intendedTexts);
+      const { filePath, textResponse, verifyWarning, attempts } = await generateImageWithRetry(memePrompt, intendedTexts, "memes");
 
       // Save a copy if requested
       if (saveTo) {
@@ -550,12 +538,11 @@ registerSkill({
         return imageResultForDashboard(filePath, memeCaption, verifyWarning + attemptsNote, saved);
       }
 
-      // Real Telegram chat — send via bot
+      // Real Telegram chat — send via bot, keep file in organized dir
       const sendPhoto = getBotPhotoFn();
       if (sendPhoto) {
         await sendPhoto(chatId, filePath, memeCaption.slice(0, 200));
-        fs.unlinkSync(filePath);
-        return `Meme generated and sent!${verifyWarning}${attemptsNote}${saved}`;
+        return `Meme generated and sent!\nSaved: ${filePath}${verifyWarning}${attemptsNote}${saved}`;
       }
 
       return `Meme saved to ${filePath} (bot not available to send).${verifyWarning}`;

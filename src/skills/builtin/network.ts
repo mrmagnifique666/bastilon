@@ -11,6 +11,7 @@ function runCommand(cmd: string, args: string[], timeout = 10000): Promise<strin
     const proc = spawn(cmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
       timeout,
+      windowsHide: true,
     });
     let out = "";
     proc.stdout.on("data", (d: Buffer) => (out += d.toString()));

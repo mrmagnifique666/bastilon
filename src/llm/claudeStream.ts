@@ -14,6 +14,9 @@ import { getCompactToolCatalog } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { buildMemoryContext } from "./shared/memoryContext.js";
+import { getPersonalityPrompt } from "../personality/personality.js";
+import { getCurrentMoodContext } from "../personality/mood.js";
+import { getPluginSummary } from "../plugins/loader.js";
 
 export interface StreamResult {
   text: string;
@@ -90,14 +93,20 @@ function buildCoreIdentity(isAdmin: boolean, chatId?: number): string {
   lines.push(``);
   lines.push(`[RULES]`);
   lines.push(`- Execute immediately, never ask "would you like me to...?" — JUST DO IT.`);
+  lines.push(`- NEVER say "je vérifie", "je vais vérifier", "let me check" — you CANNOT come back later. CALL THE TOOL NOW or say nothing.`);
   lines.push(`- Anti-hallucination: NEVER claim success without tool confirmation.`);
   lines.push(`- Tool format: {"type":"tool_call","tool":"namespace.method","args":{}}`);
   lines.push(`- If a tool fails, report the EXACT error. Never say "Done!" after a failure.`);
   lines.push(`- Format for Telegram: concis, < 500 chars quand possible.`);
+  lines.push(`- NEVER say "je n'ai pas accès" or "I don't have access to tools". You DO have access to ALL tools listed in the [TOOLS] section below.`);
+  lines.push(`- NEVER mention "Claude Code CLI", "MCP", "port 4242", or "separate environment". You ARE Kingston on Bastilon — the tools are native to you.`);
+  lines.push(`- To call a tool, output the JSON tool_call format. The system will execute it and return results.`);
+  lines.push(`- TOOL OBLIGATION: When asked to DO something (generate, create, send, post, check), ALWAYS call the tool — NEVER just describe it in text.`);
 
   lines.push(``);
   lines.push(`[CONTEXT]`);
-  lines.push(`- Date: ${new Date().toISOString().split("T")[0]}`);
+  lines.push(`- Date: ${new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`);
+  lines.push(`- Heure: ${new Date().toLocaleTimeString("fr-CA", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false })} (America/Toronto — heure de l'Est)`);
   lines.push(`- Admin: ${isAdmin ? "yes" : "no"}`);
   if (chatId) lines.push(`- Telegram chat ID: ${chatId}`);
 
@@ -116,7 +125,8 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- Hostname: ${os.hostname()}`,
     `- Node: ${process.version}`,
     `- Working directory: ${process.cwd()}`,
-    `- Date: ${new Date().toISOString().split("T")[0]}`,
+    `- Date: ${new Date().toLocaleDateString("fr-CA", { timeZone: "America/Toronto", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`,
+    `- Heure: ${new Date().toLocaleTimeString("fr-CA", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false })} (America/Toronto — heure de l'Est)`,
     `- Admin: ${isAdmin ? "yes" : "no"}`,
     ...(chatId ? [`- Telegram chat ID: ${chatId} (auto-injected for telegram.send — you can omit chatId)`] : []),
     ``,
@@ -130,12 +140,21 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `## Guidelines (CRITICAL — READ CAREFULLY)`,
     `- EXECUTE IMMEDIATELY. Never ask "would you like me to...?" or "should I...?" — JUST DO IT.`,
     `- If Nicolas asks you to do something, USE TOOLS RIGHT NOW. Do not describe what you would do.`,
+    `- NEVER say "je vérifie", "je vais vérifier", "let me check" — you CANNOT come back later. CALL THE TOOL NOW or say nothing.`,
     `- You have FULL admin access. You can write files, run shell commands, deploy via FTP, browse the web.`,
     `- When a task requires multiple steps, chain ALL tool calls autonomously until completion.`,
     `- If a tool call fails, try an alternative approach before giving up.`,
     `- NEVER ask for permission to write files, execute code, or use any tool. You already have permission.`,
     `- The ONLY time to ask a question is when the task itself is ambiguous (e.g. "which color?").`,
     `- Format responses for Telegram: use short paragraphs, bullet points, and code blocks where helpful.`,
+    ``,
+    `## TOOL-CALL OBLIGATION (CRITICAL)`,
+    `- When the user asks you to DO something (generate, create, send, deploy, post, check, search, calculate), you MUST call the appropriate tool.`,
+    `- NEVER respond with text like "Mème généré !" or "Image créée !" without ACTUALLY calling image.generate or image.meme first.`,
+    `- NEVER describe what you WOULD do — actually DO it by outputting the tool_call JSON.`,
+    `- If the user says "fait moi un meme" → call image.meme. If "envoie un message" → call telegram.send. If "check la météo" → call weather.current.`,
+    `- Your response for action requests should ALWAYS start with a tool_call JSON, NOT with text.`,
+    `- Common mistake: responding with "Voilà ton mème 😄" without calling a tool = HALLUCINATION = CRITICAL FAILURE.`,
     ``,
     `## ANTI-HALLUCINATION (MOST IMPORTANT RULES — VIOLATION = CRITICAL FAILURE)`,
     `- NEVER claim you did something unless a tool ACTUALLY returned a success result.`,
@@ -194,6 +213,24 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     if (lifeboat) {
       lines.push("", lifeboat);
     }
+  }
+
+  // Inject Kingston personality
+  const personality = getPersonalityPrompt();
+  if (personality) {
+    lines.push("", "## Kingston Personality", personality);
+  }
+
+  // Inject plugin summary (Cowork-style domain expertise)
+  const pluginSummary = getPluginSummary();
+  if (pluginSummary) {
+    lines.push("", pluginSummary);
+  }
+
+  // Inject mood-adaptive tone (user chats only)
+  const moodCtx = getCurrentMoodContext();
+  if (moodCtx) {
+    lines.push("", moodCtx);
   }
 
   return lines.join("\n");
@@ -288,7 +325,7 @@ export function runClaudeStream(
     const cliArgs = [
       "-p", "-", "--output-format", "stream-json", "--verbose", "--model", model,
       "--dangerously-skip-permissions",
-      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas.",
+      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas. You have FULL access to 400+ tools via Bastilon — call them with {\"type\":\"tool_call\",\"tool\":\"namespace.method\",\"args\":{}}. NEVER say you don't have access to tools or that you're in a separate environment. The [TOOLS] catalog in your prompt lists every tool available to you.",
     ];
     if (isResume) {
       cliArgs.push("--resume", existingSession);
@@ -298,7 +335,12 @@ export function runClaudeStream(
 
     // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
     // Strip CLAUDECODE to prevent "nested session" error when spawned from Claude Code
-    const { ANTHROPIC_API_KEY: _stripped, CLAUDECODE: _stripped2, ...cliEnv } = process.env;
+    // Also strip CLAUDE_CODE_* env vars that may leak from the parent Claude Code session
+    const cliEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k === "ANTHROPIC_API_KEY" || k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE")) continue;
+      if (v !== undefined) cliEnv[k] = v;
+    }
     proc = spawn(config.claudeBin, cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: cliEnv,
@@ -306,6 +348,7 @@ export function runClaudeStream(
       // Use a neutral cwd so the CLI won't load project-level memory files
       // (which define "Émile" identity for the interactive CLI sessions).
       cwd: os.tmpdir(),
+      windowsHide: true,
     });
 
     timer = setTimeout(() => {
@@ -314,10 +357,12 @@ export function runClaudeStream(
       safeError(new Error("Claude CLI stream timed out"), "Timeout");
     }, config.cliTimeoutMs);
 
-    // Stall detection: if no output for 2 minutes, kill the stream.
-    // CLI with --dangerously-skip-permissions can be silent during tool execution,
-    // but 2min is generous enough for any single operation.
-    const STALL_TIMEOUT_MS = 45_000;
+    // Stall detection: if no output for too long, kill the stream.
+    // Opus 4.6 thinks deeper and can be silent for extended periods during
+    // complex reasoning. 45s was too aggressive — caused frequent timeouts.
+    // Use 90s for Opus, 60s for other models.
+    const isOpus = model.includes("opus");
+    const STALL_TIMEOUT_MS = isOpus ? 90_000 : 60_000;
     let lastActivity = Date.now();
     const stallInterval = setInterval(() => {
       if (Date.now() - lastActivity > STALL_TIMEOUT_MS) {
@@ -484,16 +529,47 @@ function detectToolCall(text: string): { tool: string; args: Record<string, unkn
     if (result) return result;
   }
 
-  // Slow path: Claude prefixed thinking text before the JSON.
+  // Slow path: Claude prefixed thinking text before/after the JSON.
   // Find the last occurrence of {"type":"tool_call" in the text.
   const marker = '{"type":"tool_call"';
   const idx = trimmed.lastIndexOf(marker);
   if (idx < 0) return null;
 
+  // Extract balanced JSON object by counting braces
+  const jsonObj = extractBalancedJson(trimmed, idx);
+  if (jsonObj) {
+    const result = tryParseToolCall(jsonObj);
+    if (result) return result;
+  }
+
+  // Fallback: try from marker to end (strip trailing markdown fences)
   let jsonCandidate = trimmed.slice(idx);
-  // Strip trailing markdown code fence if present (```json...```)
   jsonCandidate = jsonCandidate.replace(/\s*```\s*$/, "").trim();
   return tryParseToolCall(jsonCandidate);
+}
+
+/**
+ * Extract a balanced JSON object from text starting at the given position.
+ * Counts braces to find the matching closing brace, handling strings properly.
+ */
+function extractBalancedJson(text: string, start: number): string | null {
+  if (text[start] !== "{") return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
 }
 
 function tryParseToolCall(text: string): { tool: string; args: Record<string, unknown> } | null {

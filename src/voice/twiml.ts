@@ -14,21 +14,23 @@ function escapeXml(s: string): string {
 }
 
 export function buildTwiml(): string {
+  // No <Say> — greeting is played immediately via the stream (pre-recorded mulaw)
+  // This eliminates the delay between Twilio's TTS and the WebSocket connection
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     "<Response>",
-    `  <Say voice="alice" language="${config.voiceLanguage === "fr" ? "fr-FR" : "en-US"}">Bonjour, je suis Kingston.</Say>`,
     `  <Connect><Stream url="${getStreamUrl()}" /></Connect>`,
     "</Response>",
   ].join("\n");
 }
 
 export function buildOutboundTwiml(reason: string): string {
+  const voice = config.voiceLanguage === "fr" ? "Polly.Mathieu" : "Polly.Matthew";
   const lang = config.voiceLanguage === "fr" ? "fr-FR" : "en-US";
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     "<Response>",
-    `  <Say voice="alice" language="${lang}">${escapeXml(reason)}</Say>`,
+    `  <Say voice="${voice}" language="${lang}">${escapeXml(reason)}</Say>`,
     '  <Pause length="1"/>',
     `  <Connect><Stream url="${getStreamUrl()}" /></Connect>`,
     "</Response>",

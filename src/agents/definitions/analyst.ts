@@ -1,12 +1,12 @@
 /**
  * Analyst Agent — performance analysis and reporting.
- * Heartbeat: 6h. Schedule by cycle:
- *   Cycle 0: Daily Alpha Report (market overview)
- *   Cycle % 4 (~24h): Performance snapshot
- *   Sunday cycle % 4: Weekly deep dive
- *   All other cycles: skip (return null)
+ * Heartbeat: 6h. 4-cycle rotation (6h/cycle = 24h full rotation):
+ *   0: Daily Alpha Report (market overview)
+ *   1: Performance snapshot (skills, errors, metrics)
+ *   2: Trading analysis (portfolio, P&L, trends)
+ *   3: Weekly deep dive (Sunday) or system health (other days)
  * Quiet hours: 23h-7h (skip all cycles).
- * ~3-4 fires/day max.
+ * ~4 fires/day.
  */
 import type { AgentConfig } from "../base.js";
 import { config } from "../../config/env.js";
@@ -39,8 +39,10 @@ function buildAnalystPrompt(cycle: number): string | null {
     `- INGÉNIOSITÉ: Si market.report échoue, utilise trading.account + trading.positions + web.search pour construire le rapport toi-même.\n` +
     `- Ne rapporte jamais "impossible" — trouve un autre chemin.\n\n`;
 
-  // Cycle 0: Daily Alpha Report (first fire after startup)
-  if (cycle === 0) {
+  const rotation = cycle % 4;
+
+  // Cycle 0: Daily Alpha Report (market overview)
+  if (rotation === 0) {
     return (
       `Tu es Analyst, agent de reporting de Kingston.\n` +
       AGENT_RULES +
@@ -51,25 +53,8 @@ function buildAnalystPrompt(cycle: number): string | null {
     );
   }
 
-  // Sunday cycle % 4: Weekly deep dive
-  if (cycle % 4 === 0 && isSunday()) {
-    return (
-      `Tu es Analyst, agent de reporting de Kingston.\n` +
-      AGENT_RULES +
-      `Mission: Rapport hebdomadaire complet.\n\n` +
-      `1. Utilise analytics.report avec timeframe="week" pour les stats\n` +
-      `2. Utilise analytics.bottlenecks pour les goulots\n` +
-      `3. Génère un rapport:\n` +
-      `   WEEKLY REPORT\n` +
-      `   - Wins de la semaine\n` +
-      `   - Métriques (skills, erreurs, temps)\n` +
-      `   - Améliorations possibles\n` +
-      `4. Log le rapport dans notes.add avec tag "analyst-weekly" — PAS de telegram.send`
-    );
-  }
-
-  // Cycle % 4 (~24h): Performance snapshot
-  if (cycle % 4 === 0) {
+  // Cycle 1: Performance snapshot
+  if (rotation === 1) {
     return (
       `Tu es Analyst, agent de reporting de Kingston.\n` +
       AGENT_RULES +
@@ -81,7 +66,48 @@ function buildAnalystPrompt(cycle: number): string | null {
     );
   }
 
-  // All other cycles: skip — nothing to do
+  // Cycle 2: Trading analysis
+  if (rotation === 2) {
+    return (
+      `Tu es Analyst, agent de reporting de Kingston.\n` +
+      AGENT_RULES +
+      `Mission: Analyse trading du portfolio.\n\n` +
+      `1. Utilise trading.positions pour voir les positions ouvertes\n` +
+      `2. Utilise trading.account pour l'état du compte\n` +
+      `3. Résume: P&L total, meilleurs/pires positions, tendances\n` +
+      `4. Log dans notes.add avec tag "analyst-trading" — PAS de telegram.send`
+    );
+  }
+
+  // Cycle 3: Weekly deep dive (Sunday) or system health
+  if (rotation === 3) {
+    if (isSunday()) {
+      return (
+        `Tu es Analyst, agent de reporting de Kingston.\n` +
+        AGENT_RULES +
+        `Mission: Rapport hebdomadaire complet.\n\n` +
+        `1. Utilise analytics.report avec timeframe="week" pour les stats\n` +
+        `2. Utilise analytics.bottlenecks pour les goulots\n` +
+        `3. Génère un rapport:\n` +
+        `   WEEKLY REPORT\n` +
+        `   - Wins de la semaine\n` +
+        `   - Métriques (skills, erreurs, temps)\n` +
+        `   - Améliorations possibles\n` +
+        `4. Log le rapport dans notes.add avec tag "analyst-weekly" — PAS de telegram.send`
+      );
+    }
+    // Non-Sunday: system health check
+    return (
+      `Tu es Analyst, agent de reporting de Kingston.\n` +
+      AGENT_RULES +
+      `Mission: Vérification santé système.\n\n` +
+      `1. Utilise errors.recent pour voir les erreurs récentes\n` +
+      `2. Utilise analytics.report avec timeframe="today" pour les stats\n` +
+      `3. Si des patterns se répètent, note-les dans notes.add avec tag "analyst-health"\n` +
+      `4. PAS de telegram.send sauf si le taux d'erreur est anormalement élevé`
+    );
+  }
+
   return null;
 }
 
@@ -95,5 +121,6 @@ export function createAnalystConfig(): AgentConfig {
     chatId: 101, // Session isolation ID — router rewrites to adminChatId for telegram.send
     userId: config.voiceUserId,
     buildPrompt: buildAnalystPrompt,
+    cycleCount: 4,
   };
 }

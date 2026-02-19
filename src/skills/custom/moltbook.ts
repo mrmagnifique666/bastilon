@@ -141,7 +141,7 @@ registerSkill({
   },
   async execute(args) {
     const body: Record<string, unknown> = {
-      submolt: args.submolt as string,
+      submolt_name: args.submolt as string,
       title: args.title as string,
     };
     if (args.content) body.content = args.content as string;
