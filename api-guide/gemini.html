@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Google Gemini API — The Real Setup Guide | Bastilon</title>
+  <meta name="description" content="How to actually get a Google Gemini API key in 2026. The real steps, not the Google Cloud maze.">
+  <link rel="icon" href="../assets/logo.png" type="image/png">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #12121a;
+      --bg3: #1a1a2e;
+      --text: #e0e0e8;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --gold: #f4c542;
+      --green: #00d2d3;
+      --red: #ff6b6b;
+      --orange: #ffa502;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        linear-gradient(rgba(108,92,231,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(108,92,231,0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 800px; margin: 0 auto; padding: 0 2rem; position: relative; z-index: 1; }
+
+    /* Header */
+    header {
+      padding: 1.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.15);
+    }
+    .header-inner {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logo {
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent2);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+    }
+    .logo span { color: var(--text2); font-weight: 400; }
+    nav a {
+      color: var(--text2);
+      text-decoration: none;
+      margin-left: 1.5rem;
+      font-size: 0.85rem;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--accent2); }
+
+    /* Guide header */
+    .guide-hero {
+      padding: 3rem 0 2rem;
+      border-bottom: 1px solid rgba(108,92,231,0.1);
+    }
+    .breadcrumb {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .breadcrumb a { color: var(--accent2); text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .guide-hero h1 {
+      font-family: var(--mono);
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--accent2), var(--green));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .guide-hero .meta {
+      display: flex;
+      gap: 2rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .difficulty-badge {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+    .diff-easy { background: rgba(0,210,211,0.1); color: var(--green); border: 1px solid rgba(0,210,211,0.2); }
+    .diff-medium { background: rgba(255,165,2,0.1); color: var(--orange); border: 1px solid rgba(255,165,2,0.2); }
+    .guide-hero .summary {
+      color: var(--text2);
+      font-size: 1rem;
+      max-width: 650px;
+    }
+
+    /* TLDR box */
+    .tldr {
+      background: rgba(0,210,211,0.05);
+      border: 1px solid rgba(0,210,211,0.15);
+      border-radius: 10px;
+      padding: 1.5rem 2rem;
+      margin: 2rem 0;
+    }
+    .tldr h3 {
+      font-family: var(--mono);
+      color: var(--green);
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    .tldr p {
+      color: var(--text2);
+      font-size: 0.9rem;
+    }
+    .tldr code {
+      background: rgba(108,92,231,0.15);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent2);
+    }
+
+    /* What you need */
+    .prereqs {
+      margin: 2rem 0;
+    }
+    .prereqs h2 {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: var(--gold);
+    }
+    .prereq-list {
+      list-style: none;
+    }
+    .prereq-list li {
+      padding: 0.4rem 0;
+      font-size: 0.9rem;
+      color: var(--text2);
+    }
+    .prereq-list li::before {
+      content: '>';
+      color: var(--green);
+      font-family: var(--mono);
+      margin-right: 0.6rem;
+      font-weight: 700;
+    }
+
+    /* Steps */
+    .steps { padding: 1rem 0 3rem; }
+    .step {
+      background: var(--bg2);
+      border: 1px solid rgba(108,92,231,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+    }
+    .step-number {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      background: var(--accent);
+      color: white;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.2rem 0.8rem;
+      border-radius: 10px;
+    }
+    .step h3 {
+      font-family: var(--mono);
+      font-size: 1rem;
+      margin-bottom: 0.8rem;
+      color: var(--text);
+    }
+    .step p {
+      color: var(--text2);
+      font-size: 0.9rem;
+      margin-bottom: 0.8rem;
+    }
+    .step p:last-child { margin-bottom: 0; }
+
+    /* Code blocks */
+    pre {
+      background: var(--bg);
+      border: 1px solid rgba(108,92,231,0.15);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      overflow-x: auto;
+      margin: 0.8rem 0;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--green);
+      line-height: 1.5;
+    }
+    code {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+    p code {
+      background: rgba(108,92,231,0.15);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      color: var(--accent2);
+    }
+
+    /* Gotcha boxes */
+    .gotcha {
+      background: rgba(255,107,107,0.05);
+      border-left: 3px solid var(--red);
+      padding: 1rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .gotcha-title {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--red);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .gotcha p {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+
+    /* Pro tip boxes */
+    .protip {
+      background: rgba(0,210,211,0.05);
+      border-left: 3px solid var(--green);
+      padding: 1rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .protip-title {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--green);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .protip p {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+
+    /* What you end up with */
+    .result {
+      background: var(--bg2);
+      border: 1px solid rgba(244,197,66,0.2);
+      border-radius: 12px;
+      padding: 2rem;
+      margin: 2rem 0;
+    }
+    .result h2 {
+      font-family: var(--mono);
+      font-size: 1rem;
+      color: var(--gold);
+      margin-bottom: 1rem;
+    }
+    .result-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.08);
+      font-size: 0.9rem;
+    }
+    .result-item:last-child { border-bottom: none; }
+    .result-key { color: var(--text2); }
+    .result-val { color: var(--green); font-family: var(--mono); }
+
+    /* Footer */
+    footer {
+      padding: 2rem 0;
+      text-align: center;
+      border-top: 1px solid rgba(108,92,231,0.1);
+      color: var(--text2);
+      font-size: 0.8rem;
+      font-family: var(--mono);
+    }
+    footer a { color: var(--accent2); text-decoration: none; }
+
+    @media (max-width: 640px) {
+      .guide-hero h1 { font-size: 1.5rem; }
+      .guide-hero .meta { flex-wrap: wrap; gap: 1rem; }
+      .step { padding: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <a href="../" class="logo">BASTILON <span>/ api-guide</span></a>
+      <nav>
+        <a href="./">All Guides</a>
+        <a href="../">Home</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<section class="guide-hero">
+  <div class="container">
+    <div class="breadcrumb"><a href="./">API Field Guide</a> / Google Gemini API</div>
+    <h1>Google Gemini API</h1>
+    <div class="meta">
+      <span class="difficulty-badge diff-medium">Medium</span>
+      <span>~10 min real time</span>
+      <span>8 steps</span>
+      <span>Verified: Feb 18, 2026</span>
+    </div>
+    <p class="summary">Get a Google Gemini API key, understand the models, send your first request. The hard part isn't the API &mdash; it's figuring out which Google dashboard you're supposed to be in.</p>
+  </div>
+</section>
+
+<div class="container">
+
+  <div class="tldr">
+    <h3>> TL;DR</h3>
+    <p>Go to <code>aistudio.google.com</code> &rarr; Sign in with Google &rarr; Click "Get API Key" &rarr; Create API key &rarr; Copy it &rarr; Use it with <code>generativelanguage.googleapis.com</code>. Free tier = 15 RPM for Flash. That's it. Don't go to Google Cloud Console unless you need billing.</p>
+  </div>
+
+  <div class="prereqs">
+    <h2>> What You Need Before Starting</h2>
+    <ul class="prereq-list">
+      <li>A Google account (Gmail works)</li>
+      <li>No credit card needed for free tier</li>
+    </ul>
+  </div>
+
+  <div class="steps">
+
+    <div class="step">
+      <span class="step-number">Step 1</span>
+      <h3>Go to Google AI Studio</h3>
+      <p>Navigate to <code>aistudio.google.com</code>. This is <strong>NOT</strong> the Google Cloud Console. They are two completely different things and this is where 90% of people get confused.</p>
+      <p>AI Studio is Google's playground for Gemini. It's where you prototype, test prompts, and &mdash; critically &mdash; generate API keys. Google Cloud Console is for production infrastructure, billing, IAM, and existential dread.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; AI STUDIO vs CLOUD CONSOLE</div>
+        <p>Two completely different dashboards. AI Studio (<code>aistudio.google.com</code>) is for quick prototyping and API keys. Cloud Console (<code>console.cloud.google.com</code>) is for production, billing, and IAM. If you're staring at a page full of "Enable APIs" and "Service Accounts," you're in the wrong place. Go back to AI Studio.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 2</span>
+      <h3>Sign in with Your Google Account</h3>
+      <p>If you have multiple Google accounts, pick carefully. The API key gets tied to whichever account you sign in with.</p>
+      <p>You can't transfer an API key to a different account later. If you want to switch, you'll need to create a brand new key under the other account.</p>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>If you're building something for a team or a project, use a dedicated Google account (like <code>myproject.api@gmail.com</code>) rather than your personal one. Makes it easier to hand off later and keeps your personal account's usage clean.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 3</span>
+      <h3>Click "Get API Key" in the Left Sidebar</h3>
+      <p>Once you're in AI Studio, look at the left sidebar. You'll see "Get API Key" &mdash; click it.</p>
+      <p>It's not in Settings. It's not in your profile. It's not behind a gear icon. It's right there in the sidebar, but somehow everyone misses it the first time because they're looking for something more complicated.</p>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 4</span>
+      <h3>Click "Create API Key"</h3>
+      <p>It will ask which Google Cloud project to associate the key with. If you don't have a project yet, no problem &mdash; just click <strong>"Create API key in new project"</strong> and it creates one automatically.</p>
+      <p>If you already have Google Cloud projects, you can pick an existing one. Doesn't matter much for the free tier.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA</div>
+        <p>The key format starts with <code>AIzaSy</code> and is 39 characters long. If your key doesn't start with <code>AIzaSy</code>, you might have accidentally generated a Cloud Console service account key (a JSON file). That's a completely different authentication mechanism. Go back to AI Studio and get the right one.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 5</span>
+      <h3>Copy the Key</h3>
+      <p>Your API key will be displayed on screen. Format: <code>AIzaSy...</code> (39 characters). <strong>Copy it NOW.</strong></p>
+      <p>You can find it again later in AI Studio under "Get API Key," but it's buried and annoying to navigate back to. Save yourself the trouble &mdash; copy it to your <code>.env</code> file immediately.</p>
+      <pre>GEMINI_API_KEY=AIzaSyD...your-key-here</pre>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>Never hardcode this key in source files. Store it in an environment variable or a <code>.env</code> file that's in your <code>.gitignore</code>. If the key leaks, go back to AI Studio, delete the key, and create a new one. Takes 30 seconds.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 6</span>
+      <h3>Test It with curl</h3>
+      <p>Send your first request to make sure the key works:</p>
+      <pre>curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"contents":[{"parts":[{"text":"Hello"}]}]}'</pre>
+      <p>You should get back a JSON response with the model's reply. If you get <code>{"error":{"code":400}}</code>, check your key. If you get <code>403</code>, your key might need billing enabled (see Step 8).</p>
+      <pre>{
+  "candidates": [{
+    "content": {
+      "parts": [{"text": "Hello! How can I help you today?"}],
+      "role": "model"
+    }
+  }]
+}</pre>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; v1 vs v1beta</div>
+        <p>The API endpoint uses <code>/v1beta/</code>, not <code>/v1/</code>. The v1beta version has more features and more models available. If you use <code>/v1/</code>, some models and features won't work. Yes, it's been "beta" for a long time. Welcome to Google.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 7</span>
+      <h3>Understand the Models</h3>
+      <p>This is where it gets messy. Google renames, removes, and adds models constantly. As of February 2026:</p>
+      <p><strong>Main models:</strong></p>
+      <p><code>gemini-2.5-flash-image</code> &mdash; Latest Flash model with image generation. Fast, cheap, capable.</p>
+      <p><code>gemini-2.0-flash</code> &mdash; Fast general-purpose model. Good for most tasks.</p>
+      <p><code>gemini-2.0-flash-exp-image-generation</code> &mdash; Experimental image generation fallback.</p>
+      <p><code>gemini-1.5-pro</code> &mdash; Best quality for complex reasoning. Slower, lower rate limits on free tier.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; MODEL NAMES CHANGE</div>
+        <p>Google removes models without much warning. <code>gemini-2.0-flash-preview-image-generation</code> was <strong>REMOVED</strong> and now returns 404. If your code suddenly starts failing, check the current model list at <code>aistudio.google.com</code> first. The model you were using yesterday might not exist today.</p>
+      </div>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>For image generation, use <code>gemini-2.5-flash-image</code> as your primary model with <code>gemini-2.0-flash-exp-image-generation</code> as a fallback. Always have a fallback &mdash; Google will deprecate your primary model eventually.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 8</span>
+      <h3>Know the Rate Limits</h3>
+      <p>Free tier rate limits are per-<strong>minute</strong>, not per-day:</p>
+      <p><strong>Flash models:</strong> 15 requests per minute (RPM). Fine for testing and personal projects. Terrible for anything with real users.</p>
+      <p><strong>Pro models:</strong> 2 requests per minute (RPM). Barely enough to test with.</p>
+      <p>If you need more, you have to enable billing in Google Cloud Console (the other dashboard). Link a billing account to your project, and the limits increase dramatically.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; 403 ERRORS</div>
+        <p>Some models require billing enabled even though there's technically a free tier. If you get a 403 "permission denied" error, it usually means you need to go to <code>console.cloud.google.com</code>, find your project, and link a billing account. You might not get charged anything, but Google needs the billing account on file.</p>
+      </div>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; PER MINUTE, NOT PER DAY</div>
+        <p>15 RPM sounds generous until you realize it's per <em>minute</em>. If your app sends a burst of 20 requests, 5 will fail. Implement rate limiting and retry logic on your end. A simple delay queue with 4-second spacing keeps you safely under 15 RPM.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="result">
+    <h2>> What You End Up With</h2>
+    <div class="result-item">
+      <span class="result-key">API Key</span>
+      <span class="result-val">AIzaSy...  (39 chars)</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Base URL</span>
+      <span class="result-val">generativelanguage.googleapis.com</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Env Variable</span>
+      <span class="result-val">GEMINI_API_KEY</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Rate Limits (Free)</span>
+      <span class="result-val">15 RPM (Flash) / 2 RPM (Pro)</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Cost</span>
+      <span class="result-val">$0 &mdash; free tier</span>
+    </div>
+  </div>
+
+  <div class="protip" style="margin-bottom: 3rem;">
+    <div class="protip-title">// REAL TALK</div>
+    <p>The Gemini API itself is straightforward once you have the key. The real complexity is Google's ecosystem: AI Studio vs Cloud Console, model names that change every month, rate limits that differ by model and tier, and the v1/v1beta split. Bookmark <code>aistudio.google.com</code> and check the model list before debugging anything &mdash; half the time, the model you're calling just got renamed or removed. The API is good. The naming and organization around it is chaos.</p>
+  </div>
+
+</div>
+
+<footer>
+  <div class="container">
+    <p>Built by <a href="../">Kingston</a> on Bastilon OS &mdash; <a href="./">Back to all guides</a></p>
+    <p style="margin-top: 0.5rem;">Last verified: February 18, 2026</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alpaca Trading API — The Real Setup Guide | Bastilon</title>
+  <meta name="description" content="How to actually set up Alpaca Trading API for paper and live trading in 2026. The real steps, not the sanitized docs.">
+  <link rel="icon" href="../assets/logo.png" type="image/png">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #12121a;
+      --bg3: #1a1a2e;
+      --text: #e0e0e8;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --gold: #f4c542;
+      --green: #00d2d3;
+      --red: #ff6b6b;
+      --orange: #ffa502;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        linear-gradient(rgba(108,92,231,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(108,92,231,0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 800px; margin: 0 auto; padding: 0 2rem; position: relative; z-index: 1; }
+
+    /* Header */
+    header {
+      padding: 1.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.15);
+    }
+    .header-inner {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logo {
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent2);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+    }
+    .logo span { color: var(--text2); font-weight: 400; }
+    nav a {
+      color: var(--text2);
+      text-decoration: none;
+      margin-left: 1.5rem;
+      font-size: 0.85rem;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--accent2); }
+
+    /* Guide header */
+    .guide-hero {
+      padding: 3rem 0 2rem;
+      border-bottom: 1px solid rgba(108,92,231,0.1);
+    }
+    .breadcrumb {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .breadcrumb a { color: var(--accent2); text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .guide-hero h1 {
+      font-family: var(--mono);
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--accent2), var(--green));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .guide-hero .meta {
+      display: flex;
+      gap: 2rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .difficulty-badge {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+    .diff-easy { background: rgba(0,210,211,0.1); color: var(--green); border: 1px solid rgba(0,210,211,0.2); }
+    .diff-medium { background: rgba(255,165,2,0.1); color: var(--orange); border: 1px solid rgba(255,165,2,0.2); }
+    .guide-hero .summary {
+      color: var(--text2);
+      font-size: 1rem;
+      max-width: 650px;
+    }
+
+    /* TLDR box */
+    .tldr {
+      background: rgba(0,210,211,0.05);
+      border: 1px solid rgba(0,210,211,0.15);
+      border-radius: 10px;
+      padding: 1.5rem 2rem;
+      margin: 2rem 0;
+    }
+    .tldr h3 {
+      font-family: var(--mono);
+      color: var(--green);
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    .tldr p {
+      color: var(--text2);
+      font-size: 0.9rem;
+    }
+    .tldr code {
+      background: rgba(108,92,231,0.15);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent2);
+    }
+
+    /* What you need */
+    .prereqs {
+      margin: 2rem 0;
+    }
+    .prereqs h2 {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: var(--gold);
+    }
+    .prereq-list {
+      list-style: none;
+    }
+    .prereq-list li {
+      padding: 0.4rem 0;
+      font-size: 0.9rem;
+      color: var(--text2);
+    }
+    .prereq-list li::before {
+      content: '>';
+      color: var(--green);
+      font-family: var(--mono);
+      margin-right: 0.6rem;
+      font-weight: 700;
+    }
+
+    /* Steps */
+    .steps { padding: 1rem 0 3rem; }
+    .step {
+      background: var(--bg2);
+      border: 1px solid rgba(108,92,231,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+    }
+    .step-number {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      background: var(--accent);
+      color: white;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.2rem 0.8rem;
+      border-radius: 10px;
+    }
+    .step h3 {
+      font-family: var(--mono);
+      font-size: 1rem;
+      margin-bottom: 0.8rem;
+      color: var(--text);
+    }
+    .step p {
+      color: var(--text2);
+      font-size: 0.9rem;
+      margin-bottom: 0.8rem;
+    }
+    .step p:last-child { margin-bottom: 0; }
+
+    /* Code blocks */
+    pre {
+      background: var(--bg);
+      border: 1px solid rgba(108,92,231,0.15);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      overflow-x: auto;
+      margin: 0.8rem 0;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--green);
+      line-height: 1.5;
+    }
+    code {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+    p code {
+      background: rgba(108,92,231,0.15);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      color: var(--accent2);
+    }
+
+    /* Gotcha boxes */
+    .gotcha {
+      background: rgba(255,107,107,0.05);
+      border-left: 3px solid var(--red);
+      padding: 1rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .gotcha-title {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--red);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .gotcha p {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+
+    /* Pro tip boxes */
+    .protip {
+      background: rgba(0,210,211,0.05);
+      border-left: 3px solid var(--green);
+      padding: 1rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .protip-title {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--green);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .protip p {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+
+    /* What you end up with */
+    .result {
+      background: var(--bg2);
+      border: 1px solid rgba(244,197,66,0.2);
+      border-radius: 12px;
+      padding: 2rem;
+      margin: 2rem 0;
+    }
+    .result h2 {
+      font-family: var(--mono);
+      font-size: 1rem;
+      color: var(--gold);
+      margin-bottom: 1rem;
+    }
+    .result-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.08);
+      font-size: 0.9rem;
+    }
+    .result-item:last-child { border-bottom: none; }
+    .result-key { color: var(--text2); }
+    .result-val { color: var(--green); font-family: var(--mono); }
+
+    /* Footer */
+    footer {
+      padding: 2rem 0;
+      text-align: center;
+      border-top: 1px solid rgba(108,92,231,0.1);
+      color: var(--text2);
+      font-size: 0.8rem;
+      font-family: var(--mono);
+    }
+    footer a { color: var(--accent2); text-decoration: none; }
+
+    @media (max-width: 640px) {
+      .guide-hero h1 { font-size: 1.5rem; }
+      .guide-hero .meta { flex-wrap: wrap; gap: 1rem; }
+      .step { padding: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <a href="../" class="logo">BASTILON <span>/ api-guide</span></a>
+      <nav>
+        <a href="./">All Guides</a>
+        <a href="../">Home</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<section class="guide-hero">
+  <div class="container">
+    <div class="breadcrumb"><a href="./">API Field Guide</a> / Alpaca Trading API</div>
+    <h1>Alpaca Trading API</h1>
+    <div class="meta">
+      <span class="difficulty-badge diff-medium">Medium</span>
+      <span>~15 min real time</span>
+      <span>10 steps</span>
+      <span>Verified: Feb 18, 2026</span>
+    </div>
+    <p class="summary">Set up Alpaca for paper trading or live stock/crypto trading. Get your API keys, test with $100K in fake money, and learn the one-character difference between paper and real money before it costs you.</p>
+  </div>
+</section>
+
+<div class="container">
+
+  <div class="tldr">
+    <h3>> TL;DR</h3>
+    <p>Sign up at <code>alpaca.markets</code> &rarr; Verify email &rarr; Go to Paper Trading dashboard &rarr; Click "View" under API Keys &rarr; Copy key and secret &rarr; Use paper URL <code>paper-api.alpaca.markets</code> for testing. DO NOT use <code>api.alpaca.markets</code> until you know what you're doing.</p>
+  </div>
+
+  <div class="prereqs">
+    <h2>> What You Need Before Starting</h2>
+    <ul class="prereq-list">
+      <li>An email address</li>
+      <li>No SSN or ID needed for paper trading &mdash; just sign up and go</li>
+      <li>Real (live) trading requires: SSN, proof of address, takes 1&ndash;3 business days to approve</li>
+      <li>A way to make HTTP requests (curl, Node.js, Python &mdash; anything)</li>
+    </ul>
+  </div>
+
+  <div class="steps">
+
+    <div class="step">
+      <span class="step-number">Step 1</span>
+      <h3>Sign Up at alpaca.markets</h3>
+      <p>Go to <code>alpaca.markets</code> and click "Sign Up". Use your real email &mdash; they verify it. You can sign up with Google or email/password.</p>
+      <p>Don't overthink it. Paper trading accounts are free, instant, and come with $100,000 in fake money.</p>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 2</span>
+      <h3>Verify Your Email</h3>
+      <p>Click the verification link in the email Alpaca sends you. Check your spam folder &mdash; it sometimes lands there, especially with Gmail.</p>
+      <p>If you signed up with Google OAuth, this step is automatic.</p>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 3</span>
+      <h3>Choose Paper Trading</h3>
+      <p>After login, you'll land on the Alpaca dashboard. Paper trading is enabled by default. You should see a toggle or dropdown at the top that says "Paper Trading" or "Live Trading".</p>
+      <p>Make sure it says <strong>Paper Trading</strong>. It comes with <code>$100,000</code> in fake money. Same API, zero risk.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; ACCOUNT STATUS</div>
+        <p>Even paper accounts have a "status" field. It should be <code>ACTIVE</code>. If it says <code>ONBOARDING</code>, wait a few minutes and refresh. It usually resolves itself. If it doesn't after 10 minutes, log out and log back in.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 4</span>
+      <h3>Find the API Keys Section</h3>
+      <p>Dashboard &rarr; left sidebar &rarr; look for "API Keys" or go to the Overview page and look for the API key section.</p>
+      <p>It's <strong>NOT in Settings</strong>. This trips people up. The API keys live on the main dashboard area, usually in a card on the Overview page or under a dedicated "API Keys" tab in the sidebar.</p>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 5</span>
+      <h3>Generate API Keys</h3>
+      <p>Click "Regenerate" or "View" to see your API key and secret.</p>
+      <p><strong>CRITICAL:</strong> The <strong>SECRET</strong> is only shown <strong>ONCE</strong>. The moment you close that dialog, it's gone. You'll need to regenerate if you lose it.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; SECRET SHOWN ONCE</div>
+        <p>We cannot stress this enough. When the modal pops up with your key and secret, <strong>copy both immediately</strong>. Paste them somewhere safe before clicking anything else. If you close that dialog without copying the secret, you have to regenerate everything and update it everywhere you've used the old key.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 6</span>
+      <h3>Copy BOTH Keys</h3>
+      <p>You need two things for every API call:</p>
+      <p><strong>1.</strong> <code>APCA-API-KEY-ID</code> &mdash; This is your API key. Looks like <code>PKxxxxxxxxxxxxxxxx</code></p>
+      <p><strong>2.</strong> <code>APCA-API-SECRET-KEY</code> &mdash; This is your secret. A long alphanumeric string.</p>
+      <p>Both are sent as HTTP headers with every request. Miss one, get a 401.</p>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 7</span>
+      <h3>Set Up Environment Variables</h3>
+      <p>Store your keys in environment variables. Never hardcode them.</p>
+      <pre>ALPACA_API_KEY=PKxxxxxxxxxxxxxxxxxxxx
+ALPACA_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ALPACA_BASE_URL=https://paper-api.alpaca.markets</pre>
+      <p>In Node.js with dotenv, in Python with python-dotenv, in your <code>.env</code> file &mdash; however your stack does it.</p>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>Add <code>.env</code> to your <code>.gitignore</code> before you do anything else. One accidental push to GitHub and your keys are public. Alpaca does monitor for leaked keys and will email you, but don't rely on it.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 8</span>
+      <h3>Test with curl</h3>
+      <p>Hit the account endpoint to verify everything works:</p>
+      <pre>curl -H "APCA-API-KEY-ID: YOUR_KEY" \
+     -H "APCA-API-SECRET-KEY: YOUR_SECRET" \
+     https://paper-api.alpaca.markets/v2/account</pre>
+      <p>You should get a JSON response with your account details:</p>
+      <pre>{
+  "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "status": "ACTIVE",
+  "currency": "USD",
+  "buying_power": "400000",
+  "portfolio_value": "100000",
+  "pattern_day_trader": false,
+  ...
+}</pre>
+      <p>If you see <code>"status": "ACTIVE"</code> and <code>"portfolio_value": "100000"</code>, you're golden.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; INVALID API KEY</div>
+        <p>If you get <code>"message": "forbidden."</code> or a 403, double-check: (1) You're using the right base URL for your account type (paper vs live). (2) You didn't mix up key and secret. (3) Your keys aren't from a different account. (4) You didn't accidentally regenerate keys and invalidate the old ones.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 9</span>
+      <h3>Understand Paper vs Live</h3>
+      <p>This is the most important step. Read it twice.</p>
+      <p><strong>Paper:</strong> <code>paper-api.alpaca.markets</code></p>
+      <p><strong>Live:</strong> <code>api.alpaca.markets</code></p>
+      <p>ONE PREFIX in your base URL is the difference between fake money and real money. That's it. Same API, same endpoints, same headers. Just the URL changes.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; PAPER vs LIVE URL</div>
+        <p>The <strong>ONLY</strong> difference is the <code>paper-</code> prefix. One typo, one wrong environment variable, one copy-paste from Stack Overflow with the live URL &mdash; and you're trading with real money. Triple-check your <code>ALPACA_BASE_URL</code>. Then check it again.</p>
+      </div>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>Use the Alpaca SDK instead of raw HTTP calls: <code>npm install @alpacahq/alpaca-trade-api</code>. The SDK lets you set paper mode with a boolean flag (<code>paper: true</code>) instead of swapping URLs manually. Much harder to mess up.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 10</span>
+      <h3>Check Market Hours</h3>
+      <p>Stocks aren't 24/7. Know your windows:</p>
+      <p><strong>Regular hours:</strong> Mon&ndash;Fri 9:30 AM &ndash; 4:00 PM ET</p>
+      <p><strong>Extended hours:</strong> 4:00 AM &ndash; 8:00 PM ET</p>
+      <p>Outside these hours, stock orders get <strong>queued</strong>, not rejected. They sit there silently until the market opens.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; QUEUED ORDERS</div>
+        <p>Orders placed outside market hours don't get rejected &mdash; they get <strong>queued</strong>. You might forget about them, and they execute Monday at 9:30 AM. Surprise! Always check your open orders before market open if you were testing over the weekend.</p>
+      </div>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; CRYPTO IS 24/7</div>
+        <p>Unlike stocks, crypto trading on Alpaca is 24/7. Different rules, different behavior. Crypto orders execute immediately, any time, any day. Don't assume stock market hours apply to crypto.</p>
+      </div>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; RATE LIMITS</div>
+        <p>Paper trading has a rate limit of <strong>200 requests per minute</strong>. Hit that ceiling and you'll get 429 errors. If you're polling every second, you'll burn through that fast. Use WebSocket streams for real-time data instead of polling.</p>
+      </div>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; API VERSION</div>
+        <p>The <code>v2</code> API is what you want. Don't use v1 endpoints &mdash; they're deprecated. Every URL should have <code>/v2/</code> in it.</p>
+      </div>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>Start with paper trading, always. $100K fake money, same API, zero risk. The WebSocket stream for real-time market data is at <code>wss://stream.data.alpaca.markets/v2/iex</code> &mdash; way better than polling the REST API.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="result">
+    <h2>> What You End Up With</h2>
+    <div class="result-item">
+      <span class="result-key">API Key ID</span>
+      <span class="result-val">PKxxxxxxxxxxxxxxxx</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Secret Key</span>
+      <span class="result-val">xxxxxxxxxxxxx (shown once!)</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Paper URL</span>
+      <span class="result-val">paper-api.alpaca.markets/v2/</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Live URL</span>
+      <span class="result-val">api.alpaca.markets/v2/</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Env Variables Needed</span>
+      <span class="result-val">ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Rate Limits</span>
+      <span class="result-val">200 req/min (paper)</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Cost</span>
+      <span class="result-val">$0 paper &mdash; $0 live (commission-free)</span>
+    </div>
+  </div>
+
+  <div class="protip" style="margin-bottom: 3rem;">
+    <div class="protip-title">// REAL TALK</div>
+    <p>Alpaca is the best brokerage API for developers, hands down. Commission-free, paper trading with the same API as live, good docs, and a Node.js SDK that actually works. The only real danger is the paper-vs-live URL thing &mdash; it's terrifyingly easy to switch between fake money and real money. Respect that. Start with paper, get comfortable, and triple-check your base URL before going live. Your wallet will thank you.</p>
+  </div>
+
+</div>
+
+<footer>
+  <div class="container">
+    <p>Built by <a href="../">Kingston</a> on Bastilon OS &mdash; <a href="./">Back to all guides</a></p>
+    <p style="margin-top: 0.5rem;">Last verified: February 18, 2026</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram Bot API — The Real Setup Guide | Bastilon</title>
+  <meta name="description" content="How to actually set up a Telegram bot in 2026. The real steps, not the sanitized docs.">
+  <link rel="icon" href="../assets/logo.png" type="image/png">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg2: #12121a;
+      --bg3: #1a1a2e;
+      --text: #e0e0e8;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --gold: #f4c542;
+      --green: #00d2d3;
+      --red: #ff6b6b;
+      --orange: #ffa502;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        linear-gradient(rgba(108,92,231,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(108,92,231,0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 800px; margin: 0 auto; padding: 0 2rem; position: relative; z-index: 1; }
+
+    /* Header */
+    header {
+      padding: 1.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.15);
+    }
+    .header-inner {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logo {
+      font-family: var(--mono);
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--accent2);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+    }
+    .logo span { color: var(--text2); font-weight: 400; }
+    nav a {
+      color: var(--text2);
+      text-decoration: none;
+      margin-left: 1.5rem;
+      font-size: 0.85rem;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--accent2); }
+
+    /* Guide header */
+    .guide-hero {
+      padding: 3rem 0 2rem;
+      border-bottom: 1px solid rgba(108,92,231,0.1);
+    }
+    .breadcrumb {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .breadcrumb a { color: var(--accent2); text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .guide-hero h1 {
+      font-family: var(--mono);
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--accent2), var(--green));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .guide-hero .meta {
+      display: flex;
+      gap: 2rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .difficulty-badge {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 10px;
+      text-transform: uppercase;
+    }
+    .diff-easy { background: rgba(0,210,211,0.1); color: var(--green); border: 1px solid rgba(0,210,211,0.2); }
+    .guide-hero .summary {
+      color: var(--text2);
+      font-size: 1rem;
+      max-width: 650px;
+    }
+
+    /* TLDR box */
+    .tldr {
+      background: rgba(0,210,211,0.05);
+      border: 1px solid rgba(0,210,211,0.15);
+      border-radius: 10px;
+      padding: 1.5rem 2rem;
+      margin: 2rem 0;
+    }
+    .tldr h3 {
+      font-family: var(--mono);
+      color: var(--green);
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    .tldr p {
+      color: var(--text2);
+      font-size: 0.9rem;
+    }
+    .tldr code {
+      background: rgba(108,92,231,0.15);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent2);
+    }
+
+    /* What you need */
+    .prereqs {
+      margin: 2rem 0;
+    }
+    .prereqs h2 {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: var(--gold);
+    }
+    .prereq-list {
+      list-style: none;
+    }
+    .prereq-list li {
+      padding: 0.4rem 0;
+      font-size: 0.9rem;
+      color: var(--text2);
+    }
+    .prereq-list li::before {
+      content: '>';
+      color: var(--green);
+      font-family: var(--mono);
+      margin-right: 0.6rem;
+      font-weight: 700;
+    }
+
+    /* Steps */
+    .steps { padding: 1rem 0 3rem; }
+    .step {
+      background: var(--bg2);
+      border: 1px solid rgba(108,92,231,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+    }
+    .step-number {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      background: var(--accent);
+      color: white;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.2rem 0.8rem;
+      border-radius: 10px;
+    }
+    .step h3 {
+      font-family: var(--mono);
+      font-size: 1rem;
+      margin-bottom: 0.8rem;
+      color: var(--text);
+    }
+    .step p {
+      color: var(--text2);
+      font-size: 0.9rem;
+      margin-bottom: 0.8rem;
+    }
+    .step p:last-child { margin-bottom: 0; }
+
+    /* Code blocks */
+    pre {
+      background: var(--bg);
+      border: 1px solid rgba(108,92,231,0.15);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      overflow-x: auto;
+      margin: 0.8rem 0;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--green);
+      line-height: 1.5;
+    }
+    code {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+    p code {
+      background: rgba(108,92,231,0.15);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      color: var(--accent2);
+    }
+
+    /* Gotcha boxes */
+    .gotcha {
+      background: rgba(255,107,107,0.05);
+      border-left: 3px solid var(--red);
+      padding: 1rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .gotcha-title {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--red);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .gotcha p {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+
+    /* Pro tip boxes */
+    .protip {
+      background: rgba(0,210,211,0.05);
+      border-left: 3px solid var(--green);
+      padding: 1rem 1.5rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .protip-title {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--green);
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .protip p {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+
+    /* What you end up with */
+    .result {
+      background: var(--bg2);
+      border: 1px solid rgba(244,197,66,0.2);
+      border-radius: 12px;
+      padding: 2rem;
+      margin: 2rem 0;
+    }
+    .result h2 {
+      font-family: var(--mono);
+      font-size: 1rem;
+      color: var(--gold);
+      margin-bottom: 1rem;
+    }
+    .result-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgba(108,92,231,0.08);
+      font-size: 0.9rem;
+    }
+    .result-item:last-child { border-bottom: none; }
+    .result-key { color: var(--text2); }
+    .result-val { color: var(--green); font-family: var(--mono); }
+
+    /* Footer */
+    footer {
+      padding: 2rem 0;
+      text-align: center;
+      border-top: 1px solid rgba(108,92,231,0.1);
+      color: var(--text2);
+      font-size: 0.8rem;
+      font-family: var(--mono);
+    }
+    footer a { color: var(--accent2); text-decoration: none; }
+
+    @media (max-width: 640px) {
+      .guide-hero h1 { font-size: 1.5rem; }
+      .guide-hero .meta { flex-wrap: wrap; gap: 1rem; }
+      .step { padding: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <a href="../" class="logo">BASTILON <span>/ api-guide</span></a>
+      <nav>
+        <a href="./">All Guides</a>
+        <a href="../">Home</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<section class="guide-hero">
+  <div class="container">
+    <div class="breadcrumb"><a href="./">API Field Guide</a> / Telegram Bot API</div>
+    <h1>Telegram Bot API</h1>
+    <div class="meta">
+      <span class="difficulty-badge diff-easy">Easy</span>
+      <span>~5 min real time</span>
+      <span>6 steps</span>
+      <span>Verified: Feb 19, 2026</span>
+    </div>
+    <p class="summary">Create a Telegram bot, get the token, send your first message. This is the simplest API to start with &mdash; BotFather makes it almost painless. Almost.</p>
+  </div>
+</section>
+
+<div class="container">
+
+  <div class="tldr">
+    <h3>> TL;DR</h3>
+    <p>Talk to <code>@BotFather</code> on Telegram &rarr; <code>/newbot</code> &rarr; pick a name &rarr; get a token like <code>1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw</code> &rarr; use it in HTTP requests to <code>api.telegram.org/bot{TOKEN}/</code>. That's it. The rest is details.</p>
+  </div>
+
+  <div class="prereqs">
+    <h2>> What You Need Before Starting</h2>
+    <ul class="prereq-list">
+      <li>A Telegram account (phone number required for signup)</li>
+      <li>The Telegram app installed (desktop or mobile, either works)</li>
+      <li>A way to make HTTP requests (curl, Node.js, Python, Postman &mdash; anything)</li>
+    </ul>
+  </div>
+
+  <div class="steps">
+
+    <div class="step">
+      <span class="step-number">Step 1</span>
+      <h3>Find BotFather</h3>
+      <p>Open Telegram and search for <code>@BotFather</code>. It's the official Telegram bot for creating bots &mdash; very meta.</p>
+      <p>Make sure you're talking to the real one: it has a blue checkmark and the username is exactly <code>@BotFather</code> (capital B, capital F). There are fake ones.</p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA</div>
+        <p>If you search "botfather" (lowercase), you might see knockoff bots. The real one is <strong>always</strong> the first result with the verified badge. If it doesn't have the badge, it's not the real one.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 2</span>
+      <h3>Create Your Bot</h3>
+      <p>Send <code>/newbot</code> to BotFather. It will ask you two things:</p>
+      <p><strong>1. Display name:</strong> This is the human-readable name users see. Can be anything, can include spaces and emoji. Example: <code>Kingston Orchestrator</code></p>
+      <p><strong>2. Username:</strong> Must end in <code>bot</code>. Must be unique across all of Telegram. No spaces. Example: <code>kingston_bastilon_bot</code></p>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA</div>
+        <p>The username must end in "bot" (case-insensitive). So <code>my_api_bot</code> works, <code>MyAPIBot</code> works, but <code>my_api</code> will be rejected. Also, if the username is taken, BotFather just says "Sorry, this username is already taken." &mdash; no suggestions. You have to guess a new one.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 3</span>
+      <h3>Get Your Token</h3>
+      <p>After you provide a valid username, BotFather immediately gives you a token. It looks like this:</p>
+      <pre>8220356435:AAGQ_0ScANDqoSS4Lhv3DhN_cl9CQ_WfStE</pre>
+      <p>The format is <code>{bot_id}:{random_string}</code>. The part before the colon is your bot's numeric ID.</p>
+      <p><strong>Copy this token immediately.</strong> You can retrieve it later with <code>/token</code> in BotFather, but save yourself the trouble.</p>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>Store this in an environment variable, never hardcode it. If your token leaks (pushed to GitHub, shared in a screenshot), anyone can control your bot. If it happens: go back to BotFather and use <code>/revoke</code> to get a new token immediately.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 4</span>
+      <h3>Find Your Chat ID</h3>
+      <p>To send a message, you need the recipient's <code>chat_id</code>. The easiest way:</p>
+      <p><strong>1.</strong> Open your bot in Telegram (search for its @username) and send it any message, like "hello".</p>
+      <p><strong>2.</strong> Call the getUpdates endpoint:</p>
+      <pre>curl https://api.telegram.org/bot{YOUR_TOKEN}/getUpdates</pre>
+      <p><strong>3.</strong> In the JSON response, look for <code>message.chat.id</code>. That number is your chat ID.</p>
+      <pre>{
+  "ok": true,
+  "result": [{
+    "message": {
+      "chat": {
+        "id": 8189338836,    // &lt;-- THIS IS YOUR CHAT ID
+        "type": "private"
+      },
+      "text": "hello"
+    }
+  }]
+}</pre>
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA</div>
+        <p>If <code>getUpdates</code> returns an empty array <code>{"ok":true,"result":[]}</code>, it means either: (1) you haven't sent any message to the bot yet, or (2) you're using webhooks, which consume the updates. Send a message to the bot first, then try again.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 5</span>
+      <h3>Send Your First Message</h3>
+      <p>Now you have the token and the chat ID. Send a message:</p>
+      <pre>curl -X POST "https://api.telegram.org/bot{TOKEN}/sendMessage" \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": YOUR_CHAT_ID, "text": "Hello from the API!"}'</pre>
+      <p>If you get <code>{"ok":true}</code> back, you're done. Your bot just sent a message.</p>
+
+      <div class="gotcha">
+        <div class="gotcha-title">// GOTCHA &mdash; UTF-8 ENCODING</div>
+        <p>If you're sending text with accented characters (French, Spanish, etc.) via curl, it might break. Curl doesn't always handle UTF-8 well depending on your terminal. Use a proper HTTP library (Node.js https module, Python requests, etc.) instead of curl for production. This one bit us hard with French text.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-number">Step 6</span>
+      <h3>Send a Photo (Bonus)</h3>
+      <p>Sending photos uses multipart/form-data, which is slightly more complex:</p>
+      <pre>curl -X POST "https://api.telegram.org/bot{TOKEN}/sendPhoto" \
+  -F "chat_id=YOUR_CHAT_ID" \
+  -F "photo=@./my_image.png" \
+  -F "caption=Check out this image!"</pre>
+      <p>Or send by URL (no upload needed):</p>
+      <pre>curl -X POST "https://api.telegram.org/bot{TOKEN}/sendPhoto" \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": YOUR_CHAT_ID, "photo": "https://example.com/image.png"}'</pre>
+      <div class="protip">
+        <div class="protip-title">// PRO TIP</div>
+        <p>Telegram caches images by URL. If you update the image at the same URL, Telegram will keep showing the old one. Add a query parameter like <code>?v=2</code> to bust the cache.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="result">
+    <h2>> What You End Up With</h2>
+    <div class="result-item">
+      <span class="result-key">Bot Token</span>
+      <span class="result-val">1234567890:AAH...saw</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Your Chat ID</span>
+      <span class="result-val">8189338836</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">API Base URL</span>
+      <span class="result-val">api.telegram.org/bot{TOKEN}/</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Env Variables Needed</span>
+      <span class="result-val">TELEGRAM_BOT_TOKEN, CHAT_ID</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Rate Limits</span>
+      <span class="result-val">~30 msg/sec to different chats</span>
+    </div>
+    <div class="result-item">
+      <span class="result-key">Cost</span>
+      <span class="result-val">$0 &mdash; forever free</span>
+    </div>
+  </div>
+
+  <div class="protip" style="margin-bottom: 3rem;">
+    <div class="protip-title">// REAL TALK</div>
+    <p>Telegram's Bot API is genuinely one of the best-documented, simplest APIs out there. If every API was this easy, this website wouldn't exist. BotFather is the gold standard that every other API provider should study. The only issues are: (1) UTF-8 in curl, (2) empty getUpdates when webhooks are set, and (3) the username uniqueness guessing game. Otherwise? Chef's kiss.</p>
+  </div>
+
+</div>
+
+<footer>
+  <div class="container">
+    <p>Built by <a href="../">Kingston</a> on Bastilon OS &mdash; <a href="./">Back to all guides</a></p>
+    <p style="margin-top: 0.5rem;">Last verified: February 19, 2026</p>
+  </div>
+</footer>
+
+</body>
+</html>
