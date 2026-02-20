@@ -757,6 +757,7 @@ async function apiAnalyticsEngagement(): Promise<unknown> {
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = new URL(req.url || "/", `http://localhost:${PORT}`);
   const pathname = url.pathname;
+  const searchParams = url.searchParams;
   const method = req.method || "GET";
 
   // CORS preflight
@@ -1683,6 +1684,20 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         updateBrowserState(!!body.active, body.wake_word as string | undefined);
       } catch (e) { log.debug(`[dashboard] Failed to update wakeword state: ${e}`); }
       return json(res, { ok: true });
+    }
+
+    // ── TTS: Warmup (pre-create WebSocket connection) ──
+    if (pathname === "/api/tts/warmup" && method === "POST") {
+      try {
+        const { warmupTTS, resolveVoice } = await import("../voice/edgeTts.js");
+        const body = await parseBody(req);
+        const voice = resolveVoice((body as any)?.voice as string | undefined);
+        await warmupTTS(voice);
+        return json(res, { ok: true });
+      } catch (err) {
+        log.debug(`[tts-warmup] Error: ${err instanceof Error ? err.message : String(err)}`);
+        return json(res, { ok: true }); // Non-critical, don't fail
+      }
     }
 
     // ── TTS: Edge TTS (free, unlimited, default) ──

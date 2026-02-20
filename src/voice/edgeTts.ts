@@ -30,8 +30,15 @@ const TTS_CACHE_TTL_MS = 5 * 60 * 1000; // Evict after 5min idle
 async function getOrCreateTTS(voice: string): Promise<any> {
   const cached = ttsCache.get(voice);
   if (cached) {
-    cached.lastUsed = Date.now();
-    return cached.tts;
+    // Validate WebSocket is still alive before reusing
+    const ws = cached.tts?._ws;
+    if (ws && (ws.readyState === ws.CLOSED || ws.readyState === ws.CLOSING)) {
+      log.debug(`[edge-tts] Cached WebSocket for ${voice} is stale (readyState=${ws.readyState}), evicting`);
+      ttsCache.delete(voice);
+    } else {
+      cached.lastUsed = Date.now();
+      return cached.tts;
+    }
   }
 
   const { MsEdgeTTS } = await import("msedge-tts");
@@ -115,6 +122,20 @@ export function resolveVoice(input?: string): string {
   // If it looks like a full voice name (contains "Neural"), use as-is
   if (input.includes("Neural") || input.includes("-")) return input;
   return DEFAULT_VOICE;
+}
+
+/**
+ * Pre-warm the TTS WebSocket connection for a given voice.
+ * Call this early (e.g. on page load) so the first real TTS request is fast and clean.
+ */
+export async function warmupTTS(voice?: string): Promise<void> {
+  const selectedVoice = voice || DEFAULT_VOICE;
+  try {
+    await getOrCreateTTS(selectedVoice);
+    log.debug(`[edge-tts] Warmed up WebSocket for ${selectedVoice}`);
+  } catch (err) {
+    log.debug(`[edge-tts] Warmup failed for ${selectedVoice}: ${err}`);
+  }
 }
 
 /**

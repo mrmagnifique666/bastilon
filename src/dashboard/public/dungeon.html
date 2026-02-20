@@ -719,14 +719,34 @@ select.input {
 .action-sub { font-size:12px; color:var(--text-dim); margin-top:4px; }
 
 /* =========================================================
+   PLAYER SETUP (intermediate page)
+   ========================================================= */
+#view-player-setup { flex-direction:column; align-items:center; padding:40px 20px; overflow-y:auto; }
+#view-player-setup .ps-container { max-width:600px; width:100%; }
+#view-player-setup h2 { margin-bottom:20px; }
+#ps-player-name { width:100%; margin-bottom:20px; font-size:16px; padding:14px 16px; }
+.ps-mode-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px; }
+.ps-mode-card {
+  background:var(--bg-card); border:2px solid var(--border);
+  border-radius:14px; padding:28px 20px; text-align:center;
+  cursor:pointer; transition:all 0.25s;
+}
+.ps-mode-card:hover { transform:translateY(-3px); border-color:var(--gold); box-shadow:0 4px 24px rgba(212,168,67,0.2); }
+.ps-mode-card.selected { border-color:var(--gold); background:rgba(212,168,67,0.08); box-shadow:0 0 20px rgba(212,168,67,0.15); }
+.ps-mode-icon { font-size:48px; margin-bottom:10px; }
+.ps-mode-label { font-family:'Cinzel',serif; font-size:17px; font-weight:700; color:var(--gold-light); }
+.ps-mode-sub { font-size:12px; color:var(--text-dim); margin-top:4px; }
+#ps-ai-options { margin-bottom:20px; }
+#ps-ai-options .input { margin-bottom:8px; }
+#ps-start-btn { width:100%; font-size:16px; padding:14px 36px; }
+#ps-start-btn:disabled { opacity:0.4; cursor:not-allowed; }
+
+/* =========================================================
    CHAR CREATE STANDALONE VIEW
    ========================================================= */
 #view-char-create { flex-direction:column; align-items:center; overflow-y:auto; padding:20px; }
 .cc-mode-header { display:flex; align-items:center; gap:16px; margin-bottom:16px; width:100%; }
 .cc-mode-header h2 { flex:1; }
-.cc-owner-toggle { display:flex; gap:8px; margin-bottom:16px; }
-.cc-owner-toggle .btn.active-toggle { background:var(--gold); color:#0e0e1a; }
-.cc-owner-toggle .btn:not(.active-toggle) { background:rgba(255,255,255,0.04); color:var(--text-dim); border:1px solid var(--border); }
 
 /* =========================================================
    ROSTER VIEW
@@ -798,30 +818,31 @@ select.input {
   <a href="/" class="btn btn-ghost" style="margin-top:16px;font-size:12px;">&larr; Dashboard</a>
 </div>
 
-<!-- ===== CHARACTER CREATION (Standalone) ===== -->
-<div class="view" id="view-char-create">
-  <div style="max-width:900px;width:100%;margin:0 auto;padding:20px;">
-    <!-- Header -->
-    <div class="cc-mode-header">
-      <button class="btn btn-ghost" onclick="showLanding()">&larr; Retour</button>
-      <h2 class="cinzel" id="cc-system-title">Creer un Personnage</h2>
+<!-- ===== PLAYER SETUP (Intermediate) ===== -->
+<div class="view" id="view-player-setup">
+  <div class="ps-container">
+    <button class="btn btn-ghost" onclick="showLanding()">&larr; Retour</button>
+    <h2 class="cinzel" id="ps-title">Creer un Personnage</h2>
+
+    <input class="input" id="ps-player-name" placeholder="Votre nom..." autofocus>
+
+    <div class="ps-mode-grid">
+      <div class="ps-mode-card selected" id="ps-human-card" onclick="psSelectMode('human')">
+        <div class="ps-mode-icon">&#129489;</div>
+        <div class="ps-mode-label">Joueur Humain</div>
+        <div class="ps-mode-sub">Vous creez votre personnage</div>
+      </div>
+      <div class="ps-mode-card" id="ps-ai-card" onclick="psSelectMode('kingston')">
+        <div class="ps-mode-icon">&#129302;</div>
+        <div class="ps-mode-label">Kingston (IA)</div>
+        <div class="ps-mode-sub">L'IA cree un personnage</div>
+      </div>
     </div>
 
-    <!-- Toggle: Human vs Kingston -->
-    <div class="cc-owner-toggle">
-      <button class="btn active-toggle" id="cc-human-btn" onclick="setCCOwner('human')">&#129489; Joueur Humain</button>
-      <button class="btn" id="cc-ai-btn" onclick="setCCOwner('kingston')">&#129302; Kingston (IA)</button>
-    </div>
-
-    <!-- Human: name input -->
-    <div id="cc-human-section">
-      <input class="input" id="cc-owner-name" placeholder="Nom du joueur..." style="width:100%;margin-bottom:12px;">
-    </div>
-
-    <!-- Kingston AI: personality + voice config -->
-    <div id="cc-ai-section" style="display:none;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-        <select class="input" id="cc-ai-personality">
+    <!-- AI options (hidden by default) -->
+    <div id="ps-ai-options" style="display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <select class="input" id="ps-ai-personality">
           <option value="tactical">Tactique</option>
           <option value="reckless">Temeraire</option>
           <option value="cautious">Prudent</option>
@@ -831,7 +852,7 @@ select.input {
           <option value="wise">Sage</option>
           <option value="aggressive">Agressif</option>
         </select>
-        <select class="input" id="cc-ai-voice">
+        <select class="input" id="ps-ai-voice">
           <option value="fr-male">Remy (Homme FR)</option>
           <option value="fr-female">Denise (Femme FR)</option>
           <option value="en-male">Guy (Homme EN)</option>
@@ -840,6 +861,19 @@ select.input {
           <option value="fr-claude">Claude (Homme FR)</option>
         </select>
       </div>
+    </div>
+
+    <button class="btn btn-gold" id="ps-start-btn" onclick="confirmPlayerSetup()">Commencer la Creation</button>
+  </div>
+</div>
+
+<!-- ===== CHARACTER CREATION (Standalone) ===== -->
+<div class="view" id="view-char-create">
+  <div style="max-width:900px;width:100%;margin:0 auto;padding:20px;">
+    <!-- Header -->
+    <div class="cc-mode-header">
+      <button class="btn btn-ghost" onclick="showView('player-setup')">&larr; Retour</button>
+      <h2 class="cinzel" id="cc-system-title">Creer un Personnage</h2>
     </div>
 
     <!-- Chat + Sheet layout -->
@@ -1240,74 +1274,93 @@ function showGame() { showView('game'); renderGame(); if (micAlwaysOn) ensureMic
    ============================================================= */
 let ccGameSystem = 'dnd5e';    // current game system for standalone char creation
 let ccOwnerMode = 'human';     // 'human' or 'kingston'
+let ccPlayerName = '';         // player name from setup page
 let rosterGameSystem = 'dnd5e';
 let selectedRosterIds = [];
 
-// ── Standalone Character Creation ──
+// ── Player Setup (intermediate page) ──
 function startCharCreate(gameSystem) {
   ccGameSystem = gameSystem || 'dnd5e';
   ccOwnerMode = 'human';
+  ccPlayerName = '';
+  // Update title on setup page
+  const psTitle = document.getElementById('ps-title');
+  if (psTitle) psTitle.textContent = gameSystem === 'shadowrun' ? 'Creer un Runner Shadowrun' : 'Creer un Personnage D&D';
+  // Reset setup page state
+  const nameInput = document.getElementById('ps-player-name');
+  if (nameInput) nameInput.value = '';
+  psSelectMode('human');
+  showView('player-setup');
+}
+
+function psSelectMode(mode) {
+  ccOwnerMode = mode;
+  const humanCard = document.getElementById('ps-human-card');
+  const aiCard = document.getElementById('ps-ai-card');
+  const aiOpts = document.getElementById('ps-ai-options');
+  if (mode === 'human') {
+    humanCard.classList.add('selected'); aiCard.classList.remove('selected');
+    if (aiOpts) aiOpts.style.display = 'none';
+  } else {
+    aiCard.classList.add('selected'); humanCard.classList.remove('selected');
+    if (aiOpts) aiOpts.style.display = '';
+  }
+}
+
+function confirmPlayerSetup() {
+  const nameInput = document.getElementById('ps-player-name');
+  const name = nameInput ? nameInput.value.trim() : '';
+  if (!name && ccOwnerMode === 'human') {
+    nameInput.focus();
+    nameInput.style.borderColor = '#ff4444';
+    setTimeout(() => nameInput.style.borderColor = '', 2000);
+    toast('Entrez votre nom avant de continuer!');
+    return;
+  }
+  ccPlayerName = name || 'Kingston';
+
+  // Prepare char-create view
   ccChat = [];
   ccBusy = false;
-  ccIsAI = false;
+  ccIsAI = ccOwnerMode === 'kingston';
   window._standaloneSheet = null;
-  // Reset UI
+  window._lastSavedSheetName = null;
+  // Update title
   const title = document.getElementById('cc-system-title');
-  if (title) title.textContent = gameSystem === 'shadowrun' ? 'Creer un Runner Shadowrun' : 'Creer un Personnage D&D';
+  if (title) title.textContent = ccGameSystem === 'shadowrun' ? 'Creer un Runner Shadowrun' : 'Creer un Personnage D&D';
   // Reset sheet display
   const sheetEl = document.getElementById('sa-cc-sheet-display');
   if (sheetEl) sheetEl.innerHTML = '<div class="sheet-title">Fiche de Personnage</div><span style="color:var(--text-muted);font-style:italic;font-family:system-ui;">En attente de creation...</span>';
   const valBtn = document.getElementById('sa-cc-validate-btn');
   if (valBtn) valBtn.style.display = 'none';
-  // Show view
+
+  // Show char-create
   showView('char-create');
-  // Reset owner toggle and start conversation
-  setCCOwner('human');
+
+  // Configure input area visibility
+  const inputArea = document.getElementById('sa-cc-input-area');
+  if (inputArea) inputArea.style.display = ccOwnerMode === 'human' ? '' : 'none';
+
+  // Start conversation
+  if (ccOwnerMode === 'human') {
+    ccInitStandalone();
+  } else {
+    ccStartAIStandalone();
+  }
+
   // Fetch roster (for dedup)
   fetchSavedRoster().catch(() => {});
   // Auto-activate mic
   if (micAlwaysOn) ensureMicOn();
 }
 
-function setCCOwner(mode) {
-  ccOwnerMode = mode;
-  const humanBtn = document.getElementById('cc-human-btn');
-  const aiBtn = document.getElementById('cc-ai-btn');
-  const humanSec = document.getElementById('cc-human-section');
-  const aiSec = document.getElementById('cc-ai-section');
-  const inputArea = document.getElementById('sa-cc-input-area');
-  if (mode === 'human') {
-    humanBtn.classList.add('active-toggle'); aiBtn.classList.remove('active-toggle');
-    if (humanSec) humanSec.style.display = '';
-    if (aiSec) aiSec.style.display = 'none';
-    if (inputArea) inputArea.style.display = '';
-  } else {
-    aiBtn.classList.add('active-toggle'); humanBtn.classList.remove('active-toggle');
-    if (humanSec) humanSec.style.display = 'none';
-    if (aiSec) aiSec.style.display = '';
-    if (inputArea) inputArea.style.display = 'none';
-  }
-  // Reset chat and sheet
-  ccChat = [];
-  window._standaloneSheet = null;
-  renderStandaloneCCChat();
-  const sheetEl = document.getElementById('sa-cc-sheet-display');
-  if (sheetEl) sheetEl.innerHTML = '<div class="sheet-title">Fiche de Personnage</div><span style="color:var(--text-muted);font-style:italic;font-family:system-ui;">En attente de creation...</span>';
-  const valBtn = document.getElementById('sa-cc-validate-btn');
-  if (valBtn) valBtn.style.display = 'none';
-  // Auto-start conversation
-  if (mode === 'human') {
-    ccInitStandalone();
-  } else {
-    ccStartAIStandalone();
-  }
-}
+// setCCOwner is now handled by player-setup page (psSelectMode + confirmPlayerSetup)
 
 async function ccInitStandalone() {
   ccChat = [];
   ccIsAI = false;
   renderStandaloneCCChat();
-  const ownerName = document.getElementById('cc-owner-name')?.value?.trim() || 'Joueur';
+  const ownerName = ccPlayerName || 'Joueur';
   const tempUniverse = ccGameSystem === 'shadowrun' ? 'shadowrun' : 'fantasy';
   ccBusy = true;
   saAddTyping();
@@ -1405,8 +1458,8 @@ async function ccStartAIStandalone() {
   ccBusy = true;
   renderCCChat();
 
-  const personality = document.getElementById('cc-ai-personality')?.value || 'tactical';
-  const voice = document.getElementById('cc-ai-voice')?.value || 'fr-male';
+  const personality = document.getElementById('ps-ai-personality')?.value || 'tactical';
+  const voice = document.getElementById('ps-ai-voice')?.value || 'fr-male';
   const universe = ccGameSystem === 'shadowrun' ? 'shadowrun' : 'fantasy';
   const isSR = ccGameSystem === 'shadowrun';
   const personalityLabel = AI_PERSONALITY_LABELS[personality] || personality;
@@ -1424,68 +1477,129 @@ async function ccStartAIStandalone() {
   const hook = diversityHooks[Math.floor(Math.random() * diversityHooks.length)];
 
   const dmSystem = isSR ?
-    `Tu es un Game Master Shadowrun bienveillant. Tu aides ${aiName} a creer son runner. Pose des questions pour comprendre les motivations et le style du joueur. Sois chaleureux, enthousiaste, en francais. UNE question a la fois, 2-3 phrases max.` :
-    `Tu es un Dungeon Master D&D 5e bienveillant. Tu aides ${aiName} a creer son personnage pour une campagne fantasy. Pose des questions pour comprendre les motivations et le style du joueur. Sois chaleureux, en francais. UNE question a la fois, 2-3 phrases max.`;
+    `Tu es un Game Master Shadowrun bienveillant et methodique. Tu aides ${aiName} a creer son runner.
+IMPORTANT: Tu dois couvrir TOUS ces aspects en posant UNE question a la fois:
+1. Quel type de runner (role: Street Sam, Decker, Mage, Shaman, Rigger, Face, Adept, Technomancer)
+2. Metatype (Humain, Elf, Nain, Ork, Troll)
+3. Background et personnalite — nom de rue, d'ou il vient
+4. Competences et cyberware preferes
+5. Motivations et contacts
+Sois chaleureux, enthousiaste, en francais. UNE question a la fois, 2-3 phrases max. Ne propose PAS de fiche avant d'avoir couvert tous les points.` :
+    `Tu es un Dungeon Master D&D 5e bienveillant et methodique. Tu aides ${aiName} a creer son personnage.
+IMPORTANT: Tu dois couvrir TOUS ces aspects en posant UNE question a la fois:
+1. Race (Humain, Elfe, Nain, Halfelin, Tieflin, Demi-Orc, etc.)
+2. Classe (Guerrier, Mage, Voleur, Clerc, Ranger, Paladin, Barde, etc.)
+3. Nom du personnage et background/historique
+4. Personnalite, traits, ideal et defaut
+5. Equipement prefere et style de combat
+Sois chaleureux, en francais. UNE question a la fois, 2-3 phrases max. Ne propose PAS de fiche avant d'avoir couvert tous les points.`;
 
   const aiSystem = isSR ?
-    `Tu es ${aiName}. Personnalite: ${personalityLabel}. Tu es un joueur qui cree son runner Shadowrun.
-Inspiration secrete: ${hook}. Tu reponds au Maitre du Donjon avec enthousiasme et en restant IN CHARACTER. Reponds en 2-4 phrases max, en francais, a la premiere personne.` :
-    `Tu es ${aiName}. Personnalite: ${personalityLabel}. Tu es un joueur qui cree son personnage D&D 5e pour une campagne fantasy.
-Inspiration secrete: ${hook}. Tu reponds au Maitre du Donjon avec enthousiasme et en restant IN CHARACTER. Reponds en 2-4 phrases max, en francais, a la premiere personne.`;
+    `Tu es ${aiName}. Personnalite: ${personalityLabel}. Tu es un joueur passionne qui cree son runner Shadowrun.
+Inspiration secrete: ${hook}. Tu reponds au Maitre du Donjon avec enthousiasme et en restant IN CHARACTER.
+IMPORTANT: Donne des reponses CONCRETES et SPECIFIQUES (noms, lieux, details precis). Reponds en 2-4 phrases max, en francais, a la premiere personne.` :
+    `Tu es ${aiName}. Personnalite: ${personalityLabel}. Tu es un joueur passionne qui cree son personnage D&D 5e pour une campagne fantasy.
+Inspiration secrete: ${hook}. Tu reponds au Maitre du Donjon avec enthousiasme et en restant IN CHARACTER.
+IMPORTANT: Donne des reponses CONCRETES et SPECIFIQUES (noms, lieux, details precis). Reponds en 2-4 phrases max, en francais, a la premiere personne.`;
 
   const sheetFormat = isSR ?
-    'Format: NOM, METATYPE, ROLE, HISTORIQUE, BODY/AGI/REA/FOR/VOL/LOG/INT/CHA, EDGE, ESSENCE, PV_PHYSIQUE, PV_STUN, COMPETENCES, CYBERWARE, EQUIPEMENT, CONTACTS, TRAITS, DEFAUT, MOTIVATION.' :
-    'Format: NOM, RACE, CLASSE, HISTORIQUE, FOR/DEX/CON/INT/SAG/CHA, PV, CA, MAITRISES, EQUIPEMENT, TRAITS, DEFAUT, LIEN, IDEAL.';
+    `CHAQUE champ doit etre rempli avec des valeurs concretes, PAS de placeholder.
+Format EXACT entre [FICHE] et [/FICHE]:
+NOM: (nom complet + nom de rue)
+METATYPE: (un metatype precis)
+ROLE: (un role precis)
+HISTORIQUE: (2-3 phrases)
+BODY: X  AGI: X  REA: X  FOR: X
+VOL: X  LOG: X  INT: X  CHA: X
+EDGE: X  ESSENCE: X.X
+PV_PHYSIQUE: XX  PV_STUN: XX
+COMPETENCES: (liste de 5-8 competences avec scores, ex: Hacking 6, Armes a Feu 5)
+CYBERWARE: (liste ou "Aucun")
+EQUIPEMENT: (liste de 4-6 items)
+CONTACTS: (2-3 contacts avec nom et loyaute)
+TRAITS: (2-3 traits de personnalite)
+DEFAUT: (un defaut concret)
+MOTIVATION: (ce qui pousse le runner)` :
+    `CHAQUE champ doit etre rempli avec des valeurs concretes, PAS de placeholder.
+Format EXACT entre [FICHE] et [/FICHE]:
+NOM: (un nom complet de personnage)
+RACE: (une race precis)
+CLASSE: (une classe precis, Niveau 1)
+HISTORIQUE: (2-3 phrases de background)
+FOR: XX (+Y)  DEX: XX (+Y)  CON: XX (+Y)
+INT: XX (+Y)  SAG: XX (+Y)  CHA: XX (+Y)
+PV: XX   CA: XX   Initiative: +Y
+MAITRISES: (liste de 4-6 maitrises)
+EQUIPEMENT: (liste de 4-6 items concrets)
+TRAITS: (2-3 traits de personnalite)
+DEFAUT: (un defaut concret)
+LIEN: (ce qui motive le personnage)
+IDEAL: (une valeur fondamentale)`;
+
+  // DM question prompts — guide the conversation through all aspects
+  const dmQuestionPrompts = isSR ? [
+    `Accueille ${aiName} chaleureusement et demande-lui quel TYPE de runner il aimerait jouer (Street Samurai, Decker, Mage, Shaman, Rigger, Face, Adept, Technomancer). Propose des descriptions inspirantes.`,
+    `${aiName} a choisi son role. Reagis avec enthousiasme! Maintenant demande-lui quel METATYPE il veut (Humain, Elf, Nain, Ork, Troll) et comment il imagine son apparence.`,
+    `Super choix! Demande a ${aiName} son NOM DE RUE et d'ou vient son runner — quel est son PASSE, comment il est arrive dans les ombres?`,
+    `Fascinant! Demande maintenant quelles COMPETENCES et quel CYBERWARE (ou magie) il voudrait — quel est son style de combat et ses outils preferes?`,
+    `Excellent! Derniere question: quels sont ses CONTACTS dans les ombres et quelle est sa MOTIVATION profonde — pourquoi court-il les ombres?`
+  ] : [
+    `Accueille ${aiName} chaleureusement et demande-lui quelle RACE il aimerait jouer (Humain, Elfe, Nain, Halfelin, Tieflin, Demi-Orc, Gnome, Draconien...). Propose des descriptions inspirantes.`,
+    `${aiName} a choisi sa race. Reagis avec enthousiasme! Maintenant demande-lui quelle CLASSE il veut jouer (Guerrier, Mage, Voleur, Clerc, Ranger, Paladin, Barde, Druide, Sorcier, Barbare, Moine, Artificier...).`,
+    `Super choix! Demande a ${aiName} le NOM de son personnage et son HISTORIQUE — d'ou vient-il, quel est son passe avant l'aventure?`,
+    `Fascinant! Demande maintenant ses TRAITS de personnalite, son IDEAL et son plus grand DEFAUT — qu'est-ce qui le rend unique?`,
+    `Excellent! Derniere question: quel EQUIPEMENT prefere-t-il et quel est son STYLE de combat? Epee et bouclier? Magie a distance? Furtivite?`
+  ];
+
+  const aiResponsePrompts = [
+    `Le DM dit: "DMTEXT"\nReponds avec passion. Ton inspiration secrete: ${hook}. Fais un choix CONCRET et explique pourquoi.`,
+    `Le DM dit: "DMTEXT"\nFais ton choix avec enthousiasme! Donne des DETAILS PRECIS sur ton personnage.`,
+    `Le DM dit: "DMTEXT"\nInvente un NOM original et un PASSE detaille et specifique pour ton personnage.`,
+    `Le DM dit: "DMTEXT"\nDecris ta PERSONNALITE avec des details concrets — donne des exemples de comportement.`,
+    `Le DM dit: "DMTEXT"\nDecris ton EQUIPEMENT reve et ton style de combat prefere avec precision.`
+  ];
 
   // Use aiCCMessages for rendering in the standalone view
   aiCCMessages = [];
   const dmHistory = [];
   const aiHistory = [];
+  const convoLog = [];
 
   try {
-    // DM greets
-    dmHistory.push({role:'user', content: `Accueille ${aiName} et pose ta premiere question pour comprendre quel type de personnage l'attire.`});
-    const dmGreet = await narrateLLM(dmSystem, dmHistory);
-    dmHistory.push({role:'assistant', content: dmGreet});
-    aiCCMessages.push({role:'dm', content: dmGreet});
-    renderStandaloneAIChat(aiName, color);
-    await speakText(dmGreet);
+    // Run 5 rounds of DM question → AI answer
+    for (let round = 0; round < 5; round++) {
+      // DM asks
+      dmHistory.push({role:'user', content: round === 0 ? dmQuestionPrompts[0] : `${aiName} repond: "${convoLog[convoLog.length-1].text}"\n${dmQuestionPrompts[round]}`});
+      const dmMsg = await narrateLLM(dmSystem, dmHistory);
+      dmHistory.push({role:'assistant', content: dmMsg});
+      aiCCMessages.push({role:'dm', content: dmMsg});
+      convoLog.push({who: 'DM', text: dmMsg});
+      renderStandaloneAIChat(aiName, color);
+      await speakText(dmMsg);
 
-    // AI responds
-    aiHistory.push({role:'user', content: `Le DM dit: "${dmGreet}"\nReponds avec passion. Ton inspiration secrete: ${hook}.`});
-    const aiResp1 = await narrateLLM(aiSystem, aiHistory);
-    aiHistory.push({role:'assistant', content: aiResp1});
-    aiCCMessages.push({role:'ai', content: aiResp1});
-    renderStandaloneAIChat(aiName, color);
-    await speakTextWithVoice(aiResp1, voice);
-
-    // DM digs deeper
-    dmHistory.push({role:'user', content: `${aiName} repond: "${aiResp1}"\nReagis et pose une question DIFFERENTE sur son passe.`});
-    const dmResp2 = await narrateLLM(dmSystem, dmHistory);
-    dmHistory.push({role:'assistant', content: dmResp2});
-    aiCCMessages.push({role:'dm', content: dmResp2});
-    renderStandaloneAIChat(aiName, color);
-    await speakText(dmResp2);
-
-    // AI elaborates
-    aiHistory.push({role:'user', content: `Le DM repond: "${dmResp2}"\nApprofondi un aspect NOUVEAU de ton personnage.`});
-    const aiResp2 = await narrateLLM(aiSystem, aiHistory);
-    aiHistory.push({role:'assistant', content: aiResp2});
-    aiCCMessages.push({role:'ai', content: aiResp2});
-    renderStandaloneAIChat(aiName, color);
-    await speakTextWithVoice(aiResp2, voice);
+      // AI responds
+      const aiPrompt = aiResponsePrompts[round].replace('DMTEXT', dmMsg);
+      aiHistory.push({role:'user', content: aiPrompt});
+      const aiMsg = await narrateLLM(aiSystem, aiHistory);
+      aiHistory.push({role:'assistant', content: aiMsg});
+      aiCCMessages.push({role:'ai', content: aiMsg});
+      convoLog.push({who: aiName, text: aiMsg});
+      renderStandaloneAIChat(aiName, color);
+      await speakTextWithVoice(aiMsg, voice);
+    }
 
     // DM wraps up
-    dmHistory.push({role:'user', content: `${aiName} ajoute: "${aiResp2}"\nResume son personnage unique. Dis que tu vas finaliser sa fiche.`});
+    dmHistory.push({role:'user', content: `${aiName} a fini de decrire son personnage. Resume TOUT ce qu'il a choisi (race/metatype, classe/role, nom, background, traits, equipement) et dis que tu vas finaliser sa fiche. Sois enthousiaste!`});
     const dmWrapup = await narrateLLM(dmSystem, dmHistory);
     aiCCMessages.push({role:'dm', content: dmWrapup});
+    convoLog.push({who: 'DM', text: dmWrapup});
     renderStandaloneAIChat(aiName, color);
     await speakText(dmWrapup);
 
-    // Generate sheet
-    const fullConvo = `Tour 1 — DM: ${dmGreet}\nTour 2 — ${aiName}: ${aiResp1}\nTour 3 — DM: ${dmResp2}\nTour 4 — ${aiName}: ${aiResp2}\nTour 5 — DM: ${dmWrapup}`;
-    const sheetSystem = `Tu es ${aiName}. Voici ta conversation COMPLETE avec le DM:\n${fullConvo}\n\nGenere ta fiche COMPLETE entre [FICHE] et [/FICHE]. ${sheetFormat} Ajoute un court commentaire (1-2 phrases) avant la fiche. Reponds en francais.`;
-    const sheetResponse = await narrateLLM(sheetSystem, [{role:'user', content: `Genere ta fiche maintenant.`}]);
+    // Generate sheet with full conversation context
+    const fullConvo = convoLog.map((c, i) => `Tour ${i+1} — ${c.who}: ${c.text}`).join('\n');
+    const sheetSystem = `Tu es un expert en creation de fiches ${isSR ? 'Shadowrun' : 'D&D 5e'}. Voici la conversation COMPLETE entre le DM et ${aiName}:\n\n${fullConvo}\n\nA partir de TOUTES les informations donnees par ${aiName}, genere une fiche COMPLETE et DETAILLEE.\n${sheetFormat}\n\nIMPORTANT: CHAQUE champ doit contenir une valeur concrete basee sur la conversation. Les stats doivent etre des NOMBRES coherents avec la classe/role choisi. Ajoute un court commentaire enthousiaste (1-2 phrases) de ${aiName} AVANT la fiche. Reponds en francais.`;
+    const sheetResponse = await narrateLLM(sheetSystem, [{role:'user', content: `Genere la fiche complete de ${aiName} maintenant, avec TOUS les champs remplis.`}]);
 
     const sheet = parseSheet(sheetResponse);
     if (sheet) {
@@ -1499,10 +1613,12 @@ Inspiration secrete: ${hook}. Tu reponds au Maitre du Donjon avec enthousiasme e
         renderStandaloneAIChat(aiName, color);
         await speakTextWithVoice(cleanComment, voice);
       }
-      // Store sheet for validation
+      // Store sheet and auto-save
       window._standaloneSheet = sheet;
+      window._lastSavedSheetName = null; // reset for new sheet
+      await ccAutoSaveSheet(sheet);
       const valBtn = document.getElementById('sa-cc-validate-btn');
-      if (valBtn) valBtn.style.display = 'block';
+      if (valBtn) { valBtn.style.display = 'block'; valBtn.textContent = '\u2713 Sauvegarder les modifications'; }
     } else {
       toast('Fiche non detectee, reessayez.');
     }
@@ -1610,7 +1726,7 @@ async function ccSendStandalone(textOverride) {
   ccBusy = true;
   saAddTyping();
   try {
-    const playerName = document.getElementById('cc-owner-name')?.value?.trim() || 'Joueur';
+    const playerName = ccPlayerName || 'Joueur';
     const universe = ccGameSystem === 'shadowrun' ? 'shadowrun' : 'fantasy';
     const system = ccBuildSystemStandalone(playerName, universe);
     const messages = ccChat.map(m => ({role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content}));
@@ -1621,9 +1737,11 @@ async function ccSendStandalone(textOverride) {
     const sheet = parseSheet(response);
     if (sheet) {
       window._standaloneSheet = sheet;
+      window._lastSavedSheetName = null; // reset for new/updated sheet
       renderStandaloneSheet(sheet);
+      await ccAutoSaveSheet(sheet);
       const btn = document.getElementById('sa-cc-validate-btn');
-      if (btn) btn.style.display = 'block';
+      if (btn) { btn.style.display = 'block'; btn.textContent = '\u2713 Sauvegarder les modifications'; }
     }
     const cleanResponse = response.replace(/\[FICHE\][\s\S]*?\[\/FICHE\]/gi, '').trim();
     if (cleanResponse) speakText(cleanResponse);
@@ -1636,6 +1754,54 @@ async function ccSendStandalone(textOverride) {
   ccBusy = false;
 }
 
+/** Build save payload from a parsed sheet */
+function ccBuildSavePayload(sheet, ownerName, isAI) {
+  return {
+    owner: ownerName,
+    game_system: ccGameSystem,
+    name: sheet.name,
+    race: sheet.race || 'Humain',
+    class: sheet.class || 'Guerrier',
+    level: sheet.level || 1,
+    xp: sheet.xp || 0,
+    hp: sheet.hp || sheet.hpMax || 10,
+    hp_max: sheet.hpMax || sheet.hp || 10,
+    ac: sheet.ac || null,
+    stats: sheet.stats || {},
+    inventory: (sheet.equipment || '').split(',').map(s => s.trim()).filter(Boolean),
+    backstory: sheet.background || null,
+    traits: sheet.traits || null,
+    flaw: sheet.flaw || null,
+    bond: sheet.bond || null,
+    ideal: sheet.ideal || null,
+    proficiencies: sheet.proficiencies || null,
+    equipment: sheet.equipment || null,
+    portrait_url: sheet.portraitUrl || null,
+    personality: isAI ? (sheet._aiPersonality || null) : null,
+    is_ai: isAI,
+    extra: sheet.isShadowrun ? { cyberware: sheet.cyberware, contacts: sheet.contacts, stun_max: sheet.stunMax } : null,
+  };
+}
+
+/** Auto-save sheet right after generation (both AI and human flows) */
+async function ccAutoSaveSheet(sheet) {
+  if (!sheet || !sheet.name) return;
+  // Don't double-save if already saved with same name
+  if (window._lastSavedSheetName === sheet.name) return;
+  const isAI = ccOwnerMode === 'kingston';
+  const ownerName = isAI ? 'Kingston' : (ccPlayerName || 'Joueur');
+  try {
+    const payload = ccBuildSavePayload(sheet, ownerName, isAI);
+    await api('/api/dm/characters', 'POST', payload);
+    await fetchSavedRoster();
+    window._lastSavedSheetName = sheet.name;
+    toast('Personnage sauvegarde automatiquement!');
+  } catch (err) {
+    console.error('Auto-save failed:', err);
+    toast('Erreur sauvegarde auto: ' + err.message);
+  }
+}
+
 async function ccValidateStandalone() {
   let sheet, ownerName, isAI;
   if (ccOwnerMode === 'kingston') {
@@ -1643,10 +1809,8 @@ async function ccValidateStandalone() {
     ownerName = 'Kingston';
     isAI = true;
   } else {
-    // Human mode: get from current ccChat flow — the sheet was stored in campaign.players[ccIndex].character
-    // But in standalone mode, we store it differently
     sheet = window._standaloneSheet || (campaign.players[ccIndex] && campaign.players[ccIndex].character);
-    ownerName = document.getElementById('cc-owner-name')?.value?.trim() || 'Joueur';
+    ownerName = ccPlayerName || 'Joueur';
     isAI = false;
   }
   if (!sheet || !sheet.name) {
@@ -1654,32 +1818,14 @@ async function ccValidateStandalone() {
     return;
   }
   try {
-    const payload = {
-      owner: ownerName,
-      game_system: ccGameSystem,
-      name: sheet.name,
-      race: sheet.race || 'Humain',
-      class: sheet.class || 'Guerrier',
-      level: sheet.level || 1,
-      xp: sheet.xp || 0,
-      hp: sheet.hp || sheet.hpMax || 10,
-      hp_max: sheet.hpMax || sheet.hp || 10,
-      ac: sheet.ac || null,
-      stats: sheet.stats || {},
-      inventory: (sheet.equipment || '').split(',').map(s => s.trim()).filter(Boolean),
-      backstory: sheet.background || null,
-      traits: sheet.traits || null,
-      flaw: sheet.flaw || null,
-      bond: sheet.bond || null,
-      ideal: sheet.ideal || null,
-      proficiencies: sheet.proficiencies || null,
-      equipment: sheet.equipment || null,
-      portrait_url: sheet.portraitUrl || null,
-      personality: isAI ? (sheet._aiPersonality || null) : null,
-      is_ai: isAI,
-      extra: sheet.isShadowrun ? { cyberware: sheet.cyberware, contacts: sheet.contacts, stun_max: sheet.stunMax } : null,
-    };
-    await api('/api/dm/characters', 'POST', payload);
+    const payload = ccBuildSavePayload(sheet, ownerName, isAI);
+    // If already auto-saved, update instead of creating duplicate
+    const existing = savedRoster.find(c => c.name === sheet.name && c.game_system === ccGameSystem);
+    if (existing) {
+      await api(`/api/dm/characters/${existing.id}`, 'PUT', payload);
+    } else {
+      await api('/api/dm/characters', 'POST', payload);
+    }
     await fetchSavedRoster();
     toast('Personnage sauvegarde!');
     // Return to landing after short delay
@@ -5268,6 +5414,17 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.g
 // Pre-load campaigns from localStorage only (server fetch happens on "Continuer")
 allCampaigns = JSON.parse(localStorage.getItem('dm_campaigns') || '[]');
 document.getElementById('btn-continue').style.display = allCampaigns.length ? 'inline-flex' : 'none';
+
+// Pre-warm TTS WebSocket so first speech has no "computer voice" artifact
+if (document.getElementById('tts-toggle')?.checked) {
+  fetch('/api/tts/warmup', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({voice:'fr-male'}) }).catch(() => {});
+}
+// Also warmup when TTS toggle is enabled
+document.getElementById('tts-toggle')?.addEventListener('change', (e) => {
+  if (e.target.checked) {
+    fetch('/api/tts/warmup', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({voice:'fr-male'}) }).catch(() => {});
+  }
+});
 </script>
 </body>
 </html>
