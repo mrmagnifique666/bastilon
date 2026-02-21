@@ -295,13 +295,20 @@ function startKingston(): void {
     }
     launchEnv.__KINGSTON_LAUNCHER = "1";
 
+    // Use detached + pipe to prevent Kingston's IO from stalling heartbeat's event loop
     const child = spawn("npx", ["tsx", ENTRY_POINT], {
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       shell: true,
       cwd: process.cwd(),
       env: launchEnv,
       windowsHide: true,
     });
+
+    // Drain child stdout/stderr to log file (prevent pipe buffer full + freeze)
+    const botLogPath = path.join(DATA_DIR, "kingston-output.log");
+    const botLogStream = fs.createWriteStream(botLogPath, { flags: "a" });
+    if (child.stdout) child.stdout.pipe(botLogStream);
+    if (child.stderr) child.stderr.pipe(botLogStream);
 
     kingston = child;
     kingstonPID = child.pid ?? 0;
@@ -410,12 +417,15 @@ function registerTask(
 // ═══════════════════════════════════════════
 
 registerTask("health.bot", "\u2705", 5, async () => {
-  // Check PID from lock file
+  // Check PID from lock file (JSON format: {"pid": N, "timestamp": "..."})
   let pid = kingstonPID;
   try {
     if (fs.existsSync(LOCK_FILE)) {
       const raw = fs.readFileSync(LOCK_FILE, "utf-8").trim();
-      const parsed = Number(raw);
+      let parsed = Number(raw); // plain number format
+      if (isNaN(parsed) && raw.startsWith("{")) {
+        try { parsed = JSON.parse(raw).pid; } catch { /* not JSON */ }
+      }
       if (parsed > 0) pid = parsed;
     }
   } catch { /* use tracked PID */ }
@@ -1210,8 +1220,15 @@ async function tick(): Promise<void> {
   let skipped = 0;
   let failed = 0;
 
-  // Run briefings check
-  await checkBriefings();
+  // Run briefings check (with 60s timeout to prevent tick stall)
+  try {
+    await Promise.race([
+      checkBriefings(),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error("briefing timeout")), 60_000)),
+    ]);
+  } catch (e) {
+    logConsole("\u26A0\uFE0F", "briefing", `Timeout or error: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   // Run tasks that are due
   for (const task of tasks) {
@@ -1237,7 +1254,13 @@ async function tick(): Promise<void> {
     task.lastRun = nowMs;
 
     try {
-      const result = await task.handler();
+      const TASK_TIMEOUT_MS = 45_000; // 45s max per task
+      const result = await Promise.race([
+        task.handler(),
+        new Promise<TaskResult>((_, reject) =>
+          setTimeout(() => reject(new Error(`task timeout after ${TASK_TIMEOUT_MS / 1000}s`)), TASK_TIMEOUT_MS)
+        ),
+      ]);
       logConsole(
         result.ok ? task.icon : "\u274C",
         task.name,
@@ -1387,17 +1410,21 @@ if (process.argv.includes("--test")) {
   // Start bot
   startKingston();
 
-  // First tick after 10s (let Kingston start)
-  setTimeout(
-    () => tick().catch((e) => logConsole("\u274C", "tick", `Error: ${e}`)),
-    10_000,
-  );
+  // Tick loop with overlap guard
+  let tickRunning = false;
+  setInterval(() => {
+    if (tickRunning) return;
+    tickRunning = true;
+    tick().then(() => { tickRunning = false; })
+      .catch((e) => { logConsole("\u274C", "tick", `Error: ${e}`); tickRunning = false; });
+  }, TICK_MS);
 
-  // Regular tick every 60s
-  setInterval(
-    () => tick().catch((e) => logConsole("\u274C", "tick", `Error: ${e}`)),
-    TICK_MS,
-  );
+  // First tick after 10s (let Kingston start)
+  setTimeout(() => {
+    tickRunning = true;
+    tick().then(() => { tickRunning = false; })
+      .catch((e) => { logConsole("\u274C", "tick", `Error: ${e}`); tickRunning = false; });
+  }, 10_000);
 
   logConsole("\u{1F49A}", "heartbeat", "Running. Ctrl+C to stop.");
 
