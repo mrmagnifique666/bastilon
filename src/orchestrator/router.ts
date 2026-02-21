@@ -11,6 +11,7 @@ import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
 import { runOllama, runOllamaChat, isOllamaAvailable, runOllamaToolRouter } from "../llm/ollamaClient.js";
 import { runGroq, runGroqChat, isGroqAvailable } from "../llm/groqClient.js";
+import { runOpenRouter, runOpenRouterChat, isOpenRouterAvailable } from "../llm/openrouterClient.js";
 import { addTurn, logError, getTurns, clearSession } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
@@ -283,9 +284,36 @@ async function fallbackWithoutClaude(
     log.debug(`[router] Skipping Groq (cooldown ${providerCooldownSeconds("groq")}s remaining or failover cooldown)`);
   }
 
+  // --- Try OpenRouter with tools (DeepSeek R1 / Llama 405B free, $0) ---
+  if (isOpenRouterAvailable() && !isProviderCoolingDown("openrouter") && isProviderHealthy("openrouter")) {
+    try {
+      log.info(`[router] 🌐 OpenRouter-chat fallback (Claude+Gemini+Ollama+Groq down): ${userMessage.slice(0, 100)}...`);
+      await safeProgress(chatId, `🌐 Mode OpenRouter avec outils (services principaux indisponibles ~${remainingMinutes}min)`);
+      const orResult = await runOpenRouterChat({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
+      addTurn(chatId, { role: "assistant", content: orResult });
+      backgroundExtract(chatId, userMessage, orResult);
+      clearProviderCooldown("openrouter");
+      clearProviderFailures("openrouter");
+      return orResult;
+    } catch (err) {
+      const errClass = classifyError(err);
+      recordFailure("openrouter", errClass);
+      markProviderCooldown("openrouter", err instanceof Error ? err.message : "unknown error");
+      log.warn(`[router] OpenRouter-chat fallback failed [${errClass}]: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (isProviderCoolingDown("openrouter") || !isProviderHealthy("openrouter")) {
+    log.debug(`[router] Skipping OpenRouter (cooldown ${providerCooldownSeconds("openrouter")}s remaining or failover cooldown)`);
+  }
+
   // --- All models down — return a useful error instead of silence ---
   const msg = `⚠️ Tous les modèles sont temporairement indisponibles. Claude se réinitialise dans ~${remainingMinutes} minutes. Réessaie bientôt.`;
-  log.error(`[router] ALL models unavailable — Claude (rate-limited), Gemini (${config.geminiApiKey ? "failed" : "no key"}), Ollama (${config.ollamaEnabled ? "failed" : "disabled"}), Groq (${isGroqAvailable() ? "failed" : "no key"})`);
+  log.error(`[router] ALL models unavailable — Claude (rate-limited), Gemini (${config.geminiApiKey ? "failed" : "no key"}), Ollama (${config.ollamaEnabled ? "failed" : "disabled"}), Groq (${isGroqAvailable() ? "failed" : "no key"}), OpenRouter (${isOpenRouterAvailable() ? "failed" : "no key"})`);
   addTurn(chatId, { role: "assistant", content: msg });
   return msg;
 }
@@ -577,6 +605,39 @@ async function handleMessageInner(
     }
   }
 
+  // --- OpenRouter path (free models with full tool support via unified gateway) ---
+  if (tier === "openrouter") {
+    try {
+      log.info(`[router] 🌐 OpenRouter-chat for ${isInternalChatId(chatId) ? `internal ${chatId}` : `user`} (chatId=${chatId}): ${userMessage.slice(0, 100)}...`);
+      const orResult = await runOpenRouterChat({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
+      addTurn(chatId, { role: "assistant", content: orResult });
+      backgroundExtract(chatId, userMessage, orResult);
+      clearProviderFailures("openrouter");
+      return orResult;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errClass = classifyError(err);
+      recordFailure("openrouter", errClass);
+      log.warn(`[router] OpenRouter-chat failed [${errClass}]: ${errMsg} — falling back to Groq → Claude`);
+      // Try Groq as second option
+      if (isGroqAvailable()) {
+        try {
+          const groqResult = await runGroqChat({ chatId, userMessage, isAdmin: userIsAdmin, userId });
+          addTurn(chatId, { role: "assistant", content: groqResult });
+          backgroundExtract(chatId, userMessage, groqResult);
+          return groqResult;
+        } catch { /* Groq also failed */ }
+      }
+      // Last resort: Claude (streaming path will be tried below)
+    }
+  }
+
   // --- Proactive bypass: if Claude is known rate-limited, skip to fallbacks ---
   // But probe every 5min to auto-recover if credits were added
   if (isClaudeRateLimited()) {
@@ -592,7 +653,7 @@ async function handleMessageInner(
   }
 
   // First pass: Claude — always use a Claude model (tier may be groq/ollama if fallback reached here)
-  const claudeModel = (tier === "groq" || tier === "ollama") ? getModelId("sonnet") : model;
+  const claudeModel = (tier === "groq" || tier === "openrouter") ? getModelId("sonnet") : model;
   log.info(`[router] ${modelLabel(tier)} Sending to Claude (admin=${userIsAdmin}, model=${claudeModel}): ${userMessage.slice(0, 100)}...`);
   let result = await runClaude(chatId, userMessage, userIsAdmin, claudeModel);
   log.info(`[router] Claude responded with type: ${result.type}`);
@@ -657,8 +718,22 @@ async function handleMessageInner(
   // Track tool execution history for Ollama router
   const toolHistory: Array<{ tool: string; result: string }> = [];
 
-  for (let step = 0; step < config.maxToolChain; step++) {
+  // Agents get a lower chain limit to prevent stalls
+  const isAgentChat = chatId >= 100 && chatId < 1000;
+  const effectiveChainLimit = isAgentChat ? Math.min(config.maxToolChain, 10) : config.maxToolChain;
+  const chainStartTime = Date.now();
+  const CHAIN_TIMEOUT_MS = isAgentChat ? 120_000 : 300_000; // 2min agents, 5min users
+
+  for (let step = 0; step < effectiveChainLimit; step++) {
     if (result.type !== "tool_call") break;
+
+    // CHECK TIMEOUT: abort chain if total time exceeded
+    if (Date.now() - chainStartTime > CHAIN_TIMEOUT_MS) {
+      const msg = `[Tool chain timeout after ${Math.round((Date.now() - chainStartTime) / 1000)}s — aborting]`;
+      log.warn(`[router] ${msg}`);
+      addTurn(chatId, { role: "assistant", content: msg });
+      return msg;
+    }
 
     // CHECK INTERRUPT: if a new user message arrived, stop processing
     if (isInterrupted()) {
@@ -1203,6 +1278,41 @@ async function handleMessageStreamingInner(
     }
   }
 
+  // --- OpenRouter path (free models with full tool support) ---
+  if (tier === "openrouter") {
+    try {
+      log.info(`[router-stream] 🌐 OpenRouter-chat for ${isInternalChatId(chatId) ? `internal ${chatId}` : `user`} (chatId=${chatId}): ${userMessage.slice(0, 100)}...`);
+      await draft.cancel(); // OpenRouter doesn't stream — cancel draft, send final message
+      const orResult = await runOpenRouterChat({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
+      addTurn(chatId, { role: "assistant", content: orResult });
+      backgroundExtract(chatId, userMessage, orResult);
+      clearProviderFailures("openrouter");
+      return orResult;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const orStreamErrClass = classifyError(err);
+      recordFailure("openrouter", orStreamErrClass);
+      log.warn(`[router-stream] OpenRouter-chat failed [${orStreamErrClass}]: ${errMsg} — falling back`);
+      await draft.cancel();
+      // Try Groq, then fall through to Claude streaming
+      if (isGroqAvailable()) {
+        try {
+          const groqResult = await runGroqChat({ chatId, userMessage, isAdmin: userIsAdmin, userId });
+          addTurn(chatId, { role: "assistant", content: groqResult });
+          backgroundExtract(chatId, userMessage, groqResult);
+          return groqResult;
+        } catch { /* Groq also failed */ }
+      }
+      // Fall through to Claude streaming below
+    }
+  }
+
   // --- Proactive bypass: if Claude is known rate-limited, use Gemini/Ollama ---
   // But probe every 5min to auto-recover if credits were added
   if (isClaudeRateLimited()) {
@@ -1220,7 +1330,7 @@ async function handleMessageStreamingInner(
   }
 
   // Always use a Claude model for streaming (tier may be groq/ollama if fallback reached here)
-  const streamClaudeModel = (tier === "groq" || tier === "ollama") ? getModelId("sonnet") : model;
+  const streamClaudeModel = (tier === "groq" || tier === "openrouter") ? getModelId("sonnet") : model;
   log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}, model=${streamClaudeModel}): ${userMessage.slice(0, 100)}...`);
 
   // First pass: try streaming (with safety timeout to prevent hanging)
@@ -1374,7 +1484,8 @@ async function handleMessageStreamingInner(
   // Tool chaining loop — HYBRID MODE: Ollama ($0 local) handles tool routing,
   // Opus handles ONLY the final conversational response.
   // Global timeout prevents the chain from blocking the chat lock forever.
-  const TOOL_CHAIN_TIMEOUT_MS = 300_000; // 5 minutes max for entire tool chain
+  const isStreamAgentChat = chatId >= 100 && chatId < 1000;
+  const TOOL_CHAIN_TIMEOUT_MS = isStreamAgentChat ? 120_000 : 300_000; // 2min agents, 5min users
   const toolChainStart = Date.now();
   const streamFollowUpTier: ModelTier = "sonnet";
   const streamFollowUpModel = getModelId(streamFollowUpTier);
@@ -1383,8 +1494,9 @@ async function handleMessageStreamingInner(
 
   // Track tool execution history for Ollama router
   const streamToolHistory: Array<{ tool: string; result: string }> = [];
+  const effectiveStreamChainLimit = isStreamAgentChat ? Math.min(config.maxToolChain, 10) : config.maxToolChain;
 
-  for (let step = 0; step < config.maxToolChain; step++) {
+  for (let step = 0; step < effectiveStreamChainLimit; step++) {
     if (result.type !== "tool_call") break;
 
     // CHECK INTERRUPT: if a new user message arrived, stop processing

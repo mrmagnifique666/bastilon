@@ -404,7 +404,13 @@ export class Agent {
         adaptiveHints +
         prompt;
 
-      const result = await enqueueAdminAsync(() => handleMessage(this.chatId, agentPrompt, this.userId, "scheduler"));
+      const AGENT_RUN_TIMEOUT_MS = 90_000; // 90s max per agent cycle
+      const result = await Promise.race([
+        enqueueAdminAsync(() => handleMessage(this.chatId, agentPrompt, this.userId, "scheduler")),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error(`Agent ${this.id} cycle timed out after ${AGENT_RUN_TIMEOUT_MS / 1000}s`)), AGENT_RUN_TIMEOUT_MS)
+        ),
+      ]);
 
       // Check if Claude returned a rate limit message
       if (detectAndSetRateLimit(result)) {

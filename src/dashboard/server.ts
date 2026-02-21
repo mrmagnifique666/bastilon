@@ -7,6 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   getDb, clearSession, clearTurns, getTurns,
@@ -31,8 +32,62 @@ import {
   getErrorTrends as getPatternTrends,
 } from "../memory/self-review.js";
 import { registerHook, removeHooksByNamespace } from "../hooks/hooks.js";
+import { getTodayUsage, getUsageTrend, getUsageSummary, PRICING_TABLE } from "../llm/tokenTracker.js";
 
 const PORT = Number(process.env.DASHBOARD_PORT) || 3200;
+
+// ── Cloudflare Tunnel for Mini App ─────────────────────────
+let dashboardTunnelUrl: string | null = null;
+
+/** Get the public Cloudflare tunnel URL for the dashboard (null if not active). */
+export function getDashboardPublicUrl(): string | null {
+  return dashboardTunnelUrl;
+}
+
+function startDashboardTunnel(): void {
+  try {
+    const proc = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${PORT}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+      windowsHide: true,
+    });
+
+    const timeout = setTimeout(() => {
+      if (!dashboardTunnelUrl) {
+        log.warn("[dashboard-tunnel] Timeout waiting for cloudflared URL — Mini App will not be available");
+        proc.kill();
+      }
+    }, 20_000);
+
+    const handler = (data: Buffer) => {
+      const line = data.toString();
+      const match = line.match(/https?:\/\/[^\s]+\.trycloudflare\.com/);
+      if (match && !dashboardTunnelUrl) {
+        dashboardTunnelUrl = match[0];
+        clearTimeout(timeout);
+        log.info(`[dashboard-tunnel] Public URL: ${dashboardTunnelUrl}`);
+      }
+    };
+
+    proc.stdout?.on("data", handler);
+    proc.stderr?.on("data", handler);
+    proc.on("error", (err) => {
+      log.warn(`[dashboard-tunnel] cloudflared not available: ${err.message}. Install: winget install Cloudflare.cloudflared`);
+      clearTimeout(timeout);
+    });
+    proc.on("exit", (code) => {
+      if (code !== null && code !== 0) {
+        log.warn(`[dashboard-tunnel] cloudflared exited with code ${code}`);
+      }
+      dashboardTunnelUrl = null;
+    });
+
+    // Don't keep the parent process alive for the tunnel
+    proc.unref();
+  } catch (err) {
+    log.warn(`[dashboard-tunnel] Failed to start: ${(err as Error).message}`);
+  }
+}
 
 // Resolve static dir relative to this file (works on Windows with tsx)
 function resolveStaticDir(): string {
@@ -101,7 +156,10 @@ function checkRateLimit(req: http.IncomingMessage, res: http.ServerResponse): bo
 
 // Helpers
 function getCorsOrigin(): string {
-  return process.env.DASHBOARD_CORS_ORIGIN || `http://localhost:${PORT}`;
+  if (process.env.DASHBOARD_CORS_ORIGIN) return process.env.DASHBOARD_CORS_ORIGIN;
+  // When tunnel is active, allow any origin (Mini App served via Telegram)
+  if (dashboardTunnelUrl) return "*";
+  return `http://localhost:${PORT}`;
 }
 
 function sendJson(res: http.ServerResponse, status: number, data: unknown) {
@@ -773,6 +831,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   try {
     // ── API routes (all require auth when DASHBOARD_TOKEN is set) ──
+    // ── Mini App URL (no auth — needed by bot to build inline buttons) ──
+    if (pathname === "/api/webapp/url" && method === "GET") {
+      return json(res, { url: dashboardTunnelUrl ? dashboardTunnelUrl + "/webapp.html" : null });
+    }
     if (pathname === "/api/agents" && method === "GET") {
       if (!checkAuth(req, res)) return;
       return json(res, apiAgents());
@@ -786,13 +848,30 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!checkAuth(req, res)) return;
       return json(res, apiStats());
     }
+    // ── LLM Token Usage ─────────────────────────────────────
+    if (pathname === "/api/llm-usage/today" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      return json(res, getTodayUsage());
+    }
+    if (pathname === "/api/llm-usage/trend" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const days = Math.min(Number(url.searchParams.get("days")) || 7, 30);
+      return json(res, { trend: getUsageTrend(days), pricing: PRICING_TABLE });
+    }
+    if (pathname === "/api/llm-usage/summary" && method === "GET") {
+      if (!checkAuth(req, res)) return;
+      const days = Math.min(Number(url.searchParams.get("days")) || 7, 30);
+      return json(res, getUsageSummary(days));
+    }
+
     if (pathname === "/api/errors" && method === "GET") {
       if (!checkAuth(req, res)) return;
       return json(res, apiErrors());
     }
     if (pathname === "/api/notes" && method === "GET") {
       if (!checkAuth(req, res)) return;
-      return json(res, apiNotes());
+      const notesLimit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 30, 1), 200);
+      return json(res, apiNotes(notesLimit));
     }
     if (pathname === "/api/scheduler" && method === "GET") {
       if (!checkAuth(req, res)) return;
@@ -1111,10 +1190,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       if (!checkAuth(req, res)) return;
       const character = url.searchParams.get("character") || "";
       if (!character) return sendJson(res, 400, { error: "character query param required" });
+      const limit = Math.min(Number(url.searchParams.get("limit")) || 6, 15);
 
       try {
         // Episodic memories
-        const events = recallEvents({ search: character, limit: 6, minImportance: 0.3 });
+        const events = recallEvents({ search: character, limit, minImportance: 0.3 });
 
         // KG entity + relations
         const entity = kgGetEntity(character, "dungeon_character");
@@ -1149,7 +1229,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         }
         const contextText = parts.length > 0 ? parts.join("\n") : "Premiere aventure — aucun souvenir.";
 
-        return json(res, { events, relations, locations, contextText: contextText.slice(0, 400) });
+        return json(res, { events, relations, locations, contextText: contextText.slice(0, 600) });
       } catch (err) {
         return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
       }
@@ -1241,6 +1321,64 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         } catch (e) { log.debug(`[dashboard] SSE write after close: ${e}`); }
       }
       return;
+    }
+
+    // ── DM Narrate via Claude (1M context, higher quality) ──────
+    if (pathname === "/api/dm/narrate-claude" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) return sendJson(res, 500, { error: "ANTHROPIC_API_KEY not configured" });
+      const body = await parseBody(req);
+      const sysText = (body.system as string) || "";
+      const msgs = (body.messages || []) as Array<{ role: string; content: string }>;
+      const model = (body.model as string) || "claude-sonnet-4-6";
+
+      log.info(`[dm-claude] narrate request: ${msgs.length} msgs, model=${model}`);
+
+      try {
+        const anthropicBody = {
+          model,
+          max_tokens: 2048,
+          system: sysText,
+          messages: msgs.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+        };
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 45000);
+        const resp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "interleaved-thinking-2025-05-14",
+          },
+          body: JSON.stringify(anthropicBody),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) {
+          const errText = await resp.text();
+          log.error(`[dm-claude] API error ${resp.status}: ${errText.slice(0, 200)}`);
+          return sendJson(res, resp.status, { error: errText.slice(0, 200) });
+        }
+
+        const result = await resp.json() as { content: Array<{ type: string; text?: string }>; usage?: { input_tokens: number; output_tokens: number } };
+        const text = result.content?.filter((c: any) => c.type === "text").map((c: any) => c.text).join("") || "";
+        log.info(`[dm-claude] response: ${text.length} chars, usage: ${JSON.stringify(result.usage || {})}`);
+
+        // Log token usage
+        if (result.usage) {
+          const { logTokens } = await import("../llm/tokenTracker.js");
+          logTokens("claude", result.usage.input_tokens, result.usage.output_tokens);
+        }
+
+        return json(res, { response: text, usage: result.usage });
+      } catch (err) {
+        log.error(`[dm-claude] error: ${err instanceof Error ? err.message : String(err)}`);
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     // ── Push Notification Subscription ──────────────────────────
@@ -1826,6 +1964,26 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       }
     }
 
+    // ── Bridge (bot-to-bot communication) ──
+    if (pathname === "/api/bridge" && method === "POST") {
+      const body = await parseBody(req);
+      const from = (body?.from as string) || "";
+      const text = (body?.text as string) || "";
+      const chatId = (body?.chatId as string) || "";
+      if (!from || !text || !chatId) {
+        return sendJson(res, 400, { ok: false, error: "Missing from, text, or chatId" });
+      }
+      try {
+        const { receiveBridgeMessage } = await import("../bridge/bridge.js");
+        const isBridgeReply = !!(body?.isBridgeReply);
+        receiveBridgeMessage(from, text, chatId, isBridgeReply);
+        log.info(`[bridge] Received message from ${from} for chat ${chatId} (${text.length} chars)`);
+        return json(res, { ok: true });
+      } catch (err) {
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
     if (pathname.startsWith("/api/") || pathname.startsWith("/v1/")) {
       return sendJson(res, 404, { ok: false, error: "Not found" });
     }
@@ -1864,12 +2022,28 @@ export function startDashboard(): void {
   // Wire log broadcast to push live logs via WebSocket
   setLogBroadcast(broadcast);
 
+  // Wire bridge incoming handler → routes through Kingston's orchestrator
+  import("../bridge/wsBridge.js").then(({ setBridgeIncomingHandler }) => {
+    setBridgeIncomingHandler(async (agent, text, chatId) => {
+      return await handleMessage(chatId, `[Bridge from ${agent}]: ${text}`, config.voiceUserId, "user");
+    });
+  });
+
   const server = http.createServer(handleRequest);
 
-  // Handle port conflicts gracefully (noServer prevents WSS from re-throwing)
+  // Handle port conflicts with retry (previous instance may still be releasing)
+  let retryCount = 0;
+  const MAX_RETRIES = 3;
   server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE") {
-      log.error(`[dashboard] Port ${PORT} already in use — dashboard not started`);
+    if (err.code === "EADDRINUSE" && retryCount < MAX_RETRIES) {
+      retryCount++;
+      log.warn(`[dashboard] Port ${PORT} in use — retry ${retryCount}/${MAX_RETRIES} in 2s`);
+      setTimeout(() => {
+        server.close();
+        server.listen(PORT, process.env.DASHBOARD_BIND || "127.0.0.1");
+      }, 2000);
+    } else if (err.code === "EADDRINUSE") {
+      log.error(`[dashboard] Port ${PORT} still in use after ${MAX_RETRIES} retries — dashboard not started`);
     } else {
       log.error("[dashboard] Server error:", err);
     }
@@ -1983,6 +2157,14 @@ export function startDashboard(): void {
     });
   });
 
+  // WebSocket Bridge (inter-agent communication)
+  const bridgeWss = new WebSocketServer({ noServer: true });
+  bridgeWss.on("connection", (ws) => {
+    import("../bridge/wsBridge.js").then(({ handleBridgeConnection }) => {
+      handleBridgeConnection(ws);
+    });
+  });
+
   server.on("upgrade", (req, socket, head) => {
     if (req.url === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -1992,6 +2174,10 @@ export function startDashboard(): void {
       voiceWss.handleUpgrade(req, socket, head, (ws) => {
         voiceWss.emit("connection", ws, req);
       });
+    } else if (req.url === "/ws/bridge") {
+      bridgeWss.handleUpgrade(req, socket, head, (ws) => {
+        bridgeWss.emit("connection", ws, req);
+      });
     } else {
       socket.destroy();
     }
@@ -2000,6 +2186,10 @@ export function startDashboard(): void {
   const bindHost = process.env.DASHBOARD_BIND || "127.0.0.1";
   server.listen(PORT, bindHost, () => {
     log.info(`[dashboard] UI available at http://${bindHost === "0.0.0.0" ? "localhost" : bindHost}:${PORT}${bindHost === "0.0.0.0" ? " (all interfaces)" : " (localhost only)"}`);
+    // Auto-start Cloudflare tunnel for Telegram Mini App
+    if (process.env.DASHBOARD_TUNNEL !== "false") {
+      startDashboardTunnel();
+    }
   });
 }
 

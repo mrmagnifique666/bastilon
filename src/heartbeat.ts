@@ -117,11 +117,17 @@ function rotateLog(filePath: string): void {
     if (!fs.existsSync(filePath)) return;
     const stat = fs.statSync(filePath);
     if (stat.size > MAX_LOG_BYTES) {
-      // Keep last 2MB, discard the rest
-      const content = fs.readFileSync(filePath, "utf-8");
-      const trimmed = content.slice(-2 * 1024 * 1024);
-      const cutIndex = trimmed.indexOf("\n");
-      fs.writeFileSync(filePath, cutIndex > 0 ? trimmed.slice(cutIndex + 1) : trimmed);
+      // SAFE rotation: read only the last 2MB using a file descriptor
+      // (prevents OOM when log files grow to GB+ size)
+      const KEEP_BYTES = 2 * 1024 * 1024;
+      const fd = fs.openSync(filePath, "r");
+      const buf = Buffer.alloc(KEEP_BYTES);
+      const readStart = Math.max(0, stat.size - KEEP_BYTES);
+      fs.readSync(fd, buf, 0, KEEP_BYTES, readStart);
+      fs.closeSync(fd);
+      const tail = buf.toString("utf-8");
+      const cutIndex = tail.indexOf("\n");
+      fs.writeFileSync(filePath, cutIndex > 0 ? tail.slice(cutIndex + 1) : tail);
     }
   } catch { /* best effort */ }
 }
@@ -260,36 +266,49 @@ const crashTimes: number[] = [];
 let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastElectroshockTime = 0;
 
+let startInProgress = false;
+
 function startKingston(): void {
+  // Guard: prevent double-start from electroshock + crash handler racing
+  if (startInProgress) {
+    logConsole("\u26A0\uFE0F", "bot.start", "Start already in progress — skipping duplicate");
+    return;
+  }
+  startInProgress = true;
+
   killRivalSupervisors();
   cleanLock();
   cleanPorts();
 
+  // Wait for ports to actually be freed before spawning
   kingstonStatus = "starting";
-  kingstonStartTime = Date.now();
-  logConsole("\u{1F680}", "bot.start", "Starting Kingston...");
+  logConsole("\u{1F680}", "bot.start", "Starting Kingston (waiting 2s for ports)...");
 
-  const launchEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE")) continue;
-    if (v !== undefined) launchEnv[k] = v;
-  }
-  launchEnv.__KINGSTON_LAUNCHER = "1";
+  setTimeout(() => {
+    kingstonStartTime = Date.now();
 
-  const child = spawn("npx", ["tsx", ENTRY_POINT], {
-    stdio: "inherit",
-    shell: true,
-    cwd: process.cwd(),
-    env: launchEnv,
-    windowsHide: true,
-  });
+    const launchEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE")) continue;
+      if (v !== undefined) launchEnv[k] = v;
+    }
+    launchEnv.__KINGSTON_LAUNCHER = "1";
 
-  kingston = child;
-  kingstonPID = child.pid ?? 0;
-  kingstonStatus = "running";
+    const child = spawn("npx", ["tsx", ENTRY_POINT], {
+      stdio: "inherit",
+      shell: true,
+      cwd: process.cwd(),
+      env: launchEnv,
+      windowsHide: true,
+    });
 
-  child.on("exit", (code) => {
-    const uptime = formatUptime(Date.now() - kingstonStartTime);
+    kingston = child;
+    kingstonPID = child.pid ?? 0;
+    kingstonStatus = "running";
+    startInProgress = false; // Reset guard once process is spawned
+
+    child.on("exit", (code) => {
+      const uptime = formatUptime(Date.now() - kingstonStartTime);
 
     if (code === 0) {
       logConsole("\u2705", "bot.stop", `Kingston stopped cleanly after ${uptime}`);
@@ -336,9 +355,11 @@ function startKingston(): void {
   child.on("error", (err) => {
     logConsole("\u274C", "bot.error", `Spawn failed: ${err.message}`);
     kingstonStatus = "crashed";
+    startInProgress = false;
     cleanLock();
     setTimeout(startKingston, CRASH_DELAY_MS);
   });
+  }, 2000); // end of port-wait setTimeout
 }
 
 // ═══════════════════════════════════════════
@@ -526,6 +547,213 @@ registerTask("trading.stocks", "\u{1F4CA}", 5, async () => {
         alert = `\u{1F389} ${p.symbol} at +${plPct.toFixed(1)}% (take-profit zone)`;
       }
     }
+
+    return { ok: true, summary, alert };
+  } catch (e) {
+    return { ok: false, summary: `Error: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}, { marketHoursOnly: true });
+
+// ═══════════════════════════════════════════
+// TASK: trading.bracket-manager — ATR-based brackets
+// Ensures every open position has stop-loss & take-profit
+// Strategy: Kingston ATR-Based v1
+//   SL = 1.5x ATR | TP = 3x ATR | Scale out: 50% at 2x ATR
+// ═══════════════════════════════════════════
+
+const ALPACA_DATA_BASE = "https://data.alpaca.markets";
+const BRACKET_STATE_FILE = path.join(DATA_DIR, "bracket-state.json");
+
+function loadBracketState(): Record<string, any> {
+  try {
+    return JSON.parse(fs.readFileSync(BRACKET_STATE_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveBracketState(state: Record<string, any>): void {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(BRACKET_STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+registerTask("trading.bracket-manager", "\u{1F3AF}", 5, async () => {
+  const key = process.env.ALPACA_API_KEY;
+  const secret = process.env.ALPACA_SECRET_KEY;
+  if (!key || !secret) return { ok: false, summary: "No Alpaca credentials" };
+
+  try {
+    const headers: Record<string, string> = { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
+
+    // 1. Fetch open positions
+    const posResp = await fetch(`${ALPACA_BASE}/v2/positions`, {
+      headers, signal: AbortSignal.timeout(8000),
+    });
+    if (!posResp.ok) return { ok: false, summary: `Positions error ${posResp.status}` };
+    const positions = (await posResp.json()) as any[];
+
+    if (positions.length === 0) {
+      return { ok: true, summary: "No positions — no brackets needed" };
+    }
+
+    // 2. Fetch open orders to see which positions already have brackets
+    const ordResp = await fetch(`${ALPACA_BASE}/v2/orders?status=open&limit=100`, {
+      headers, signal: AbortSignal.timeout(8000),
+    });
+    const openOrders = ordResp.ok ? ((await ordResp.json()) as any[]) : [];
+
+    // Build set of symbols that have SL or TP orders
+    const coveredSymbols = new Set<string>();
+    for (const ord of openOrders) {
+      if (ord.order_class === "oto" || ord.order_class === "bracket" || ord.order_class === "oco") {
+        coveredSymbols.add(ord.symbol);
+      }
+      // Also count any stop or limit sell as coverage
+      if ((ord.type === "stop" || ord.type === "limit") && ord.side === "sell") {
+        coveredSymbols.add(ord.symbol);
+      }
+      // Short positions: buy orders cover them
+      if ((ord.type === "stop" || ord.type === "limit") && ord.side === "buy") {
+        coveredSymbols.add(ord.symbol);
+      }
+    }
+
+    const bracketState = loadBracketState();
+    const actions: string[] = [];
+    let alert: string | undefined;
+
+    // 3. For each uncovered position, calculate ATR and place bracket
+    for (const pos of positions) {
+      const sym = pos.symbol;
+      const qty = Math.abs(parseInt(pos.qty));
+      const side = parseInt(pos.qty) > 0 ? "long" : "short";
+      const entryPrice = parseFloat(pos.avg_entry_price);
+
+      if (coveredSymbols.has(sym)) {
+        continue; // Already has bracket orders
+      }
+
+      // Fetch 14-day bars for ATR calculation
+      // CRITICAL: Alpaca requires 'start' param or it returns only today's bar
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30); // 30 calendar days to get ~14 trading days
+      const startStr = startDate.toISOString().split("T")[0];
+      const barsUrl = `${ALPACA_DATA_BASE}/v2/stocks/${sym}/bars?timeframe=1Day&limit=15&start=${startStr}`;
+      const barsResp = await fetch(barsUrl, {
+        headers, signal: AbortSignal.timeout(8000),
+      });
+
+      if (!barsResp.ok) {
+        actions.push(`${sym}: bars error ${barsResp.status}`);
+        continue;
+      }
+
+      const barsData = (await barsResp.json()) as any;
+      const bars = barsData.bars || [];
+
+      if (bars.length < 2) {
+        actions.push(`${sym}: not enough bars (${bars.length})`);
+        continue;
+      }
+
+      // Calculate ATR (Average True Range) over available bars
+      let atrSum = 0;
+      let atrCount = 0;
+      for (let i = 1; i < bars.length; i++) {
+        const high = bars[i].h;
+        const low = bars[i].l;
+        const prevClose = bars[i - 1].c;
+        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        atrSum += tr;
+        atrCount++;
+      }
+      const atr = atrSum / atrCount;
+
+      // Kingston ATR-Based v1 strategy
+      // SL: 1.5x ATR from entry | TP: 3x ATR from entry
+      let stopPrice: number;
+      let takeProfitPrice: number;
+
+      if (side === "long") {
+        stopPrice = Math.round((entryPrice - 1.5 * atr) * 100) / 100;
+        takeProfitPrice = Math.round((entryPrice + 3.0 * atr) * 100) / 100;
+      } else {
+        // Short position: reversed
+        stopPrice = Math.round((entryPrice + 1.5 * atr) * 100) / 100;
+        takeProfitPrice = Math.round((entryPrice - 3.0 * atr) * 100) / 100;
+      }
+
+      // Place OTO (one-triggers-other) with SL and TP as separate GTC orders
+      // Place stop-loss
+      const slSide = side === "long" ? "sell" : "buy";
+      const slOrder = {
+        symbol: sym,
+        qty: qty,
+        side: slSide,
+        type: "stop",
+        stop_price: stopPrice,
+        time_in_force: "gtc",
+      };
+
+      const slResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(slOrder),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      // Place take-profit
+      const tpOrder = {
+        symbol: sym,
+        qty: qty,
+        side: slSide,
+        type: "limit",
+        limit_price: takeProfitPrice,
+        time_in_force: "gtc",
+      };
+
+      const tpResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(tpOrder),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      const slOk = slResp.ok;
+      const tpOk = tpResp.ok;
+
+      if (slOk && tpOk) {
+        const slData = (await slResp.json()) as any;
+        const tpData = (await tpResp.json()) as any;
+        bracketState[sym] = {
+          side,
+          entry: entryPrice,
+          atr: Math.round(atr * 100) / 100,
+          stopLoss: stopPrice,
+          takeProfit: takeProfitPrice,
+          slOrderId: slData.id,
+          tpOrderId: tpData.id,
+          placedAt: new Date().toISOString(),
+        };
+        actions.push(`${sym}: SL=$${stopPrice} TP=$${takeProfitPrice} (ATR=$${atr.toFixed(2)})`);
+        alert = `\u{1F3AF} Bracket plac\u00E9 ${sym} ${side}: SL=$${stopPrice}, TP=$${takeProfitPrice}`;
+      } else {
+        const slErr = !slOk ? await slResp.text() : "";
+        const tpErr = !tpOk ? await tpResp.text() : "";
+        actions.push(`${sym}: order failed (SL:${slOk ? "ok" : slErr.slice(0, 50)}, TP:${tpOk ? "ok" : tpErr.slice(0, 50)})`);
+      }
+    }
+
+    saveBracketState(bracketState);
+
+    // Update trading journal with bracket info
+    const journal = loadJournal();
+    journal.brackets = bracketState;
+    saveJournal(journal);
+
+    const summary = actions.length > 0
+      ? actions.join(" | ")
+      : `${positions.length} pos covered`;
 
     return { ok: true, summary, alert };
   } catch (e) {
@@ -808,6 +1036,33 @@ interface BriefingEvent {
 }
 
 const BRIEFINGS: BriefingEvent[] = [
+  {
+    key: "night_self_review",
+    hour: 3,
+    description: "Self-Review nocturne (3h)",
+    handler: async () => {
+      const m = await loadBriefings();
+      if (m) await m.sendNightSelfReview();
+    },
+  },
+  {
+    key: "night_api_health",
+    hour: 4,
+    description: "API Health Check (4h)",
+    handler: async () => {
+      const m = await loadBriefings();
+      if (m) await m.sendApiHealthCheck();
+    },
+  },
+  {
+    key: "briefing_prep",
+    hour: 5,
+    description: "Briefing Prep (5h)",
+    handler: async () => {
+      const m = await loadBriefings();
+      if (m) await m.sendBriefingPrep();
+    },
+  },
   {
     key: "morning_briefing",
     hour: 6,

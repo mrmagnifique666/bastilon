@@ -346,10 +346,14 @@ async function buildFullPrompt(
     parts.push(`\n${memory}`);
   }
 
-  // Conversation history
-  const turns = getTurns(chatId);
+  // Conversation history — limit to prevent prompt bloat
+  // Agents (chatId 100-249) get fewer turns, users get more
+  const isAgentChat = chatId >= 100 && chatId < 1000;
+  const maxTurns = isAgentChat ? 8 : 30;
+  const allTurns = getTurns(chatId);
+  const turns = allTurns.slice(-maxTurns);
   if (turns.length > 0) {
-    parts.push("\n[CONVERSATION HISTORY]");
+    parts.push(`\n[CONVERSATION HISTORY]${allTurns.length > maxTurns ? ` (last ${maxTurns} of ${allTurns.length})` : ""}`);
     for (const t of turns) {
       const label = t.role === "user" ? "User" : "Assistant";
       parts.push(`${label}: ${t.content}`);
