@@ -216,7 +216,8 @@ function cleanPorts(): void {
       if (!out) continue;
       for (const pidStr of out.split(/\r?\n/)) {
         const pid = Number(pidStr.trim());
-        if (pid > 0 && pid !== process.pid) {
+        // Skip our own PID and the current Kingston child process (don't kill what we're managing)
+        if (pid > 0 && pid !== process.pid && pid !== kingstonPID) {
           try {
             process.kill(pid, "SIGTERM");
             logConsole("\u26A1", "cleanup", `Killed stale process on port ${port} (PID ${pid})`);
@@ -305,9 +306,11 @@ function startKingston(): void {
     kingston = child;
     kingstonPID = child.pid ?? 0;
     kingstonStatus = "running";
-    startInProgress = false; // Reset guard once process is spawned
+    // DON'T reset startInProgress here — reset only when child exits or after grace period
+    setTimeout(() => { startInProgress = false; }, 30_000); // Safety: reset after 30s max
 
     child.on("exit", (code) => {
+      startInProgress = false; // Allow restarts now that the process exited
       const uptime = formatUptime(Date.now() - kingstonStartTime);
 
     if (code === 0) {
@@ -457,6 +460,11 @@ registerTask("health.bot", "\u2705", 5, async () => {
   // Electroshock — auto-restart
   if (Date.now() - lastElectroshockTime < ELECTROSHOCK_GRACE_MS) {
     return { ok: false, summary: `Bot dead, grace period (${Math.round((ELECTROSHOCK_GRACE_MS - (Date.now() - lastElectroshockTime)) / 1000)}s left)` };
+  }
+
+  // Skip if a restart is already queued (crash handler is handling it)
+  if (startInProgress || kingstonStatus === "starting") {
+    return { ok: false, summary: `Bot dead, restart already in progress` };
   }
 
   logConsole("\u26A1", "electroshock", "Bot dead — restarting...");
