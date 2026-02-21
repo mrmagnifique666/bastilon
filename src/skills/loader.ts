@@ -357,11 +357,12 @@ export function getSkillsForGemini(
 
 /** Convert a single Kingston skill to a Gemini function declaration */
 function skillToGeminiDecl(skill: Skill): GeminiFunctionDeclaration {
-  const properties: Record<string, { type: string; description?: string }> = {};
+  const properties: Record<string, { type: string; description?: string; items?: { type: string } }> = {};
   for (const [key, prop] of Object.entries(skill.argsSchema.properties)) {
     properties[key] = {
       type: toGeminiType(prop.type),
       ...(prop.description ? { description: prop.description } : {}),
+      ...(prop.type === "array" && (prop as any).items ? { items: { type: toGeminiType((prop as any).items.type || "string") } } : {}),
     };
   }
 
@@ -405,6 +406,7 @@ const OLLAMA_TIER1_PREFIXES = [
   "social.", "facebook.", "instagram.",
   "reflect.", "crag.", "mnemosyne.",
   "site.",
+  "trading.", "stocks.",
   // NOTE: telegram.* excluded — agents use sendAlert(), not telegram.send
 ];
 
@@ -527,6 +529,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/ignorance.js");
 
   // ═══ AGENTS — Autonomous systems ═══
+  await import("./builtin/bridge-ws.js");
   await import("./builtin/agents.js");
   await import("./builtin/mind.js");
   await import("./builtin/cron.js");

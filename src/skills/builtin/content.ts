@@ -159,10 +159,43 @@ registerSkill({
 
     let scheduledAt: number;
     try {
-      scheduledAt = Math.floor(new Date(String(args.datetime)).getTime() / 1000);
+      const raw = String(args.datetime).trim();
+      // Try ISO format first
+      let parsed = new Date(raw).getTime();
+      // Fallback: if NaN, try to extract hour from natural language (e.g. "10h", "14h30")
+      if (isNaN(parsed)) {
+        const hourMatch = raw.match(/(\d{1,2})\s*[hH:]?\s*(\d{2})?/);
+        if (hourMatch) {
+          const now = new Date();
+          const h = parseInt(hourMatch[1], 10);
+          const m = hourMatch[2] ? parseInt(hourMatch[2], 10) : 0;
+          // Use ET timezone (America/Toronto)
+          const etDate = new Date(now.toLocaleString("en-US", { timeZone: "America/Toronto" }));
+          etDate.setHours(h, m, 0, 0);
+          // If the time is in the past today, schedule for tomorrow
+          const nowET = new Date(now.toLocaleString("en-US", { timeZone: "America/Toronto" }));
+          if (etDate <= nowET) etDate.setDate(etDate.getDate() + 1);
+          parsed = etDate.getTime();
+        }
+      }
+      // Final fallback: if still NaN, schedule for next available slot (2h from now, within 10h-20h ET)
+      if (isNaN(parsed)) {
+        const now = new Date();
+        const etNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Toronto" }));
+        let target = new Date(etNow);
+        target.setMinutes(0, 0, 0);
+        target.setHours(target.getHours() + 2);
+        if (target.getHours() < 10) target.setHours(10, 0, 0, 0);
+        if (target.getHours() >= 20) {
+          target.setDate(target.getDate() + 1);
+          target.setHours(10, 0, 0, 0);
+        }
+        parsed = target.getTime();
+      }
+      scheduledAt = Math.floor(parsed / 1000);
       if (isNaN(scheduledAt)) throw new Error("Invalid date");
     } catch {
-      return "Error: invalid datetime format. Use ISO format (e.g. 2026-02-15T10:00:00).";
+      return "Error: invalid datetime format. Use ISO format (e.g. 2026-02-15T10:00:00) or natural language (e.g. '14h', 'demain 10h').";
     }
 
     const updates: string[] = ["status = 'scheduled'", "scheduled_at = ?", "updated_at = unixepoch()"];

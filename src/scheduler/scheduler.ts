@@ -715,7 +715,8 @@ function buildMoltbookDraftFromIdeasPrompt(): string {
     `- Submolt: indique-le dans le titre avec [submolt] (ex: "[trading] Mon stop-loss m'a sauvé")\n` +
     `- Ne rédige PAS de contenu hallunciné — base-toi sur les données réelles de Kingston\n\n` +
     `4. Pour chaque draft créé, schedule-le pour publication:\n` +
-    `   content.schedule(id=X, datetime="aujourd'hui entre 10h et 20h ET, espacé de 2h minimum")\n\n` +
+    `   content.schedule(id=X, datetime="YYYY-MM-DDTHH:00:00") — utilise le format ISO, entre 10h et 20h ET, espacé de 2h minimum\n` +
+    `   Exemple: content.schedule(id=5, datetime="${new Date().toISOString().slice(0, 10)}T14:00:00")\n\n` +
     `RÈGLES:\n` +
     `- Si pas de notes d'idéation trouvées, crée 1-2 drafts à partir de moltbook.feed(sort=hot)\n` +
     `- PAS de telegram.send — silencieux\n` +
@@ -765,7 +766,8 @@ function buildMoltbookQualityReviewPrompt(): string {
     `   - Score qualité: /10\n\n` +
     `3. DÉCISION PAR DRAFT:\n` +
     `   - Score qualité >= 7 ET AI < 60 ET pas de doublon → AUTO-SCHEDULE\n` +
-    `     content.schedule(id=X, datetime="prochaine fenêtre disponible entre 10h-20h ET")\n` +
+    `     content.schedule(id=X, datetime="YYYY-MM-DDTHH:00:00") — format ISO, entre 10h-20h ET, 2h min entre posts\n` +
+    `     Exemple: content.schedule(id=3, datetime="${new Date().toISOString().slice(0, 10)}T16:00:00")\n` +
     `   - Score qualité 4-6 → REWRITE: améliore le contenu puis re-save\n` +
     `   - Score qualité < 4 ou doublon → REJETER: supprime le draft\n\n` +
     `4. telegram.send — résumé BREF si des actions ont été prises:\n` +
