@@ -732,8 +732,8 @@ function startLocalListening(){
     const d=(localFinalText+(interim?' '+interim:'')).trim();
     if(d)wakeText.textContent=d;
     clearTimeout(localSilenceTimer);
-    // Adaptive silence: short utterances get more time (user still thinking), longer ones send faster
-    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<5?2500:words<12?1800:1200;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
+    // Adaptive silence: generous thresholds to avoid cutting mid-sentence
+    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<5?4000:words<12?3000:2000;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
   };
   localRecognition.onerror=(e)=>{if(e.error==='no-speech'||e.error==='aborted')return;if(e.error==='not-allowed'){stopLocalSession();return;}if(sessionActive&&!localProcessing){localListening=false;setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},500);}};
   localRecognition.onend=()=>{localListening=false;if(sessionActive&&!localProcessing){setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},400);}else{wakeBar.classList.remove('active');}};
