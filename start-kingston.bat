@@ -1,15 +1,15 @@
 @echo off
-:: Kingston Heartbeat Launcher with auto-restart watchdog
+:: Kingston Wrapper Launcher with auto-restart watchdog
 
 cd /d "C:\Users\Nicolas\Documents\Claude\claude-telegram-relay"
-title Kingston Heartbeat
+title Kingston Wrapper
 
 :: Check if already running
 powershell -NoProfile -Command "if (Get-Process -Name node -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
 if %errorlevel%==1 (
     echo.
     echo   Kingston est deja en cours d'execution!
-    echo   Pour redemarrer, ferme d'abord la fenetre "Kingston Heartbeat"
+    echo   Pour redemarrer, ferme d'abord la fenetre "Kingston Wrapper"
     echo   ou kill les processus node dans le Gestionnaire des taches.
     echo.
     pause
@@ -20,11 +20,10 @@ if %errorlevel%==1 (
 
 :: Clean stale locks
 if exist "relay\bot.lock" del /f "relay\bot.lock" >nul 2>nul
-if exist "data\heartbeat.lock" del /f "data\heartbeat.lock" >nul 2>nul
 
 echo.
 echo ========================================
-echo   Kingston Heartbeat - Bastilon OS
+echo   Kingston Wrapper - Bastilon OS
 echo   %date% %time%
 echo ========================================
 echo.
@@ -33,12 +32,12 @@ echo   Les logs s'affichent ici en temps reel.
 echo   Pour arreter: ferme cette fenetre.
 echo.
 
-:: Start heartbeat — output to BOTH console and log file
-"C:\Program Files\nodejs\npx.cmd" tsx src/heartbeat.ts 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath data\heartbeat-stdout.log -Append"
+:: Start wrapper — output to BOTH console and log file
+"C:\Program Files\nodejs\npx.cmd" tsx src/wrapper.ts 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath data\heartbeat-stdout.log -Append"
 
-:: If heartbeat exits, wait 30s then restart
+:: If wrapper exits, wait 30s then restart
 echo.
-echo [%date% %time%] Heartbeat s'est arrete - redemarrage dans 30s...
+echo [%date% %time%] Wrapper s'est arrete - redemarrage dans 30s...
 echo Appuie Ctrl+C pour annuler le redemarrage.
 timeout /t 30
 goto loop

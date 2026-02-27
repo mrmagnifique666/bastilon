@@ -827,7 +827,7 @@ export function initSupervisor(): void {
 }
 
 /**
- * Run a full supervisor cycle. Called from launcher.ts every 5 minutes.
+ * Run a full supervisor cycle. Called from wrapper.ts every 5 minutes.
  */
 export async function runSupervisorCycle(): Promise<string[]> {
   const tasks = buildTaskManifest();

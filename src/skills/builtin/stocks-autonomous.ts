@@ -489,7 +489,7 @@ function evaluateEntry(data: StockData, macro: MacroState): EntrySignal | null {
 }
 
 // ─── Bracket Manager Deference ───
-// If bracket-manager (heartbeat.ts) has placed ATR-based brackets for a symbol,
+// If bracket-manager (wrapper.ts) has placed ATR-based brackets for a symbol,
 // this system defers to it instead of using fixed % stops.
 
 function hasBracketCoverage(symbol: string): boolean {

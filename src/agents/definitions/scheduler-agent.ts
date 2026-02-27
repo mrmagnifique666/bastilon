@@ -8,7 +8,7 @@
  * - Retry once on failure, alert Nicolas on double-fail
  * - Tracks fired events per day to prevent duplicates
  *
- * Replaces: heartbeat.ts (separate process with dual-polling conflicts)
+ * Replaces: old heartbeat.ts (separate process with dual-polling conflicts)
  * Keeps: All other agents, cron system, morning call
  */
 import type { AgentConfig } from "../base.js";

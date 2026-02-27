@@ -181,7 +181,7 @@ export function checkSafety(skillName: string, args: Record<string, unknown>): s
   // Rule: File delete on important paths
   if (skillName === "files.delete" && RULES.find(r => r.id === "file_delete_confirm")?.enabled) {
     const filePath = (args.path as string || "").toLowerCase();
-    const protected_patterns = [".env", "soul.md", "package.json", "tsconfig", "relay.db", "launcher.ts", "index.ts"];
+    const protected_patterns = [".env", "soul.md", "package.json", "tsconfig", "relay.db", "wrapper.ts", "index.ts"];
     for (const p of protected_patterns) {
       if (filePath.includes(p) && args.confirm !== "yes") {
         const rule = RULES.find(r => r.id === "file_delete_confirm")!;
