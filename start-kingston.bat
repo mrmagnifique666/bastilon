@@ -1,29 +1,44 @@
 @echo off
-title Kingston - Bastilon OS
-cd /d "C:\Users\Nicolas\Documents\Claude\claude-telegram-relay"
+:: Kingston Heartbeat Launcher with auto-restart watchdog
 
-echo ========================================
-echo   Kingston - Bastilon OS
-echo ========================================
-echo.
+cd /d "C:\Users\Nicolas\Documents\Claude\claude-telegram-relay"
+title Kingston Heartbeat
 
 :: Check if already running
-if exist "relay\bot.lock" (
-    echo Kingston est deja en cours d'execution.
-    echo Pour forcer un redemarrage, ferme cette fenetre et supprime relay\bot.lock
+powershell -NoProfile -Command "if (Get-Process -Name node -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+if %errorlevel%==1 (
+    echo.
+    echo   Kingston est deja en cours d'execution!
+    echo   Pour redemarrer, ferme d'abord la fenetre "Kingston Heartbeat"
+    echo   ou kill les processus node dans le Gestionnaire des taches.
     echo.
     pause
     exit /b
 )
 
-:: Kill orphan node processes on our ports
-for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":3200 " ^| findstr "LISTENING"') do (
-    taskkill /F /PID %%a >nul 2>nul
-)
+:loop
 
-echo Demarrage de Kingston...
+:: Clean stale locks
+if exist "relay\bot.lock" del /f "relay\bot.lock" >nul 2>nul
+if exist "data\heartbeat.lock" del /f "data\heartbeat.lock" >nul 2>nul
+
 echo.
-npx tsx src/index.ts
+echo ========================================
+echo   Kingston Heartbeat - Bastilon OS
+echo   %date% %time%
+echo ========================================
 echo.
-echo Kingston s'est arrete. Appuie sur une touche pour fermer.
-pause
+echo   Demarrage du superviseur...
+echo   Les logs s'affichent ici en temps reel.
+echo   Pour arreter: ferme cette fenetre.
+echo.
+
+:: Start heartbeat — output to BOTH console and log file
+"C:\Program Files\nodejs\npx.cmd" tsx src/heartbeat.ts 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath data\heartbeat-stdout.log -Append"
+
+:: If heartbeat exits, wait 30s then restart
+echo.
+echo [%date% %time%] Heartbeat s'est arrete - redemarrage dans 30s...
+echo Appuie Ctrl+C pour annuler le redemarrage.
+timeout /t 30
+goto loop

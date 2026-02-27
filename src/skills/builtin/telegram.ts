@@ -10,11 +10,13 @@ type SendFn = (chatId: number, text: string) => Promise<void>;
 type VoiceFn = (chatId: number, audio: Buffer, filename: string) => Promise<void>;
 type PhotoFn = (chatId: number, photo: string | Buffer, caption?: string) => Promise<void>;
 type SendWithKeyboardFn = (chatId: number, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>) => Promise<number | null>;
+type PollFn = (chatId: number, question: string, options: string[], opts?: { is_anonymous?: boolean; allows_multiple_answers?: boolean; open_period?: number }) => Promise<number | null>;
 
 let botSend: SendFn | null = null;
 let botVoice: VoiceFn | null = null;
 let botPhoto: PhotoFn | null = null;
 let botSendWithKeyboard: SendWithKeyboardFn | null = null;
+let botPoll: PollFn | null = null;
 
 /** Called from telegram.ts after the Bot is created */
 export function setBotSendFn(fn: SendFn): void {
@@ -50,6 +52,15 @@ export function setBotSendWithKeyboardFn(fn: SendWithKeyboardFn): void {
 
 export function getBotSendWithKeyboardFn(): SendWithKeyboardFn | null {
   return botSendWithKeyboard;
+}
+
+/** Called from telegram.ts after the Bot is created */
+export function setBotPollFn(fn: PollFn): void {
+  botPoll = fn;
+}
+
+export function getBotPollFn(): PollFn | null {
+  return botPoll;
 }
 
 registerSkill({
@@ -311,6 +322,88 @@ registerSkill({
       return `Photo sent to chat ${chatId}.`;
     } catch (err) {
       return `Error sending photo: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  },
+});
+
+// ── Telegram Poll ──────────────────────────────────────────
+
+registerSkill({
+  name: "telegram.send_poll",
+  description:
+    "Send a poll to a Telegram chat. Great for engagement, decisions, and interactive questions. Supports anonymous/non-anonymous polls, multiple answers, and timed polls.",
+  argsSchema: {
+    type: "object",
+    properties: {
+      chatId: {
+        type: "string",
+        description: "Telegram chat ID (optional, defaults to TELEGRAM_ADMIN_CHAT_ID)",
+      },
+      question: {
+        type: "string",
+        description: "Poll question (max 300 chars)",
+      },
+      options: {
+        type: "array",
+        items: { type: "string" },
+        description: "Poll options (2-10 choices, each max 100 chars)",
+      },
+      is_anonymous: {
+        type: "boolean",
+        description: "Whether the poll is anonymous (default: true)",
+      },
+      allows_multiple_answers: {
+        type: "boolean",
+        description: "Allow selecting multiple options (default: false)",
+      },
+      open_period: {
+        type: "number",
+        description: "Duration in seconds (5-600) before the poll auto-closes. Optional.",
+      },
+    },
+    required: ["question", "options"],
+  },
+  async execute(args): Promise<string> {
+    const chatIdStr = (args.chatId ?? args.chat_id) as string | undefined;
+    const question = String(args.question || "").trim();
+    const options = args.options as string[];
+    const isAnonymous = args.is_anonymous !== false; // default true
+    const allowsMultiple = args.allows_multiple_answers === true;
+    const openPeriod = args.open_period ? Math.min(600, Math.max(5, Number(args.open_period))) : undefined;
+
+    const chatId = chatIdStr ? Number(chatIdStr) : config.adminChatId;
+    if (!chatId || isNaN(chatId)) {
+      return "Error: invalid chat_id — must be a number.";
+    }
+
+    if (!question || question.length > 300) {
+      return "Error: question is required and must be 300 chars or less.";
+    }
+
+    if (!Array.isArray(options) || options.length < 2 || options.length > 10) {
+      return "Error: options must be an array with 2-10 choices.";
+    }
+
+    for (const opt of options) {
+      if (!opt || String(opt).trim().length === 0 || String(opt).length > 100) {
+        return "Error: each option must be 1-100 chars.";
+      }
+    }
+
+    if (!botPoll) {
+      return "Error: bot poll API not available (bot not started yet).";
+    }
+
+    try {
+      const msgId = await botPoll(chatId, question, options.map(o => String(o).trim()), {
+        is_anonymous: isAnonymous,
+        allows_multiple_answers: allowsMultiple,
+        open_period: openPeriod,
+      });
+      log.info(`telegram.send_poll: sent poll to chat ${chatId} (${options.length} options, msgId=${msgId})`);
+      return `Poll sent to chat ${chatId}: "${question}" with ${options.length} options.`;
+    } catch (err) {
+      return `Error sending poll: ${err instanceof Error ? err.message : String(err)}`;
     }
   },
 });

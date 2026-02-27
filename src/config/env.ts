@@ -48,9 +48,9 @@ function buildConfig() {
     shellTimeout: Number(optional("SHELL_TIMEOUT_MS", "30000")),
     codeTimeout: Number(optional("CODE_TIMEOUT_MS", "30000")),
     cliTimeoutMs: Number(optional("CLI_TIMEOUT_MS", "300000")),
-    claudeModel: optional("CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
+    claudeModel: optional("CLAUDE_MODEL", "claude-sonnet-4-6"),
     claudeModelHaiku: optional("CLAUDE_MODEL_HAIKU", "claude-haiku-4-5-20251001"),
-    claudeModelSonnet: optional("CLAUDE_MODEL_SONNET", "claude-sonnet-4-5-20250929"),
+    claudeModelSonnet: optional("CLAUDE_MODEL_SONNET", "claude-sonnet-4-6"),
     claudeModelOpus: optional("CLAUDE_MODEL_OPUS", "claude-opus-4-6"),
     logLevel: optional("LOG_LEVEL", "info") as "debug" | "info" | "warn" | "error",
     relayDir,
@@ -69,6 +69,7 @@ function buildConfig() {
     voiceChatId: Number(optional("VOICE_CHAT_ID", "0")),
     voiceUserId: Number(optional("VOICE_USER_ID", "0")),
     voiceLanguage: optional("VOICE_LANGUAGE", "fr"),
+    voiceGreeting: optional("VOICE_GREETING", "Bonjour, ici Kingston."),
 
     // Outbound calls
     twilioPhoneNumber: optional("TWILIO_PHONE_NUMBER", ""),
@@ -131,6 +132,19 @@ function buildConfig() {
     groqApiKey: optional("GROQ_API_KEY", ""),
     groqModel: optional("GROQ_MODEL", "llama-3.3-70b-versatile"),
     groqTimeoutMs: Number(optional("GROQ_TIMEOUT_MS", "30000")),
+
+    // OpenRouter (unified gateway — 100+ models, free tiers available)
+    openrouterApiKey: optional("OPENROUTER_API_KEY", ""),
+    openrouterModel: optional("OPENROUTER_MODEL", "deepseek/deepseek-r1-0528:free"),
+    openrouterTimeoutMs: Number(optional("OPENROUTER_TIMEOUT_MS", "60000")),
+
+    // Bridge (bot-to-bot communication in shared Telegram groups)
+    bridgePartnerUrl: optional("BRIDGE_PARTNER_URL", ""),
+    bridgePartnerName: optional("BRIDGE_PARTNER_NAME", "Anti-Claw"),
+
+    // WebSocket Bridge (inter-agent communication — Kingston ↔ external CLI agents)
+    bridgeWsToken: optional("BRIDGE_WS_TOKEN", ""),
+    bridgeDebatePeer: optional("BRIDGE_DEBATE_PEER", "antigravity"),
 
     // Weather location for mood skill
     weatherLocation: optional("WEATHER_LOCATION", "Ottawa"),
@@ -196,6 +210,13 @@ function buildConfig() {
     mistralApiKey: optional("MISTRAL_API_KEY", ""),
     togetherApiKey: optional("TOGETHER_API_KEY", ""),
     replicateApiKey: optional("REPLICATE_API_KEY", ""),
+
+    // Noah Bridge (Kingston ↔ Noah persistent JSONL communication)
+    voiceMode: optional("VOICE_MODE", "gemini_live") as "gemini_live" | "noah_bridge",
+    noahBridgeEnabled: optional("NOAH_BRIDGE_ENABLED", "false") === "true",
+    noahBridgeTimeoutMs: Number(optional("NOAH_BRIDGE_TIMEOUT_MS", "12000")),
+    noahBridgeInbox: optional("NOAH_BRIDGE_INBOX", "data/kingston-to-noah.jsonl"),
+    noahBridgeOutbox: optional("NOAH_BRIDGE_OUTBOX", "data/noah-to-kingston.jsonl"),
 
     // Memory management
     memoryMaxItems: Number(optional("MEMORY_MAX_ITEMS", "1500")),

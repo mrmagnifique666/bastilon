@@ -79,11 +79,13 @@ function logNightWork(entry: NightLogEntry): void {
 
 // Cycle rotation:
 //   0: Heartbeat ping (every cycle divisible by 3 = every 30 min)
-//   1: Facebook UI mapping
-//   2: Account training (test form detection)
+//   1: Memory consolidation and cleanup
+//   2: Knowledge graph maintenance
 //   3: Code requests processing check
 //   4: Web research for morning briefing
 //   5: Self-review and learning
+//
+// NOTE: browser.* tools are BLOCKED for agents — use only notes/memory/web/files skills
 
 export function createNightWorkerConfig(): AgentConfig {
   return {
@@ -139,55 +141,39 @@ TÂCHE: Annonce le début du mode nuit.
 Confirme en texte simple que le mode nuit est actif.`;
       }
 
-      // Rotation 1: Facebook UI mapping
+      // Rotation 1: Memory consolidation
       if (rotation === 1) {
-        return `[NIGHT WORKER — ${time}] Tâche: Facebook UI Mapping
+        return `[NIGHT WORKER — ${time}] Tâche: Consolidation mémoire
 
-OBJECTIF: Mapper l'interface Facebook pour mettre à jour le sitemap.
+OBJECTIF: Nettoyer et consolider la mémoire sémantique.
 
 ÉTAPES:
-1. browser.navigate(url:"https://www.facebook.com/", screenshot:"false")
-2. browser.snapshot(interactive_only:"true", compact:"true")
-3. Lis le snapshot et identifie:
-   - Barre de navigation (Home, Friends, Groups, Marketplace, Notifications, Messenger, Profile)
-   - Le champ "Quoi de neuf" pour poster
-   - Les éléments clés du fil d'actualité
-4. files.write_anywhere(path:"C:/Users/Nicolas/Documents/Claude/claude-telegram-relay/data/sitemaps/facebook-snapshot.json", content:JSON.stringify du mapping)
-5. notes.add("Facebook UI mapping updated at ${time}")
+1. memory.stats() — vérifier l'état de la mémoire
+2. memory.consolidate() — fusionner les souvenirs similaires
+3. memory.cleanup() — supprimer les doublons et entrées obsolètes
+4. notes.add("Night memory consolidation at ${time}: [résultat]")
 
 RÈGLES:
 - PAS de telegram.send — Nicolas dort
-- Si le browser n'est pas connecté, log l'erreur et passe
-- Sauvegarde TOUT ce que tu trouves, même incomplet
-- Compare avec le sitemap existant si possible`;
+- Log le nombre d'entrées avant/après`;
       }
 
-      // Rotation 2: Account creation training
+      // Rotation 2: Knowledge graph maintenance
       if (rotation === 2) {
-        return `[NIGHT WORKER — ${time}] Tâche: Entraînement création de comptes
+        return `[NIGHT WORKER — ${time}] Tâche: Maintenance Knowledge Graph
 
-OBJECTIF: Tester la détection de formulaires sur un site web.
+OBJECTIF: Vérifier et enrichir le graphe de connaissances.
 
 ÉTAPES:
-1. Choisis un site de Tier 1 ou 2 pour t'entraîner:
-   - dev.to (https://dev.to/enter?state=new-user)
-   - codeberg.org (https://codeberg.org/user/sign_up)
-   - openweathermap.org (https://home.openweathermap.org/users/sign_up)
-   - huggingface.co (https://huggingface.co/join)
-
-2. browser.navigate vers le site
-3. browser.snapshot() pour voir les éléments
-4. Identifie les champs: email, username, password, name
-5. Identifie les boutons: submit, Google OAuth, terms checkbox
-6. NE PAS soumettre le formulaire — juste détecter
-
-7. Sauvegarde le résultat:
-   files.write_anywhere(path:"C:/Users/Nicolas/Documents/Claude/claude-telegram-relay/relay/training-log.json", ...)
+1. kg.stats() — état du KG
+2. notes.search(query:"important") — trouver des notes à intégrer dans le KG
+3. Si des notes contiennent des relations intéressantes, ajouter au KG
+4. notes.add("Night KG maintenance at ${time}: [résultat]")
 
 RÈGLES:
-- PAS de telegram.send
-- NE PAS créer de compte (mode détection seulement)
-- Log tout: succès ET échecs`;
+- PAS de telegram.send — Nicolas dort
+- PAS de browser.* — interdit pour les agents
+- Sois conservateur dans les ajouts au KG`;
       }
 
       // Rotation 3: Code requests check

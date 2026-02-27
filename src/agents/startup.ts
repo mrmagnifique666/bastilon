@@ -11,6 +11,7 @@ import { createTradingMonitorConfig } from "./definitions/trading-monitor.js";
 import { createSentinelConfig } from "./definitions/sentinel.js";
 import { createMindConfig } from "./definitions/mind.js";
 import { createNightWorkerConfig } from "./definitions/night-worker.js";
+import { createSchedulerAgentConfig } from "./definitions/scheduler-agent.js";
 import { log } from "../utils/log.js";
 
 export function startAgents(): void {
@@ -40,7 +41,10 @@ export function startAgents(): void {
   const nightWorkerConfig = createNightWorkerConfig();
   registerAgent(nightWorkerConfig);
 
-  log.info("[agents] Agent bootstrap complete (8 agents)");
+  const schedulerConfig = createSchedulerAgentConfig();
+  registerAgent(schedulerConfig);
+
+  log.info("[agents] Agent bootstrap complete (9 agents)");
 }
 
 export function shutdownAgents(): void {

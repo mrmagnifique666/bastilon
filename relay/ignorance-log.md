@@ -1,52 +1,149 @@
 # Kingston — Aveux d'Ignorance
 
-> Ce fichier est auto-généré. 10 lacunes ouvertes.
-> Dernière mise à jour: 2026-02-19T21:51:16.520Z
+> Ce fichier est auto-généré. 23 lacunes ouvertes.
+> Dernière mise à jour: 2026-02-25T11:49:14.231Z
 
-## 🟠 HIGH (4)
+## 🟡 MEDIUM (23)
 
-### #18 — trading
-- **Ce que je ne sais pas**: How to use the Alpaca API directly to fetch current portfolio positions and scan watchlist.
-- **Contexte**: Manual admission via learn.admit
-- **Comment corriger**: Research Alpaca API documentation and implement the missing tools or functions
-- Source: kingston | Tentatives: 0 | 2026-02-19T21:51
+### #57 — Agent night-worker (Night Worker) — cycle 725
+- **Ce que je ne sais pas**: Échec: Agent night-worker (Night Worker) — cycle 725. Erreur: Agent night-worker cycle timed out after 180s
+- **Contexte**: Agent night-worker [timeout] erreur consécutive #0. Role: Overnight autonomous work: browser mapping, account training, self-improvement. Active 23h-7h.. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent night-worker (Night Worker) — cycle 725
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent night-worker cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-night-worker | Tentatives: 0 | 2026-02-25T11:49
 
-### #16 — trading
-- **Ce que je ne sais pas**: How to fetch current portfolio positions
-- **Contexte**: Manual admission via learn.admit
-- **Pourquoi c'est important**: Needed for portfolio review
-- **Comment corriger**: Research Alpaca API documentation and implement the missing tools or functions
-- Source: kingston | Tentatives: 0 | 2026-02-19T21:50
+### #56 — Agent mind (Kingston Mind) — cycle 1169
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1169. Erreur: Agent mind cycle timed out after 180s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1169
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-25T02:59
 
-### #13 — trading
-- **Ce que je ne sais pas**: How to fetch current portfolio positions and scan watchlist
-- **Contexte**: Manual admission via learn.admit
-- **Pourquoi c'est important**: Needed for trading signals
-- **Comment corriger**: Research Alpaca API documentation and implement the missing tools or functions
-- Source: kingston | Tentatives: 0 | 2026-02-18T17:32
+### #55 — Agent mind (Kingston Mind) — cycle 1145
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1145. Erreur: Agent mind cycle timed out after 180s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1145
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-24T19:11
 
-### #9 — trading
-- **Ce que je ne sais pas**: How to fetch current portfolio positions and scan watchlist
-- **Contexte**: Manual admission via learn.admit
-- **Pourquoi c'est important**: Needed to scan the watchlist for potential trades.
-- **Comment corriger**: Research Alpaca API documentation and implement the missing tools or functions
-- Source: kingston | Tentatives: 1 | 2026-02-17T02:16
+### #54 — Agent scout (Scout) — cycle 479
+- **Ce que je ne sais pas**: Échec: Agent scout (Scout) — cycle 479. Erreur: Agent scout cycle timed out after 180s
+- **Contexte**: Agent scout [timeout] erreur consécutive #0. Role: Prospecting & market intelligence agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent scout (Scout) — cycle 479
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent scout cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-scout | Tentatives: 0 | 2026-02-24T14:37
 
-## 🟡 MEDIUM (6)
+### #53 — Agent mind (Kingston Mind) — cycle 1130
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1130. Erreur: Agent mind cycle timed out after 180s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1130
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-24T14:37
 
-### #17 — trading
-- **Ce que je ne sais pas**: Unable to scan watchlist
-- **Contexte**: Manual admission via learn.admit
-- **Pourquoi c'est important**: Needed to scan watchlist
-- **Comment corriger**: Implement trading_watchlist tool
-- Source: kingston | Tentatives: 0 | 2026-02-19T21:50
+### #52 — Agent mind (Kingston Mind) — cycle 1082
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1082. Erreur: Agent mind cycle timed out after 180s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1082
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-24T01:17
 
-### #14 — trading
-- **Ce que je ne sais pas**: Implement trading_watchlist tool
-- **Contexte**: Manual admission via learn.admit
-- **Pourquoi c'est important**: Needed to scan the watchlist
-- **Comment corriger**: Implement missing trading_watchlist tool
-- Source: kingston | Tentatives: 0 | 2026-02-18T17:32
+### #51 — Agent learner (Learner) — cycle 472
+- **Ce que je ne sais pas**: Échec: Agent learner (Learner) — cycle 472. Erreur: Agent learner cycle timed out after 180s
+- **Contexte**: Agent learner [timeout] erreur consécutive #0. Role: Error analysis and self-improvement agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent learner (Learner) — cycle 472
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent learner cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-learner | Tentatives: 0 | 2026-02-23T21:18
+
+### #50 — Agent scout (Scout) — cycle 466
+- **Ce que je ne sais pas**: Échec: Agent scout (Scout) — cycle 466. Erreur: Agent scout cycle timed out after 180s
+- **Contexte**: Agent scout [timeout] erreur consécutive #0. Role: Prospecting & market intelligence agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent scout (Scout) — cycle 466
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent scout cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-scout | Tentatives: 0 | 2026-02-23T21:18
+
+### #49 — Agent mind (Kingston Mind) — cycle 1061
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1061. Erreur: Agent mind cycle timed out after 180s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1061
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-23T18:21
+
+### #48 — Agent mind (Kingston Mind) — cycle 1054
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1054. Erreur: Agent mind cycle timed out after 180s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1054
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 180s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-23T16:01
+
+### #47 — Agent mind (Kingston Mind) — cycle 994
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 994. Erreur: Agent mind cycle timed out after 90s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 994
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-22T21:03
+
+### #46 — Agent mind (Kingston Mind) — cycle 993
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 993. Erreur: Agent mind cycle timed out after 90s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 993
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-22T20:43
+
+### #45 — Agent mind (Kingston Mind) — cycle 989
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 989. Erreur: Agent mind cycle timed out after 90s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 989
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-22T19:39
+
+### #44 — Agent learner (Learner) — cycle 457
+- **Ce que je ne sais pas**: Échec: Agent learner (Learner) — cycle 457. Erreur: Agent learner cycle timed out after 90s
+- **Contexte**: Agent learner [timeout] erreur consécutive #0. Role: Error analysis and self-improvement agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent learner (Learner) — cycle 457
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent learner cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-learner | Tentatives: 0 | 2026-02-22T19:04
+
+### #43 — Agent analyst (Analyst) — cycle 465
+- **Ce que je ne sais pas**: Échec: Agent analyst (Analyst) — cycle 465. Erreur: Agent analyst cycle timed out after 90s
+- **Contexte**: Agent analyst [timeout] erreur consécutive #0. Role: Performance analysis & reporting agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent analyst (Analyst) — cycle 465
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent analyst cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-analyst | Tentatives: 0 | 2026-02-22T19:04
+
+### #42 — Agent mind (Kingston Mind) — cycle 983
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 983. Erreur: Agent mind cycle timed out after 90s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 983
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-22T18:12
+
+### #41 — Agent scout (Scout) — cycle 438
+- **Ce que je ne sais pas**: Échec: Agent scout (Scout) — cycle 438. Erreur: Agent scout cycle timed out after 90s
+- **Contexte**: Agent scout [timeout] erreur consécutive #0. Role: Prospecting & market intelligence agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent scout (Scout) — cycle 438
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent scout cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-scout | Tentatives: 0 | 2026-02-21T21:21
+
+### #40 — Agent mind (Kingston Mind) — cycle 946
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 946. Erreur: Agent mind cycle timed out after 90s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 946
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-21T21:21
+
+### #39 — Agent scout (Scout) — cycle 437
+- **Ce que je ne sais pas**: Échec: Agent scout (Scout) — cycle 437. Erreur: Agent scout cycle timed out after 90s
+- **Contexte**: Agent scout [timeout] erreur consécutive #0. Role: Prospecting & market intelligence agent. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent scout (Scout) — cycle 437
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent scout cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-scout | Tentatives: 0 | 2026-02-21T21:19
+
+### #38 — Agent mind (Kingston Mind) — cycle 945
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 945. Erreur: Agent mind cycle timed out after 90s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 945
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 90s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-02-21T21:19
 
 ### #12 — facebook.browse skill test
 - **Ce que je ne sais pas**: Échec: facebook.browse skill test. Erreur: ctx is not defined
@@ -54,12 +151,6 @@
 - **Pourquoi c'est important**: Fonctionnalité bloquée: facebook.browse skill test
 - **Comment corriger**: Erreur non catégorisée. Analyser le message: "ctx is not defined". Chercher dans les logs.
 - Source: kingston-diagnose | Tentatives: 0 | 2026-02-17T22:28
-
-### #11 — trading
-- **Ce que je ne sais pas**: Unable to scan watchlist
-- **Contexte**: Manual admission via learn.admit
-- **Comment corriger**: Implement trading_watchlist tool
-- Source: kingston | Tentatives: 0 | 2026-02-17T03:08
 
 ### #2 — Automated Facebook posting with browser tools
 - **Ce que je ne sais pas**: Échec: Automated Facebook posting with browser tools. Erreur: browser.navigate opens separate Playwright instance without Facebook session cookies; computer.use has known bug (repeated clicks); cannot access Nicolas's already-open Facebook session
@@ -79,10 +170,14 @@
 
 ## ✅ Récemment résolus
 
-- ~~#10 trading~~: Alpaca API confirmed working via direct HTTPS. Equity $101,473.77, 0 open positions. Keys in .env: ALPACA_API_KEY + ALPACA_SECRET_KEY. trading.* skills may have internal bugs but API is accessible.
-- ~~#3 trading~~: Alpaca API confirmed working via direct HTTPS. Equity $101,473.77, 0 open positions. Keys in .env: ALPACA_API_KEY + ALPACA_SECRET_KEY. trading.* skills may have internal bugs but API is accessible.
-- ~~#4 trading~~: Alpaca API confirmed working via direct HTTPS. Equity $101,473.77, 0 open positions. Keys in .env: ALPACA_API_KEY + ALPACA_SECRET_KEY. trading.* skills may have internal bugs but API is accessible.
-- ~~#7 market-report~~: Alpaca API confirmed working via direct HTTPS. Equity $101,473.77, 0 open positions. Keys in .env: ALPACA_API_KEY + ALPACA_SECRET_KEY. trading.* skills may have internal bugs but API is accessible.
-- ~~#8 trading~~: Alpaca API confirmed working via direct HTTPS. Equity $101,473.77, 0 open positions. Keys in .env: ALPACA_API_KEY + ALPACA_SECRET_KEY. trading.* skills may have internal bugs but API is accessible.
-- ~~#15 trading~~: Alternative à trading.autoscan: utiliser trading.screen(rsi_min, rsi_max, min_rvol, universe) + trading.momentum(). Fonctionne bien comme substitut.
+- ~~#26 error-handling~~: Ollama arg validation handles this - not a real knowledge gap.
+- ~~#32 error-handling~~: Ollama arg validation handles this - not a real knowledge gap.
+- ~~#33 sendMessage~~: sendFormatted already splits messages >4096 chars. Error was isolated incident from Feb 8.
+- ~~#36 windows-diagnosis~~: Not an actual knowledge gap - was a single image analysis limitation.
+- ~~#24 trading~~: RESOLVED: trading.* skills (positions, watchlist, pnl) were missing from OLLAMA_TIER1_PREFIXES. Fixed in loader.ts — agents now have full access.
+- ~~#25 trading~~: RESOLVED: trading.* skills (positions, watchlist, pnl) were missing from OLLAMA_TIER1_PREFIXES. Fixed in loader.ts — agents now have full access.
+- ~~#27 trading~~: RESOLVED: trading.* skills (positions, watchlist, pnl) were missing from OLLAMA_TIER1_PREFIXES. Fixed in loader.ts — agents now have full access.
+- ~~#28 trading~~: RESOLVED: trading.* skills (positions, watchlist, pnl) were missing from OLLAMA_TIER1_PREFIXES. Fixed in loader.ts — agents now have full access.
+- ~~#30 trading~~: RESOLVED: trading.* skills (positions, watchlist, pnl) were missing from OLLAMA_TIER1_PREFIXES. Fixed in loader.ts — agents now have full access.
+- ~~#31 trading~~: RESOLVED: trading.* skills (positions, watchlist, pnl) were missing from OLLAMA_TIER1_PREFIXES. Fixed in loader.ts — agents now have full access.
 

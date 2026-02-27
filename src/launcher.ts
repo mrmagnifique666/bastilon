@@ -163,12 +163,60 @@ function cleanPorts(): void {
 
 // ─── Kingston Process Management ───
 
-function startKingston(): void {
+let tsxReady = false;
+
+/** Resolve tsx CLI path — avoids npx ENOENT on Windows after reboot */
+function getTsxPath(): string {
+  const localTsx = path.resolve("node_modules/.bin/tsx");
+  const localTsxCmd = localTsx + ".cmd";
+  if (process.platform === "win32" && fs.existsSync(localTsxCmd)) return localTsxCmd;
+  if (fs.existsSync(localTsx)) return localTsx;
+  return "npx";
+}
+
+/**
+ * Wait for tsx to be available before spawning.
+ * After a system reboot, node_modules may not be accessible immediately.
+ */
+async function awaitTsxReady(): Promise<string> {
+  const localTsxCmd = path.resolve("node_modules/.bin/tsx.cmd");
+  const localTsx = path.resolve("node_modules/.bin/tsx");
+  const delays = [1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000, 30000];
+
+  for (let i = 0; i < delays.length; i++) {
+    if (process.platform === "win32" && fs.existsSync(localTsxCmd)) {
+      if (!tsxReady) log("info", "tsx.cmd found — ready to spawn");
+      tsxReady = true;
+      return localTsxCmd;
+    }
+    if (fs.existsSync(localTsx)) {
+      if (!tsxReady) log("info", "tsx found — ready to spawn");
+      tsxReady = true;
+      return localTsx;
+    }
+    if (tsxReady) break;
+    log("warn", `Waiting for tsx to be available... (attempt ${i + 1}/${delays.length})`);
+    await new Promise((r) => setTimeout(r, delays[i]));
+  }
+
+  if (process.platform === "win32" && fs.existsSync(localTsxCmd)) return localTsxCmd;
+  if (fs.existsSync(localTsx)) return localTsx;
+
+  log("warn", "tsx not found locally — falling back to npx");
+  return "npx";
+}
+
+async function startKingston(): Promise<void> {
   cleanLock();
   cleanPorts();
 
   kingstonStatus = "starting";
   kingstonStartTime = Date.now();
+
+  // Wait for tsx to be ready (handles post-reboot delays)
+  const tsxPath = await awaitTsxReady();
+  const useNpx = tsxPath === "npx";
+
   log("info", "Starting Kingston...");
 
   // Strip Claude Code env vars to prevent nested session issues
@@ -179,9 +227,11 @@ function startKingston(): void {
   }
   launchEnv.__KINGSTON_LAUNCHER = "1";
 
-  const child = spawn("npx", ["tsx", ENTRY_POINT], {
+  const args = useNpx ? ["tsx", ENTRY_POINT] : [ENTRY_POINT];
+
+  const child = spawn(tsxPath, args, {
     stdio: "inherit",
-    shell: true,
+    shell: process.platform === "win32",
     cwd: process.cwd(),
     env: launchEnv,
     windowsHide: true,
@@ -250,10 +300,16 @@ function startKingston(): void {
   });
 
   child.on("error", (err) => {
-    log("error", `Failed to spawn Kingston: ${err.message}`);
+    const isEnoent = err.message.includes("ENOENT");
+    if (isEnoent) {
+      tsxReady = false; // force re-probe on next start
+      log("error", `Failed to spawn Kingston: ${err.message}. System may be rebooting — retrying in 30s...`);
+    } else {
+      log("error", `Failed to spawn Kingston: ${err.message}`);
+    }
     kingstonStatus = "crashed";
     cleanLock();
-    setTimeout(startKingston, CRASH_DELAY_MS);
+    setTimeout(startKingston, isEnoent ? 30_000 : CRASH_DELAY_MS);
   });
 }
 

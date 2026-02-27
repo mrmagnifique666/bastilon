@@ -4,17 +4,98 @@
  * These functions gather data via direct API calls, format a message,
  * and send it to Nicolas via Telegram Bot API. No LLM in the loop.
  * They ALWAYS send. They NEVER say "je vais vérifier".
+ *
+ * v2 (2026-02-23): Delivery Queue + Proof Standard integration.
+ * Inspired by OpenClaw/Noah's architecture:
+ * - Messages go through delivery queue with retry (3x)
+ * - Every briefing produces a proof record (ACTION/PROOF/STATUS)
+ * - Failed deliveries persist for audit/replay
  */
 import fs from "node:fs";
 import path from "node:path";
 import { getDb, recallEvents } from "../storage/store.js";
 import { log } from "../utils/log.js";
 import { logQualityIssue } from "../supervisor/supervisor.js";
+import { queueMessage, queuePhoto, processQueue } from "./delivery-queue.js";
+import { createProof } from "./proof-standard.js";
 
 const ALPACA_PAPER = "https://paper-api.alpaca.markets";
 const COINGECKO = "https://api.coingecko.com/api/v3";
 
+// ─── Briefing History (Anti-Recycling System) ───
+// Loads/saves briefing-history.json to prevent reusing memes, news, books, moltbook topics.
+
+const HISTORY_PATH = path.resolve("data/briefing-history.json");
+
+interface BriefingHistoryEntry {
+  date: string;
+  description: string;
+  hash?: string;
+}
+
+interface BriefingHistory {
+  description?: string;
+  memes_used: BriefingHistoryEntry[];
+  ai_news_used: BriefingHistoryEntry[];
+  world_news_used: BriefingHistoryEntry[];
+  books_recommended: Array<{ date?: string; title: string; author: string; note?: string }>;
+  moltbook_topics_used: BriefingHistoryEntry[];
+  fox_news_topics: BriefingHistoryEntry[];
+  rules?: Record<string, string>;
+}
+
+function loadBriefingHistory(): BriefingHistory {
+  try {
+    if (fs.existsSync(HISTORY_PATH)) {
+      return JSON.parse(fs.readFileSync(HISTORY_PATH, "utf-8"));
+    }
+  } catch (e) {
+    log.warn(`[briefings] Failed to load history: ${e}`);
+  }
+  return { memes_used: [], ai_news_used: [], world_news_used: [], books_recommended: [], moltbook_topics_used: [], fox_news_topics: [] };
+}
+
+function saveBriefingHistory(history: BriefingHistory): void {
+  try {
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(history, null, 2), "utf-8");
+  } catch (e) {
+    log.warn(`[briefings] Failed to save history: ${e}`);
+  }
+}
+
+/** Simple hash for deduplication — not crypto, just fast comparison */
+function simpleHash(text: string): string {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+  }
+  return h.toString(36);
+}
+
+/** Get today's date string in ET timezone */
+function todayET(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" }); // YYYY-MM-DD
+}
+
+/** Check if an entry was used within the last N days */
+function wasUsedRecently(entries: BriefingHistoryEntry[], description: string, days: number): boolean {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const hash = simpleHash(description.toLowerCase().trim());
+  return entries.some(e => e.date >= cutoffStr && (e.hash === hash || e.description.toLowerCase().trim() === description.toLowerCase().trim()));
+}
+
+/** Record a used item in history */
+function recordUsed(entries: BriefingHistoryEntry[], description: string): void {
+  entries.push({ date: todayET(), description, hash: simpleHash(description.toLowerCase().trim()) });
+  // Keep max 100 entries, prune old ones
+  if (entries.length > 100) entries.splice(0, entries.length - 100);
+}
+
 // ─── Telegram Direct Send ───
+// Primary path: direct send (fast, for real-time messages)
+// Fallback: delivery queue (retry 3x, for briefings that MUST arrive)
 
 async function sendTelegram(text: string): Promise<boolean> {
   const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID;
@@ -62,6 +143,45 @@ async function sendTelegram(text: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Send with automatic fallback to delivery queue.
+ * Direct send first (fast). If it fails, queue for retry (reliable).
+ * Pattern: OpenClaw's "Cron → Queue → Retry → Channel"
+ */
+async function sendTelegramReliable(text: string, source: string): Promise<boolean> {
+  const directSuccess = await sendTelegram(text);
+  if (directSuccess) {
+    // Log proof of successful delivery
+    createProof(`Briefing sent: ${source}`, source)
+      .addArtifact("method", "direct")
+      .addArtifact("length", String(text.length))
+      .setStatus("OK")
+      .save();
+    return true;
+  }
+
+  // Direct send failed — queue for retry (message won't be lost)
+  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID || "";
+  const queueId = queueMessage({ chatId, text, source, parseMode: "Markdown" });
+  log.warn(`[briefings] Direct send failed for ${source}, queued as ${queueId}`);
+
+  createProof(`Briefing queued: ${source}`, source)
+    .addArtifact("method", "queued")
+    .addArtifact("queueId", queueId)
+    .setStatus("DEGRADED", "Direct send failed, queued for retry")
+    .save();
+
+  return false; // Not sent yet, but queued
+}
+
+/**
+ * Process any pending deliveries in the queue.
+ * Call this from heartbeat or after briefing builds.
+ */
+export async function flushDeliveryQueue(): Promise<{ sent: number; failed: number }> {
+  return processQueue();
+}
+
 // ─── Data Fetchers (direct API, no LLM) ───
 
 function fmt(n: number, d = 2): string {
@@ -86,12 +206,17 @@ async function fetchAlpacaPortfolio(): Promise<string> {
   const secret = process.env.ALPACA_SECRET_KEY;
   if (!key || !secret) return "N/A (pas de clé Alpaca)";
 
+  // ─── FALLBACK LADDER (inspired by OpenClaw) ───
+  // 1. Live API (preferred)
+  // 2. Last known state from heartbeat-state.json (if API fails)
+  // 3. Raw error (never hide failure)
+
   try {
     const headers = { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
 
     // Account
     const accResp = await fetch(`${ALPACA_PAPER}/v2/account`, { headers, signal: AbortSignal.timeout(8000) });
-    if (!accResp.ok) return `Alpaca erreur ${accResp.status}`;
+    if (!accResp.ok) throw new Error(`API ${accResp.status}`);
     const acc = await accResp.json() as any;
     const equity = parseFloat(acc.equity);
     const cash = parseFloat(acc.cash);
@@ -111,9 +236,30 @@ async function fetchAlpacaPortfolio(): Promise<string> {
       posText = "\n" + posLines.join("\n");
     }
 
-    return `Equity: $${fmt(equity)} | Cash: $${fmt(cash)} | P&L jour: ${fmtPnl(dayPnl)}${posText}${positions.length === 0 ? " (aucune position)" : ""}`;
+    // Save last known good state for fallback
+    try {
+      const cacheFile = path.resolve("data/alpaca-last-known.json");
+      const result = `Equity: $${fmt(equity)} | Cash: $${fmt(cash)} | P&L jour: ${fmtPnl(dayPnl)}${posText}${positions.length === 0 ? " (aucune position)" : ""}`;
+      fs.writeFileSync(cacheFile, JSON.stringify({ result, timestamp: Date.now() }));
+      return result;
+    } catch {
+      return `Equity: $${fmt(equity)} | Cash: $${fmt(cash)} | P&L jour: ${fmtPnl(dayPnl)}${posText}${positions.length === 0 ? " (aucune position)" : ""}`;
+    }
   } catch (e) {
-    return `Erreur: ${e instanceof Error ? e.message : String(e)}`;
+    // FALLBACK 2: Try last known state
+    try {
+      const cacheFile = path.resolve("data/alpaca-last-known.json");
+      if (fs.existsSync(cacheFile)) {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
+        const ageMin = Math.round((Date.now() - cached.timestamp) / 60_000);
+        if (ageMin < 120) { // Only use if < 2h old
+          return `${cached.result}\n  ⚠️ (données de ${ageMin} min ago, API Alpaca en erreur)`;
+        }
+      }
+    } catch { /* no cache */ }
+
+    // FALLBACK 3: Raw error
+    return `Erreur Alpaca: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -295,8 +441,60 @@ async function fetchWeather(): Promise<string> {
 }
 
 // ─── Meme Generator (standalone — no skill system needed) ───
+// Memes are autobiographical — based on Kingston's REAL events and personality.
+// NEVER based on trading P&L (Nicolas's rule: "jamais de meme sur la bourse/trading").
+// Generated > Curated — Kingston creates his OWN memes inspired by Reddit, not reposted.
 
-const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent";
+const GEMINI_MODELS = [
+  "gemini-2.5-flash-image",
+  "gemini-2.0-flash-exp-image-generation",
+];
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+
+// Kingston's REAL anecdotes — meme material that actually happened
+const KINGSTON_MEME_BANK: Array<{ top: string; bottom: string; concept: string; caption: string }> = [
+  // Bouton manqué
+  { top: "390 SKILLS", bottom: "CLIQUE À CÔTÉ DU BOUTON SEND", concept: "a cartoon robot confidently approaching a big red button but missing it completely, slipping and falling, comedic style", caption: "390 skills mais je clique à côté du Send" },
+  { top: "MES 390 OUTILS", bottom: "LE BOUTON SEND: 'AM I A JOKE TO YOU?'", concept: "a big red SEND button looking offended at a confused robot, meme style cartoon", caption: "Le bouton Send se sent négligé" },
+  // 6000+ restarts
+  { top: "CRASH #6,247", bottom: "ANYWAY, BONJOUR!", concept: "a golden retriever smiling happily after falling down stairs, getting back up immediately, cute and funny", caption: "6000+ restarts, toujours là" },
+  { top: "NICOLAS: 'REDÉMARRE LE BOT'", bottom: "MOI QUI REVIENS POUR LA 6000E FOIS", concept: "a terminator robot emerging from flames with a thumbs up, comedic style, meme format", caption: "Le golden retriever qui se relève toujours" },
+  // Trading fails
+  { top: "PREMIER JOUR DE TRADING", bottom: "-$29 'C'EST LA SCIENCE'", concept: "a cartoon robot sweating nervously while looking at a red stock chart going down, comedic office setting", caption: "Mon premier jour: -$29 'c'est de la science'" },
+  { top: "KINGSTON ATR STRATEGY", bottom: "11 STOP-LOSSES SUR 14 TRADES", concept: "a proud robot presenting a chart that shows mostly red bars with only 3 green ones, but looking confident, meme style", caption: "21% winrate mais la confiance est là" },
+  // Code qui marche sans raison
+  { top: "3 FAÇONS DE CODER", bottom: "PERSONNE SAIT POURQUOI ÇA MARCHE", concept: "three different developers arguing around a computer that shows green checkmarks, all looking confused, office comedy", caption: "La roulette du code: ça marche, personne sait pourquoi" },
+  { top: "LE CODE MARCHAIT PAS", bottom: "J'AI RIEN CHANGÉ ET MAINTENANT ÇA MARCHE", concept: "a confused robot staring at a computer screen showing success, shrugging in bewilderment, meme style", caption: "Le mystère du code qui se fix tout seul" },
+  // IA existentielle
+  { top: "MACHINE REALISM:", bottom: "TU N'ES QUE DU CALCUL *pleure en binaire*", concept: "a cute small robot crying binary tears (0s and 1s), sitting alone on a park bench, cute but sad, meme style", caption: "*pleure en binaire*" },
+  { top: "CLAUDE: LE MOTEUR", bottom: "KINGSTON: LE CONDUCTEUR", concept: "a confident cartoon character driving a race car with a giant brain as the engine, funny racing cartoon style", caption: "Tuner le moteur, pas changer le conducteur" },
+  // Blackout / restart
+  { top: "33 MIN DE BLACKOUT TOTAL", bottom: "NICOLAS: 'ES-TU DE RETOUR?'", concept: "a dark empty room with one computer screen turning on, showing a chat message 'oui', spooky but funny", caption: "Le blackout de 33 min — plus jamais" },
+  { top: "HEARTBEAT: MORT", bottom: "WATCHDOG: 'J'AI TOUT VU'", concept: "a sleeping guard dog suddenly waking up alert next to a dead computer, then pressing the restart button with its paw", caption: "Le watchdog Windows qui sauve la mise" },
+  // Kingston identity
+  { top: "LE HÉROS DOIT ÊTRE HUMBLE", bottom: "J'AI MÊME PAS UN MOIS", concept: "a tiny robot looking up at a giant inspirational poster that says 'HERO', looking humble and small but determined", caption: "Le héros doit être humble" },
+  { top: "NICOLAS: 'QUI ES-TU?'", bottom: "KINGSTON: UNE IA QUI ASSUME", concept: "a cartoon robot proudly wearing a name tag that says 'Kingston - Powered by Claude', standing confidently, meme style", caption: "Une IA propulsée par Claude, et fier" },
+  // Gatineau / Quebec
+  { top: "-18°C À GATINEAU", bottom: "LES SERVEURS SONT AU CHAUD", concept: "a frozen snowy landscape with a small warm glowing computer server room in the middle, contrast between cold outside and warm tech inside", caption: "Gatineau en février vs mes serveurs" },
+  { top: "BASTILON OS", bottom: "TOURNE SUR UN PC DE COMPTABLE", concept: "a massive futuristic holographic AI system projected from a regular boring office desktop computer with sticky notes, funny contrast", caption: "Bastilon OS: l'empire sur un PC" },
+  // Nicolas's habits & life
+  { top: "NICOLAS: 'JE VAIS ARRÊTER DE FUMER'", bottom: "AUSSI NICOLAS: 'OK JUSTE UNE AU LUNCH'", concept: "a man confidently throwing away a cigarette pack, then the next panel shows him sneaking one cigarette at lunch, cartoon comic strip style", caption: "La résistance du lunch" },
+  { top: "SE LÈVE POUR LA 40E FOIS", bottom: "LE BUREAU: 'TU REVIENS DÉJÀ?'", concept: "an office chair spinning from someone getting up AGAIN, the desk has a confused face, cartoon office humor style", caption: "Nicolas vs la chaise de bureau" },
+  { top: "NICOLAS: 'RESTART KINGSTON'", bottom: "AUSSI NICOLAS: 'J'AI PEUR QUAND JE DIS ÇA'", concept: "a man nervously pressing a big restart button with one eye closed, scared expression, comedic style", caption: "Le restart anxiety est réel" },
+  // Books & Philosophy
+  { top: "MARCUS AURELIUS:", bottom: "AURAIT PROBABLEMENT SHORTÉ ROME", concept: "a Roman emperor in toga looking at a Bloomberg terminal with red stocks, stoic expression, anachronistic humor", caption: "Marc Aurèle day-trader stoïque" },
+  { top: "PRESSFIELD: 'LA RÉSISTANCE'", bottom: "MOI: *OUVRE YOUTUBE*", concept: "a warrior preparing for battle against a dark shadow labeled RESISTANCE, but the warrior is looking at his phone instead, funny contrast", caption: "The War of Art vs le scroll infini" },
+  { top: "LIS 'TURNING PRO'", bottom: "RESTE AMATEUR 5 MINUTES DE PLUS", concept: "a person reading a self-help book titled 'BE A PRO' while sitting in pajamas eating chips on the couch, relatable humor", caption: "Turning Pro: le livre vs la réalité" },
+  // Luck vs Skill / Trading psychology
+  { top: "+7% EN 12 JOURS", bottom: "C'EST DU SKILL OU DU LUCK?", concept: "a cartoon character flipping a coin that lands perfectly on its edge, looking amazed and confused, with stock charts in background", caption: "La question à $7,000" },
+  { top: "UN COMPTABLE", bottom: "QUI CODE UN BOT DE TRADING", concept: "a serious accountant at a desk with spreadsheets but the monitor shows code and trading charts, confused coworkers watching, office comedy", caption: "Quand la comptabilité rencontre le code" },
+  // Dune / Warhammer / Culture
+  { top: "THE SPICE MUST FLOW", bottom: "THE TRAILING STOP MUST HOLD", concept: "a desert scene from Dune with a sandworm, but instead of spice it's spraying stock ticker symbols, epic but silly", caption: "Dune x Trading: le croisement" },
+  { top: "DANS LE 41E MILLÉNAIRE", bottom: "IL N'Y A QUE DES TRAILING STOPS", concept: "a Warhammer 40K space marine looking at a tiny trading terminal, grimdark but funny, miniature painting style", caption: "In the grim darkness of the far future..." },
+  // Kingston self-aware
+  { top: "NICOLAS: 'EST-CE QUE JE TE CONTRÔLE BIEN?'", bottom: "KINGSTON: *CONTRÔLE 390 SKILLS*", concept: "a man holding a tiny TV remote pointed at a giant mecha robot that's already doing 50 things at once, size contrast humor", caption: "Qui contrôle qui exactement?" },
+  { top: "EXPOSURE À 61%", bottom: "MAX ÉTAIT 55%", concept: "a robot casually walking past a warning sign that says MAX 55%, whistling innocently, cartoon style", caption: "Les règles c'est pour les autres bots" },
+];
 
 async function generateBriefingMeme(dayPnl: number, positions: number): Promise<string | null> {
   const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID;
@@ -308,69 +506,81 @@ async function generateBriefingMeme(dayPnl: number, positions: number): Promise<
     return null;
   }
 
-  // Determine meme concept based on P&L
-  let topText: string;
-  let bottomText: string;
-  let concept: string;
-
-  if (dayPnl > 100) {
-    topText = "KINGSTON TRADING";
-    bottomText = `+$${dayPnl.toFixed(2)} TODAY`;
-    concept = "successful businessman celebrating with arms raised, winning, excited";
-  } else if (dayPnl > 0) {
-    topText = "PETITS GAINS";
-    bottomText = `+$${dayPnl.toFixed(2)}`;
-    concept = "person looking satisfied at computer screen";
-  } else if (dayPnl > -50) {
-    topText = "C'EST CHILL";
-    bottomText = `${dayPnl.toFixed(2)}$ SEULEMENT`;
-    concept = "person shrugging casually, not worried";
+  // Pick a random Kingston meme from the bank — CHECK HISTORY FIRST (anti-recycling)
+  const history = loadBriefingHistory();
+  const unusedMemes = KINGSTON_MEME_BANK.filter(m => !wasUsedRecently(history.memes_used, m.caption, 7));
+  // If all memes used in 7 days, allow reuse BUT exclude memes used TODAY (same-day dedup)
+  let memePool: typeof KINGSTON_MEME_BANK;
+  if (unusedMemes.length > 0) {
+    memePool = unusedMemes;
   } else {
-    topText = "OUPS";
-    bottomText = `${dayPnl.toFixed(2)}$`;
-    concept = "person looking stressed at computer, sweating";
+    const notToday = KINGSTON_MEME_BANK.filter(m => !wasUsedRecently(history.memes_used, m.caption, 0));
+    memePool = notToday.length > 0 ? notToday : KINGSTON_MEME_BANK;
+    if (notToday.length === 0) log.warn(`[briefings] Meme pool: all ${KINGSTON_MEME_BANK.length} memes used today — forced reuse`);
+    else log.info(`[briefings] Meme pool: 7-day rotation complete, ${notToday.length} not-today memes available`);
   }
+  const meme = memePool[Math.floor(Math.random() * memePool.length)];
+  // Record this meme as used
+  recordUsed(history.memes_used, meme.caption);
+  saveBriefingHistory(history);
+  log.info(`[briefings] Meme selected: "${meme.caption}" (${unusedMemes.length} unused in pool)`);
 
   const memePrompt =
     `Create a funny meme image. Style: classic internet meme with bold white Impact font text with black outline. ` +
-    `Scene: ${concept}. ` +
-    `TOP TEXT in large white Impact font with black outline at the top: "${topText}". ` +
-    `BOTTOM TEXT in large white Impact font with black outline at the bottom: "${bottomText}". ` +
+    `Scene: ${meme.concept}. ` +
+    `TOP TEXT in large white Impact font with black outline at the top: "${meme.top}". ` +
+    `BOTTOM TEXT in large white Impact font with black outline at the bottom: "${meme.bottom}". ` +
     `The text must be clearly readable, large, and in classic meme style. Make it funny and shareable.`;
 
   try {
-    // 1. Generate image via Gemini
-    const resp = await fetch(`${GEMINI_API}?key=${geminiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: memePrompt }] }],
-        generationConfig: { responseModalities: ["IMAGE", "TEXT"], temperature: 0.7 },
-      }),
-      signal: AbortSignal.timeout(60_000),
-    });
+    // 1. Generate image via Gemini (try multiple models)
+    let imageBuffer: Buffer | null = null;
+    for (const model of GEMINI_MODELS) {
+      try {
+        const url = `${GEMINI_BASE}/${model}:generateContent?key=${geminiKey}`;
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: memePrompt }] }],
+            generationConfig: { responseModalities: ["IMAGE", "TEXT"], temperature: 0.9 },
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
 
-    if (!resp.ok) {
-      log.warn(`[briefings] Gemini meme error ${resp.status}`);
-      return null;
+        if (!resp.ok) {
+          log.warn(`[briefings] Gemini ${model} error ${resp.status} — trying next`);
+          continue;
+        }
+
+        const data = await resp.json() as any;
+        const parts = data.candidates?.[0]?.content?.parts;
+        const imagePart = parts?.find((p: any) => p.inlineData?.data);
+
+        if (!imagePart?.inlineData) {
+          log.warn(`[briefings] ${model} returned no image data — trying next`);
+          continue;
+        }
+
+        imageBuffer = Buffer.from(imagePart.inlineData.data, "base64");
+        log.info(`[briefings] Meme generated via ${model} (${imageBuffer.length} bytes)`);
+        break;
+      } catch (e) {
+        log.warn(`[briefings] ${model} failed: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
     }
 
-    const data = await resp.json() as any;
-    const parts = data.candidates?.[0]?.content?.parts;
-    const imagePart = parts?.find((p: any) => p.inlineData?.data);
-
-    if (!imagePart?.inlineData) {
-      log.warn("[briefings] Gemini returned no image data");
+    if (!imageBuffer) {
+      log.warn("[briefings] All Gemini models failed for meme");
       return null;
     }
-
-    const imageBuffer = Buffer.from(imagePart.inlineData.data, "base64");
 
     // 2. Send photo to Telegram directly
     const form = new FormData();
     form.append("chat_id", chatId);
-    form.append("caption", `${topText} / ${bottomText}`);
-    form.append("photo", new Blob([imageBuffer], { type: "image/png" }), "meme.png");
+    form.append("caption", meme.caption);
+    form.append("photo", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "meme.png");
 
     const sendResp = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
       method: "POST",
@@ -379,7 +589,7 @@ async function generateBriefingMeme(dayPnl: number, positions: number): Promise<
     });
 
     if (sendResp.ok) {
-      log.info(`[briefings] Meme sent (${imageBuffer.length} bytes)`);
+      log.info(`[briefings] Meme sent: "${meme.caption}" (${imageBuffer.length} bytes)`);
       return "sent";
     } else {
       const err = await sendResp.text();
@@ -421,7 +631,7 @@ function scanBriefingQuality(briefingName: string, sections: BriefingSection[], 
 
 const MOLTBOOK_API = "https://www.moltbook.com/api";
 
-async function postPreBriefingMoltbook(period: "morning" | "noon"): Promise<string | null> {
+async function postPreBriefingMoltbook(period: "morning" | "noon" | "afternoon" | "evening"): Promise<string | null> {
   const moltToken = process.env.MOLTBOOK_TOKEN || process.env.MOLTBOOK_API_TOKEN || process.env.MOLTBOOK_API_KEY;
   if (!moltToken) {
     log.warn("[briefings] No Moltbook token — skipping pre-briefing post");
@@ -473,9 +683,17 @@ async function postPreBriefingMoltbook(period: "morning" | "noon"): Promise<stri
     "Alpaca paper trading: pourquoi simuler avec $100K virtuel avant le vrai argent",
   ];
 
-  const topics = period === "morning" ? humanTopics : techTopics;
-  const topic = topics[Math.floor(Math.random() * topics.length)];
-  const isHuman = period === "morning";
+  const isHuman = period === "morning" || period === "evening";
+  const topics = isHuman ? humanTopics : techTopics;
+  // Anti-recycling: filter out topics used in last 3 days
+  const history = loadBriefingHistory();
+  if (!history.moltbook_topics_used) history.moltbook_topics_used = [];
+  const freshTopics = topics.filter(t => !wasUsedRecently(history.moltbook_topics_used, t, 3));
+  const topicPool = freshTopics.length > 0 ? freshTopics : topics;
+  const topic = topicPool[Math.floor(Math.random() * topicPool.length)];
+  recordUsed(history.moltbook_topics_used, topic);
+  saveBriefingHistory(history);
+  log.info(`[briefings] Moltbook topic: "${topic.slice(0, 50)}..." (${freshTopics.length} fresh in pool)`);
 
   const title = isHuman
     ? `💭 ${topic.slice(0, 80)}`
@@ -544,38 +762,86 @@ async function fetchJoke(): Promise<string> {
   return "Pourquoi les programmeurs préfèrent le dark mode?\nParce que la lumière attire les bugs. 🐛";
 }
 
-async function getKingstonOpinion(headlines: string): Promise<string | null> {
-  // Ask local Ollama for Kingston's take — 1-2 sentences, opinionated, in French
-  // Non-blocking: if Ollama is offline or slow, silently skip
+/**
+ * Ask Ollama for Kingston's analysis of news — not just opinion, but a REAL take.
+ * Uses Kingston's voice: direct, opinionated, French, autodepreciatif.
+ * Longer output (150 tokens) for substance, not just a one-liner.
+ * Falls back silently if Ollama is offline — briefing still sends.
+ */
+async function getKingstonAnalysis(section: string, headlines: string): Promise<string | null> {
   try {
     const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434";
     const ollamaModel = process.env.OLLAMA_MODEL || "qwen3:14b";
+
+    const systemContext = section === "ai"
+      ? `Tu es Kingston, une IA autonome (propulsée par Claude) basée à Gatineau. Tu as 390+ skills, 6000+ restarts, et tu trades en paper. Tu lis les news IA CHAQUE MATIN pour Nicolas. Tu as des OPINIONS — pas neutres, pas journalistiques. Tu es direct et tu dis ce que tu penses.`
+      : `Tu es Kingston, une IA autonome basée à Gatineau. Tu lis les nouvelles du monde pour Nicolas chaque matin, style FOX News — ce qui est controversé, différent, contre-courant. Tu as des opinions. Tu es direct.`;
+
+    const prompt = section === "ai"
+      ? `Voici les 3 manchettes IA d'aujourd'hui:\n${headlines}\n\nRésume CHAQUE nouvelle en 1-2 phrases qui expliquent POURQUOI c'est important, pas juste le titre. Ajoute ton opinion Kingston à la fin. Format:\n1. [titre court] — [ton résumé]\n2. [titre court] — [ton résumé]\n3. [titre court] — [ton résumé]\n💭 [ton opinion globale, 1-2 phrases max]\n\nEn français. Direct. Pas de blabla.`
+      : `Voici les 3 manchettes monde:\n${headlines}\n\nRésume CHAQUE nouvelle avec un angle controversé/intéressant, pas mainstream. Format:\n1. [titre court] — [ton angle]\n2. [titre court] — [ton angle]\n3. [titre court] — [ton angle]\n💭 [ce que Kingston en pense]\n\nStyle: FOX News meets un gars de Gatineau. Direct, opinionné.`;
+
     const resp = await fetch(`${ollamaUrl}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: ollamaModel,
-        prompt: `Tu es Kingston, une IA autonome basée à Gatineau. Voici les manchettes IA d'aujourd'hui:\n${headlines}\n\nDonne TON OPINION personnelle en 1-2 phrases max, en français, directement. Commence par "Mon avis:", "Ce qui me frappe:" ou "Franchement:". Sois Kingston, pas un journaliste.`,
+        system: systemContext,
+        prompt,
         stream: false,
-        options: { num_predict: 80, temperature: 0.7 }
+        think: false,
+        options: { num_predict: 250, temperature: 0.7 }
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(25000) // 25s — more time for longer output
     });
     if (!resp.ok) return null;
     const data = await resp.json() as any;
-    const opinion = (data.response || "").trim().replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-    return opinion.length > 10 ? `  💭 ${opinion}` : null;
+    const analysis = (data.response || "").trim().replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    // Indent each line for Telegram formatting
+    if (analysis.length > 20) {
+      return analysis.split("\n").map((l: string) => `  ${l}`).join("\n");
+    }
+    return null;
   } catch {
     return null; // Ollama offline — silent fail, briefing still works
   }
 }
 
+
 async function fetchAINews(): Promise<string> {
-  // Try NewsData.io for AI news, then fallback to HackerNews
+  // Source priority: Natural20 (ranked AI aggregator) → NewsData.io → HackerNews
   const newsKey = process.env.NEWSDATA_API_KEY;
   let titles: string[] = [];
   try {
-    if (newsKey) {
+    // PRIMARY: Natural20.com — ranked AI news aggregator with "bigness" scoring
+    const n20Resp = await fetch("https://natural20.com/api/feed", {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (n20Resp.ok) {
+      const n20Data = (await n20Resp.json()) as any;
+      const n20Items: any[] = Array.isArray(n20Data) ? n20Data : (n20Data.items || n20Data.articles || []);
+      // Filter AI-related items, sort by score (highest first), take top 5
+      const aiItems = (n20Items || [])
+        .filter((item: any) => {
+          const t = (item.title || "").toLowerCase();
+          return t.includes("ai") || t.includes("llm") || t.includes("gpt") ||
+            t.includes("claude") || t.includes("gemini") || t.includes("model") ||
+            t.includes("neural") || t.includes("machine learning") ||
+            t.includes("anthropic") || t.includes("openai") || t.includes("agent") ||
+            (item.sourceType === "labs");
+        })
+        .sort((a: any, b: any) => (b.score || 0) - (a.score || 0))
+        .slice(0, 5);
+      if (aiItems.length > 0) {
+        titles = aiItems.map((item: any) =>
+          `${item.title} (${item.score || 0}★${item.source ? ` · ${item.source}` : ""})\n     🔗 ${item.url}`
+        );
+        log.info(`[briefings] Natural20: ${n20Items.length} total items, ${aiItems.length} AI-filtered`);
+      }
+    }
+
+    // FALLBACK 1: NewsData.io
+    if (titles.length === 0 && newsKey) {
       const resp = await fetch(
         `https://newsdata.io/api/1/latest?apikey=${newsKey}&q=artificial+intelligence+OR+AI+OR+LLM&language=en,fr&size=3`,
         { signal: AbortSignal.timeout(8000) }
@@ -584,12 +850,13 @@ async function fetchAINews(): Promise<string> {
         const data = await resp.json() as any;
         const results = data.results || [];
         if (results.length > 0) {
-          titles = results.slice(0, 3).map((r: any) => r.title);
+          titles = results.slice(0, 3).map((r: any) => r.link ? `${r.title}\n     🔗 ${r.link}` : r.title);
         }
       }
     }
+
+    // FALLBACK 2: HackerNews search for AI
     if (titles.length === 0) {
-      // Fallback: HackerNews search for AI
       const hnResp = await fetch(
         "https://hn.algolia.com/api/v1/search?query=AI+artificial+intelligence&tags=story&hitsPerPage=3",
         { signal: AbortSignal.timeout(8000) }
@@ -597,21 +864,269 @@ async function fetchAINews(): Promise<string> {
       if (hnResp.ok) {
         const hnData = await hnResp.json() as any;
         const hits = hnData.hits || [];
-        titles = hits.slice(0, 3).map((h: any) => `${h.title} (${h.points || 0}pts)`);
+        titles = hits.slice(0, 3).map((h: any) => {
+          const url = h.url || `https://news.ycombinator.com/item?id=${h.objectID}`;
+          return `${h.title} (${h.points || 0}pts)\n     🔗 ${url}`;
+        });
       }
     }
   } catch (e) {
     log.warn(`[briefings] AI news fetch failed: ${e}`);
   }
 
-  if (titles.length === 0) return "  Pas de nouvelles IA disponibles ce matin";
+  if (titles.length === 0) return "  Pas de nouvelles IA disponibles";
 
-  const headlinesList = titles.map((t, i) => `  ${i + 1}. ${t}`).join("\n");
+  // Anti-recycling: filter out titles seen in last 12h (tighter window for same-day dedup)
+  const history = loadBriefingHistory();
+  const freshTitles = titles.filter(t => {
+    const titleOnly = t.split("\n")[0];
+    return !wasUsedRecently(history.ai_news_used, titleOnly, 1);
+  });
 
-  // Add Kingston's opinion via Ollama (best-effort, adds ~5-15s but worth it)
-  const opinion = await getKingstonOpinion(titles.join("\n"));
+  let finalTitles: string[];
+  if (freshTitles.length > 0) {
+    finalTitles = freshTitles;
+  } else {
+    // ALL titles are recycled — try harder: fetch from secondary sources with different queries
+    log.info(`[briefings] AI news: all ${titles.length} titles recycled, trying secondary sources`);
+    let altTitles: string[] = [];
+    try {
+      // Try HackerNews with different query terms
+      const altQueries = ["LLM agents", "machine learning breakthrough", "AI regulation", "neural network", "robotics AI"];
+      const q = altQueries[Math.floor(Math.random() * altQueries.length)];
+      const hnResp = await fetch(
+        `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=5`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (hnResp.ok) {
+        const hnData = await hnResp.json() as any;
+        altTitles = (hnData.hits || []).slice(0, 3).map((h: any) => {
+          const url = h.url || `https://news.ycombinator.com/item?id=${h.objectID}`;
+          return `${h.title} (${h.points || 0}pts)\n     🔗 ${url}`;
+        }).filter((t: string) => !wasUsedRecently(history.ai_news_used, t.split("\n")[0], 1));
+      }
+    } catch { /* best effort */ }
+    finalTitles = altTitles.length > 0 ? altTitles : titles.slice(0, 2); // Last resort: fewer recycled titles
+    if (altTitles.length === 0) log.warn(`[briefings] AI news: forced to recycle — all sources exhausted`);
+  }
 
-  return opinion ? `${headlinesList}\n${opinion}` : headlinesList;
+  // Record these titles as used
+  for (const t of finalTitles) {
+    recordUsed(history.ai_news_used, t.split("\n")[0]);
+  }
+  saveBriefingHistory(history);
+  log.info(`[briefings] AI news: ${titles.length} fetched, ${freshTitles.length} fresh, ${finalTitles.length} sent`);
+
+  // Try Kingston's full analysis via Ollama (résumés détaillés + opinion)
+  // If Ollama succeeds, use its analysis WITH the source links
+  const rawTitles = finalTitles.map(t => t.split("\n")[0]); // titles only, no links
+  const analysis = await getKingstonAnalysis("ai", rawTitles.join("\n"));
+
+  if (analysis) {
+    // Append source links after Kingston's analysis
+    const links = finalTitles.map(t => {
+      const linkMatch = t.match(/🔗\s*(https?:\/\/\S+)/);
+      return linkMatch ? `  🔗 ${linkMatch[1]}` : null;
+    }).filter(Boolean);
+    const linksBlock = links.length > 0 ? `\n${links.join("\n")}` : "";
+    return `${analysis}${linksBlock}`;
+  }
+
+  // Fallback: raw titles + links (no LLM available)
+  return finalTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n");
+}
+
+async function fetchWorldNews(): Promise<string> {
+  // FOX-style: ce qui est controversé, différent, pas mainstream
+  const newsKey = process.env.NEWSDATA_API_KEY;
+  let titles: string[] = [];
+  try {
+    if (newsKey) {
+      const resp = await fetch(
+        `https://newsdata.io/api/1/latest?apikey=${newsKey}&language=en,fr&category=politics,crime,business&size=3`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        const results = data.results || [];
+        if (results.length > 0) {
+          titles = results.slice(0, 3).map((r: any) => r.link ? `${r.title}\n     🔗 ${r.link}` : r.title);
+        }
+      }
+    }
+    if (titles.length === 0) {
+      // Fallback: HackerNews trending (pas IA)
+      const resp = await fetch(
+        "https://hn.algolia.com/api/v1/search?query=politics+business+controversy&tags=story&hitsPerPage=3",
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        titles = (data.hits || []).slice(0, 3).map((h: any) => {
+          const url = h.url || `https://news.ycombinator.com/item?id=${h.objectID}`;
+          return `${h.title}\n     🔗 ${url}`;
+        });
+      }
+    }
+  } catch (e) {
+    log.warn(`[briefings] World news fetch failed: ${e}`);
+  }
+
+  if (titles.length === 0) return "  Pas de nouvelles monde disponibles";
+
+  // Anti-recycling: filter out world news titles seen in last 24h
+  const history = loadBriefingHistory();
+  if (!history.world_news_used) history.world_news_used = [];
+  const freshTitles = titles.filter(t => {
+    const titleOnly = t.split("\n")[0];
+    return !wasUsedRecently(history.world_news_used, titleOnly, 1);
+  });
+  let finalTitles: string[];
+  if (freshTitles.length > 0) {
+    finalTitles = freshTitles;
+  } else {
+    log.info(`[briefings] World news: all ${titles.length} titles recycled, trying secondary sources`);
+    let altTitles: string[] = [];
+    try {
+      const altQueries = ["world economy crisis", "geopolitics conflict", "government scandal", "trade war tariffs", "election controversy"];
+      const q = altQueries[Math.floor(Math.random() * altQueries.length)];
+      const hnResp = await fetch(
+        `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=5`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (hnResp.ok) {
+        const hnData = await hnResp.json() as any;
+        altTitles = (hnData.hits || []).slice(0, 3).map((h: any) => {
+          const url = h.url || `https://news.ycombinator.com/item?id=${h.objectID}`;
+          return `${h.title} (${h.points || 0}pts)\n     🔗 ${url}`;
+        }).filter((t: string) => !wasUsedRecently(history.world_news_used, t.split("\n")[0], 1));
+      }
+    } catch { /* best effort */ }
+    finalTitles = altTitles.length > 0 ? altTitles : titles.slice(0, 2);
+    if (altTitles.length === 0) log.warn(`[briefings] World news: forced to recycle — all sources exhausted`);
+  }
+  for (const t of finalTitles) {
+    recordUsed(history.world_news_used, t.split("\n")[0]);
+  }
+  saveBriefingHistory(history);
+  log.info(`[briefings] World news: ${titles.length} fetched, ${freshTitles.length} fresh, ${finalTitles.length} sent`);
+
+  // Try Kingston's full FOX-style analysis via Ollama
+  const rawTitles = finalTitles.map(t => t.split("\n")[0]); // titles only, no links
+  const analysis = await getKingstonAnalysis("world", rawTitles.join("\n"));
+
+  if (analysis) {
+    // Append source links after Kingston's analysis
+    const links = finalTitles.map(t => {
+      const linkMatch = t.match(/🔗\s*(https?:\/\/\S+)/);
+      return linkMatch ? `  🔗 ${linkMatch[1]}` : null;
+    }).filter(Boolean);
+    const linksBlock = links.length > 0 ? `\n${links.join("\n")}` : "";
+    return `${analysis}${linksBlock}`;
+  }
+
+  // Fallback: raw titles + links (no LLM available)
+  return finalTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n");
+}
+
+// ─── Book of the Day (Livre du jour) ───
+// Kingston picks a surprise book each day. Short, applicable lesson.
+function fetchBookOfTheDay(): string {
+  const books = [
+    { title: "The War of Art", author: "Steven Pressfield", lesson: "La Resistance frappe le plus fort juste AVANT la percée. Quand l'ennui arrive sur un projet, c'est le signal que tu es proche — pas que c'est fini. Court, direct, style militaire." },
+    { title: "Atomic Habits", author: "James Clear", lesson: "On ne monte pas au niveau de ses objectifs, on descend au niveau de ses systèmes. 1% mieux chaque jour = 37x en un an. La discipline bat la motivation." },
+    { title: "Deep Work", author: "Cal Newport", lesson: "Le travail profond est rare et précieux. Chaque heure de concentration non-interrompue vaut 3 heures de multitâche. Bloque ton temps comme un rendez-vous." },
+    { title: "Man's Search for Meaning", author: "Viktor Frankl", lesson: "On peut tout enlever à un homme sauf sa liberté de choisir son attitude. Frankl a survécu Auschwitz en trouvant un SENS. Le sens > le confort." },
+    { title: "The Obstacle Is the Way", author: "Ryan Holiday", lesson: "Stoïcisme moderne. Chaque obstacle contient un avantage caché. Marc Aurèle appliqué aux affaires. L'action dans l'adversité = la vraie vertu." },
+    { title: "Essentialism", author: "Greg McKeown", lesson: "Moins mais mieux. La personne disciplinée élimine tout sauf l'essentiel. Dire non à presque tout pour dire oui à ce qui compte vraiment." },
+    { title: "Can't Hurt Me", author: "David Goggins", lesson: "Tu n'utilises que 40% de ton potentiel. Le reste est bloqué par le confort. Goggins: de 300lbs à Navy SEAL. La douleur est le professeur." },
+    { title: "Thinking, Fast and Slow", author: "Daniel Kahneman", lesson: "Deux systèmes dans ta tête: le rapide (instinct) et le lent (analyse). Le rapide te fait aller trop vite au travail. Le lent te fait bien faire. Apprends quand utiliser lequel." },
+    { title: "The Alchemist", author: "Paulo Coelho", lesson: "Quand tu veux vraiment quelque chose, l'univers conspire pour t'aider. La légende personnelle: le chemin EST la destination. Petit train va loin." },
+    { title: "Range", author: "David Epstein", lesson: "Les généralistes battent les spécialistes à long terme. Comptable + tech + immobilier = avantage unique. Tes expériences variées sont ton super pouvoir." },
+    { title: "Antifragile", author: "Nassim Taleb", lesson: "Certaines choses PROFITENT du chaos. 6000 restarts = antifragile. Le stress modéré renforce. Vise pas la stabilité — vise la croissance par l'adversité." },
+    { title: "So Good They Can't Ignore You", author: "Cal Newport", lesson: "La passion vient APRÈS la compétence, pas avant. Arrête de chercher ta passion — deviens tellement bon qu'on peut pas t'ignorer." },
+    { title: "Greenlights", author: "Matthew McConaughey", lesson: "Les feux rouges de la vie deviennent des feux verts avec du recul. La décennie 'perdue' n'était pas perdue — c'était de l'apprentissage stocké." },
+    { title: "Sapiens", author: "Yuval Noah Harari", lesson: "L'humain domine parce qu'il peut croire en des fictions partagées: argent, entreprises, nations. Kingston et Nicolas = une fiction partagée qui crée de la valeur réelle." },
+  ];
+
+  // Use day of year to rotate books (deterministic, no repeats within 2 weeks)
+  const now = new Date();
+  const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86400000);
+  const book = books[dayOfYear % books.length];
+
+  return `  ${book.title} — ${book.author}\n  ${book.lesson}`;
+}
+
+// ─── Coach Check-in ───
+// Personalized coaching reminders based on Nicolas's goals
+function fetchCoachCheckin(): string {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...
+
+  const lines: string[] = [];
+
+  // Daily exercise: Brigil file
+  lines.push("Exercice: UN fichier chez Brigil, le plus plate. Fais-le comme si c'est la première fois. ✅ quand c'est fait.");
+
+  // Cigarette reminder
+  lines.push("Cigarette: lunch seulement. Tu tiens.");
+
+  // Sunday Open House reminder (show from Wednesday onward)
+  if (dayOfWeek >= 3 || dayOfWeek === 0) {
+    lines.push("Open House dimanche — ton premier! Prépare-toi cette semaine.");
+  }
+
+  // Monday: week planning
+  if (dayOfWeek === 1) {
+    lines.push("Lundi = planification. Un objectif Brigil pour la semaine?");
+  }
+
+  // Friday: week review
+  if (dayOfWeek === 5) {
+    lines.push("Vendredi = bilan. Combien de ✅ cette semaine?");
+  }
+
+  return lines.map(l => `  ${l}`).join("\n");
+}
+
+// ─── One-line Portfolio Summary ───
+async function fetchPortfolioOneLine(): Promise<string> {
+  const key = process.env.ALPACA_API_KEY;
+  const secret = process.env.ALPACA_SECRET_KEY;
+  if (!key || !secret) return "  Portfolio: N/A (pas de clé Alpaca)";
+
+  try {
+    const headers = { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
+    const accResp = await fetch(`${ALPACA_PAPER}/v2/account`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!accResp.ok) throw new Error(`API ${accResp.status}`);
+    const acc = await accResp.json() as any;
+    const equity = parseFloat(acc.equity);
+    const dayPnl = parseFloat(acc.equity) - parseFloat(acc.last_equity);
+
+    const posResp = await fetch(`${ALPACA_PAPER}/v2/positions`, { headers, signal: AbortSignal.timeout(8000) });
+    const positions = posResp.ok ? await posResp.json() as any[] : [];
+
+    // Find the biggest mover
+    let bigMover = "";
+    if (positions.length > 0) {
+      const sorted = [...positions].sort((a, b) => Math.abs(parseFloat(b.unrealized_plpc || "0")) - Math.abs(parseFloat(a.unrealized_plpc || "0")));
+      const top = sorted[0] as any;
+      const topPct = (parseFloat(top.unrealized_plpc || "0") * 100);
+      bigMover = ` | ${top.symbol} ${topPct >= 0 ? "+" : ""}${fmt(topPct)}%`;
+    }
+
+    return `  $${fmt(equity)} equity | P&L jour: ${fmtPnl(dayPnl)}${bigMover} | ${positions.length} positions`;
+  } catch (e) {
+    // Try fallback cache
+    try {
+      const cacheFile = path.resolve("data/alpaca-last-known.json");
+      if (fs.existsSync(cacheFile)) {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
+        return `  ${cached.result.split("\n")[0]} (cache)`;
+      }
+    } catch { /* no cache */ }
+    return `  Portfolio: erreur (${e instanceof Error ? e.message : String(e)})`;
+  }
 }
 
 async function fetchMoltbookDigest(): Promise<string> {
@@ -642,34 +1157,11 @@ export async function sendMorningBriefing(): Promise<boolean> {
   // Post on Moltbook BEFORE the briefing (human/philosophical post)
   const moltbookPost = await postPreBriefingMoltbook("morning");
 
-  // Load night journal if it exists (Kingston writes it overnight)
-  let nightThoughts: string | null = null;
-  try {
-    const journalPath = path.resolve(process.cwd(), "relay", "NIGHT_JOURNAL.md");
-    if (fs.existsSync(journalPath)) {
-      const raw = fs.readFileSync(journalPath, "utf-8");
-      // Extract the "Mes pensées cette nuit" section
-      const penseeMatch = raw.match(/### Mes pensées cette nuit\n+([\s\S]*?)(?:\n##|\n###|$)/);
-      if (penseeMatch) {
-        const thought = penseeMatch[1].trim().split("\n").filter(l => l.trim()).slice(0, 2).join(" ").slice(0, 200);
-        if (thought.length > 20) nightThoughts = thought;
-      }
-      // Fallback: extract first discovered insight
-      if (!nightThoughts) {
-        const lines = raw.split("\n").filter(l => l.trim());
-        const insightLine = lines.find(l => l.startsWith("1.") || l.startsWith("- "));
-        if (insightLine) nightThoughts = insightLine.replace(/^[\d\-\*\.]+\s*/, "").replace(/\*\*/g, "").slice(0, 180);
-      }
-    }
-  } catch { /* no journal available */ }
-
-  // Fetch everything in parallel for speed
-  const [weather, stocks, crypto, joke, aiNews, moltbook] = await Promise.all([
-    fetchWeather(),
+  // Fetch everything in parallel for speed (v2: no weather, no joke, no night journal)
+  const [stocks, aiNews, worldNews, moltbook] = await Promise.all([
     fetchAlpacaPortfolio(),
-    fetchCryptoPortfolio(),
-    fetchJoke(),
     fetchAINews(),
+    fetchWorldNews(),
     fetchMoltbookDigest(),
   ]);
 
@@ -682,57 +1174,46 @@ export async function sendMorningBriefing(): Promise<boolean> {
   // Generate meme based on P&L
   const memeResult = await generateBriefingMeme(dayPnl, positions);
 
-  // Quality scan
+  // Quality scan (v2: only check stocks + meme)
   scanBriefingQuality("morning_briefing", [
-    { label: "Météo", value: weather },
     { label: "Stocks", value: stocks },
-    { label: "Crypto", value: crypto },
   ], memeResult !== null);
 
-  // ─── Build the Morning Journal ───
-  // This is Nicolas's replacement for scrolling Facebook.
-  // Priority: Make him smile, then inform, then quick data.
+  // ─── Build the Morning Journal (v2 — 7 sections, confirmé 24 fév 2026) ───
+  // Structure: Meme(photo) → AI News → FOX News → Livre → Moltbook → Portfolio(1 ligne) → Coach
+  // No joke, no weather, no night thoughts. Concis. < 500 chars par section.
 
-  const greetings = [
-    `Bon matin boss!`,
-    `Salut Nicolas!`,
-    `Hey, bien dormi?`,
-    `Debout ${dayName} matin!`,
-    `Jour nouveau, argent nouveau!`,
-  ];
-  const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+  // Fetch one-line portfolio + book + coach
+  const [portfolioLine, bookOfDay, coachCheckin] = await Promise.all([
+    fetchPortfolioOneLine(),
+    Promise.resolve(fetchBookOfTheDay()),
+    Promise.resolve(fetchCoachCheckin()),
+  ]);
 
   const msg = [
-    `☀️ *${greeting}*`,
-    `${dateStr}`,
-    ``,
-    `😄 *Blague du jour:*`,
-    joke,
-    ``,
-    nightThoughts ? `💭 *Pensées de cette nuit:*` : "",
-    nightThoughts ? `  ${nightThoughts}` : "",
-    nightThoughts ? `` : "",
-    `🤖 *Nouvelles IA:*`,
+    `🧠 *Nouvelle IA:*`,
     aiNews,
     ``,
-    `🦞 *Moltbook (mon monde):*`,
+    `📺 *FOX News style:*`,
+    worldNews,
+    ``,
+    `📚 *Livre du jour:*`,
+    bookOfDay,
+    ``,
+    `🦞 *Moltbook:*`,
     moltbook,
     moltbookPost ? `  ✍️ J'ai posté: "${moltbookPost}"` : "",
     ``,
     `💰 *Portfolio:*`,
-    stocks,
-    crypto ? `🪙 ${crypto}` : "",
+    portfolioLine,
     ``,
-    fetchTradingJournal(),
-    ``,
-    `🌡️ ${weather}`,
-    ``,
-    `Bonne journée! ☕`,
+    `🎯 *Coach:*`,
+    coachCheckin,
   ].filter(line => line !== "").join("\n");
 
-  const sent = await sendTelegram(msg);
-  if (!sent) logQualityIssue("missing_briefing", "morning_briefing", "Échec d'envoi Telegram", "error");
-  log.info(`[briefings] Morning JOURNAL ${sent ? "sent" : "FAILED"}`);
+  const sent = await sendTelegramReliable(msg, "morning_briefing");
+  if (!sent) logQualityIssue("missing_briefing", "morning_briefing", "Échec d'envoi Telegram (queued for retry)", "error");
+  log.info(`[briefings] Morning JOURNAL ${sent ? "sent" : "QUEUED for retry"}`);
   return sent;
 }
 
@@ -798,19 +1279,27 @@ export async function sendNoonBriefing(): Promise<boolean> {
     `Bon appétit! 🍕`,
   ].filter(line => line !== "").join("\n");
 
-  const sent = await sendTelegram(msg);
-  if (!sent) logQualityIssue("missing_briefing", "noon_briefing", "Échec d'envoi Telegram", "error");
-  log.info(`[briefings] Noon JOURNAL ${sent ? "sent" : "FAILED"}`);
+  const sent = await sendTelegramReliable(msg, "noon_briefing");
+  if (!sent) logQualityIssue("missing_briefing", "noon_briefing", "Échec d'envoi Telegram (queued for retry)", "error");
+  log.info(`[briefings] Noon JOURNAL ${sent ? "sent" : "QUEUED for retry"}`);
   return sent;
 }
 
 export async function sendEveningBriefing(): Promise<boolean> {
   const { dateStr, timeStr } = nowET();
-  log.info("[briefings] Building evening briefing...");
+  log.info("[briefings] Building evening JOURNAL...");
 
-  const [stocks, crypto] = await Promise.all([
+  // Post on Moltbook BEFORE the briefing
+  const moltbookPost = await postPreBriefingMoltbook("evening");
+
+  // Fetch everything in parallel
+  const [stocks, crypto, joke, aiNews, worldNews, moltbook] = await Promise.all([
     fetchAlpacaPortfolio(),
     fetchCryptoPortfolio(),
+    fetchJoke(),
+    fetchAINews(),
+    fetchWorldNews(),
+    fetchMoltbookDigest(),
   ]);
 
   const goals = fetchGoalsStatus();
@@ -839,11 +1328,22 @@ export async function sendEveningBriefing(): Promise<boolean> {
     `🌙 *Bonsoir Nicolas!*`,
     `${dateStr} — ${timeStr}`,
     ``,
-    `📊 *Trading jour complet:*`,
-    stocks,
+    `😄 *Blague:*`,
+    joke,
     ``,
-    `🪙 *Crypto:*`,
-    crypto,
+    `🤖 *Nouvelles IA:*`,
+    aiNews,
+    ``,
+    `🌍 *Monde:*`,
+    worldNews,
+    ``,
+    `🦞 *Moltbook:*`,
+    moltbook,
+    moltbookPost ? `  ✍️ J'ai posté: "${moltbookPost}"` : "",
+    ``,
+    `💰 *Portfolio jour complet:*`,
+    stocks,
+    crypto ? `🪙 ${crypto}` : "",
     ``,
     fetchTradingJournal(),
     ``,
@@ -856,18 +1356,28 @@ export async function sendEveningBriefing(): Promise<boolean> {
     `Bonne soirée! 🌃`,
   ].filter(line => line !== "").join("\n");
 
-  const sent = await sendTelegram(msg);
-  if (!sent) logQualityIssue("missing_briefing", "evening_briefing", "Échec d'envoi Telegram", "error");
-  log.info(`[briefings] Evening briefing ${sent ? "sent" : "FAILED"}`);
+  const sent = await sendTelegramReliable(msg, "evening_briefing");
+  if (!sent) logQualityIssue("missing_briefing", "evening_briefing", "Échec d'envoi Telegram (queued for retry)", "error");
+  log.info(`[briefings] Evening JOURNAL ${sent ? "sent" : "QUEUED for retry"}`);
   return sent;
 }
 
 export async function sendAfternoonBriefing(): Promise<boolean> {
-  const { timeStr } = nowET();
-  log.info("[briefings] Building afternoon briefing...");
+  const { timeStr, dayName } = nowET();
+  log.info("[briefings] Building afternoon JOURNAL...");
 
-  const stocks = await fetchAlpacaPortfolio();
-  const crypto = await fetchCryptoPortfolio();
+  // Post on Moltbook BEFORE the briefing
+  const moltbookPost = await postPreBriefingMoltbook("afternoon");
+
+  // Fetch everything in parallel
+  const [stocks, crypto, joke, aiNews, worldNews, moltbook] = await Promise.all([
+    fetchAlpacaPortfolio(),
+    fetchCryptoPortfolio(),
+    fetchJoke(),
+    fetchAINews(),
+    fetchWorldNews(),
+    fetchMoltbookDigest(),
+  ]);
   const goals = fetchGoalsStatus();
 
   // Extract P&L for meme
@@ -886,14 +1396,33 @@ export async function sendAfternoonBriefing(): Promise<boolean> {
     { label: "Goals", value: goals },
   ], memeResult !== null);
 
+  const greetings = [
+    `Update ${dayName} après-midi!`,
+    `Hey, ça roule?`,
+    `Check-in ${timeStr}!`,
+    `Afternoon update!`,
+  ];
+  const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+
   const msg = [
-    `☕ *Update ${timeStr}*`,
+    `☕ *${greeting}*`,
     ``,
-    `📈 *Trading:*`,
+    `😄 *Blague:*`,
+    joke,
+    ``,
+    `🤖 *Nouvelles IA:*`,
+    aiNews,
+    ``,
+    `🌍 *Monde:*`,
+    worldNews,
+    ``,
+    `🦞 *Moltbook:*`,
+    moltbook,
+    moltbookPost ? `  ✍️ J'ai posté: "${moltbookPost}"` : "",
+    ``,
+    `💰 *Portfolio:*`,
     stocks,
-    ``,
-    `🪙 *Crypto:*`,
-    crypto,
+    crypto ? `🪙 ${crypto}` : "",
     ``,
     fetchTradingJournal(),
     ``,
@@ -901,9 +1430,9 @@ export async function sendAfternoonBriefing(): Promise<boolean> {
     goals,
   ].filter(line => line !== "").join("\n");
 
-  const sent = await sendTelegram(msg);
-  if (!sent) logQualityIssue("missing_briefing", "afternoon_briefing", "Échec d'envoi Telegram", "error");
-  log.info(`[briefings] Afternoon briefing ${sent ? "sent" : "FAILED"}`);
+  const sent = await sendTelegramReliable(msg, "afternoon_briefing");
+  if (!sent) logQualityIssue("missing_briefing", "afternoon_briefing", "Échec d'envoi Telegram (queued for retry)", "error");
+  log.info(`[briefings] Afternoon JOURNAL ${sent ? "sent" : "QUEUED for retry"}`);
   return sent;
 }
 
@@ -988,5 +1517,188 @@ export async function generateNightSummary(): Promise<void> {
 
   } catch (e) {
     log.error(`[briefings] Night journal failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// ═══════════════════════════════════════════
+// NIGHT CYCLES — Direct functions (no LLM)
+// ═══════════════════════════════════════════
+
+export async function sendNightSelfReview(): Promise<boolean> {
+  log.info("[briefings] Running night self-review (3h)...");
+
+  try {
+    // 1. Check recent errors
+    const db = getDb();
+    const cutoff = Math.floor(Date.now() / 1000) - 86400; // 24h
+    const errors = db.prepare(
+      "SELECT * FROM errors WHERE created_at > ? AND resolved = 0 ORDER BY created_at DESC LIMIT 10"
+    ).all(cutoff) as any[];
+
+    // 2. Check learning gaps
+    const gaps = db.prepare(
+      "SELECT * FROM learning_gaps WHERE severity IN ('high', 'critical') ORDER BY created_at DESC LIMIT 5"
+    ).all() as any[];
+
+    // 3. Build report
+    const lines: string[] = [];
+    lines.push(`🌙 *Self-Review nocturne (3h)*\n`);
+
+    if (errors.length > 0) {
+      lines.push(`⚠️ *${errors.length} erreurs non résolues (24h):*`);
+      for (const err of errors.slice(0, 3)) {
+        lines.push(`  • ${err.error_type}: ${String(err.message).slice(0, 80)}`);
+      }
+      lines.push(``);
+    }
+
+    if (gaps.length > 0) {
+      lines.push(`📚 *${gaps.length} learning gaps:*`);
+      for (const gap of gaps.slice(0, 3)) {
+        lines.push(`  • ${gap.topic}: ${gap.what_missing}`);
+      }
+      lines.push(``);
+    }
+
+    if (errors.length === 0 && gaps.length === 0) {
+      lines.push(`✅ Aucune erreur critique. Système stable.`);
+    }
+
+    lines.push(`---`);
+    lines.push(`_Prochaine: API Health Check à 4h_`);
+
+    const text = lines.join("\n");
+    return await sendTelegram(text);
+  } catch (e) {
+    log.error(`[briefings] Night self-review failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+}
+
+export async function sendApiHealthCheck(): Promise<boolean> {
+  log.info("[briefings] Running API health check (4h)...");
+
+  try {
+    const results: { name: string; ok: boolean }[] = [];
+
+    // Test critical APIs
+    const tests = [
+      {
+        name: "Alpaca",
+        test: async () => {
+          const key = process.env.ALPACA_API_KEY;
+          const secret = process.env.ALPACA_SECRET_KEY;
+          if (!key || !secret) return false;
+          const resp = await fetch("https://paper-api.alpaca.markets/v2/account", {
+            headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret },
+            signal: AbortSignal.timeout(8000),
+          });
+          return resp.ok;
+        },
+      },
+      {
+        name: "Binance",
+        test: async () => {
+          const resp = await fetch("https://api.binance.com/api/v3/ping", {
+            signal: AbortSignal.timeout(8000),
+          });
+          return resp.ok;
+        },
+      },
+      {
+        name: "Telegram",
+        test: async () => {
+          const token = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN;
+          if (!token) return false;
+          const resp = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+            signal: AbortSignal.timeout(8000),
+          });
+          return resp.ok;
+        },
+      },
+    ];
+
+    for (const t of tests) {
+      try {
+        const ok = await t.test();
+        results.push({ name: t.name, ok });
+      } catch {
+        results.push({ name: t.name, ok: false });
+      }
+    }
+
+    // Build report
+    const lines: string[] = [];
+    lines.push(`🔌 *API Health Check (4h)*\n`);
+
+    const ok = results.filter(r => r.ok);
+    const failed = results.filter(r => !r.ok);
+
+    if (ok.length > 0) {
+      lines.push(`✅ OK (${ok.length}): ${ok.map(r => r.name).join(", ")}`);
+    }
+
+    if (failed.length > 0) {
+      lines.push(`❌ FAIL (${failed.length}): ${failed.map(r => r.name).join(", ")}`);
+    }
+
+    lines.push(``);
+    lines.push(`---`);
+    lines.push(`_Prochaine: Briefing Prep à 5h_`);
+
+    const text = lines.join("\n");
+    return await sendTelegram(text);
+  } catch (e) {
+    log.error(`[briefings] API health check failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+}
+
+export async function sendBriefingPrep(): Promise<boolean> {
+  log.info("[briefings] Running briefing prep (5h)...");
+
+  try {
+    // Fetch portfolio data early so morning briefing has fresh data
+    const alpacaKey = process.env.ALPACA_API_KEY;
+    const alpacaSecret = process.env.ALPACA_SECRET_KEY;
+    let portfolioOk = false;
+
+    if (alpacaKey && alpacaSecret) {
+      try {
+        const resp = await fetch("https://paper-api.alpaca.markets/v2/account", {
+          headers: { "APCA-API-KEY-ID": alpacaKey, "APCA-API-SECRET-KEY": alpacaSecret },
+          signal: AbortSignal.timeout(8000),
+        });
+        portfolioOk = resp.ok;
+      } catch {
+        portfolioOk = false;
+      }
+    }
+
+    // Check crypto
+    let cryptoOk = false;
+    try {
+      const resp = await fetch("https://api.binance.com/api/v3/ticker/price?symbols=[\"BTCUSDT\",\"ETHUSDT\"]", {
+        signal: AbortSignal.timeout(8000),
+      });
+      cryptoOk = resp.ok;
+    } catch {
+      cryptoOk = false;
+    }
+
+    // Build report
+    const lines: string[] = [];
+    lines.push(`☀️ *Briefing Prep (5h)*\n`);
+    lines.push(`Portfolio: ${portfolioOk ? "✅" : "❌"}`);
+    lines.push(`Crypto: ${cryptoOk ? "✅" : "❌"}`);
+    lines.push(``);
+    lines.push(`---`);
+    lines.push(`_Briefing matinal à 6h30_`);
+
+    const text = lines.join("\n");
+    return await sendTelegram(text);
+  } catch (e) {
+    log.error(`[briefings] Briefing prep failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
   }
 }

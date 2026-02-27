@@ -3,7 +3,8 @@
  * Handles text messages, photos, documents, user allowlist checks, and rate limiting.
  * Features: reactions, debouncing, dedup, streaming, chat lock, advanced formatting.
  */
-import { Bot, InputFile, InlineKeyboard } from "grammy";
+import { Bot, InputFile, InlineKeyboard, GrammyError, HttpError } from "grammy";
+import { autoRetry } from "@grammyjs/auto-retry";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config/env.js";
@@ -11,7 +12,7 @@ import { isUserAllowed, tryAdminAuth, isAdmin } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
 import { handleMessage, handleMessageStreaming, setProgressCallback } from "../orchestrator/router.js";
 import { clearTurns, clearSession, getTurns, getSession, logError } from "../storage/store.js";
-import { setBotSendFn, setBotVoiceFn, setBotPhotoFn, setBotSendWithKeyboardFn } from "../skills/builtin/telegram.js";
+import { setBotSendFn, setBotVoiceFn, setBotPhotoFn, setBotSendWithKeyboardFn, setBotPollFn } from "../skills/builtin/telegram.js";
 import { handleVetoCallback } from "../skills/builtin/mind.js";
 import { setBotVideoFn } from "../skills/builtin/video.js";
 import { setBotPhotoFnForCU } from "../skills/builtin/computer-use.js";
@@ -23,8 +24,61 @@ import { sendFormatted } from "./formatting.js";
 import { createDraftController } from "./draftMessage.js";
 import { compactContext } from "../orchestrator/compaction.js";
 import { emitHook, emitHookAsync } from "../hooks/hooks.js";
+import { getDashboardPublicUrl } from "../dashboard/server.js";
+import { getBridgeContext, notifyPartner, hasBridgePartner, setBridgeResponseHandler } from "../bridge/bridge.js";
+import { debateWithPeer, isPeerConnected, notifyPeer } from "../bridge/wsBridge.js";
 
 const startTime = Date.now();
+
+// --- Finisher: detect and fix incomplete responses ---
+
+/** Patterns that indicate an incomplete/lazy response */
+const INCOMPLETE_PATTERNS = [
+  /^J'ai exécuté \d+ outils?\. Résultats:\n/,  // Just echoing tool results
+  /^• \w+\.\w+: OK$/m,                          // Single "tool: OK" line
+];
+
+/** Check if a response looks incomplete and re-prompt if needed */
+async function finishResponse(
+  response: string,
+  chatId: number,
+  userId: number,
+  originalMessage: string,
+): Promise<string> {
+  const trimmed = response.trim();
+
+  // Skip if response is already substantial (>200 chars) or empty
+  if (!trimmed || trimmed.length > 200) return response;
+
+  // Check for incomplete patterns
+  const isIncomplete =
+    INCOMPLETE_PATTERNS.some(p => p.test(trimmed)) ||
+    (trimmed.length < 80 && /^(• \w+\.\w+: (OK|Error)[^\n]*\n?)+$/.test(trimmed));
+
+  if (!isIncomplete) return response;
+
+  log.warn(`[finisher] Incomplete response detected (${trimmed.length} chars): "${trimmed.slice(0, 80)}..."`);
+
+  // Re-prompt Claude to elaborate
+  const finisherPrompt =
+    `[FINISHER — RÉPONSE INCOMPLÈTE]\n` +
+    `Tu viens de répondre ceci à Nicolas:\n"${trimmed}"\n\n` +
+    `C'est insuffisant. Nicolas attend une vraie réponse qui EXPLIQUE ce que tu as trouvé/fait.\n` +
+    `Message original de Nicolas: "${originalMessage.slice(0, 200)}"\n\n` +
+    `Rédige maintenant une réponse complète, naturelle et utile. Pas de tool_call, juste du texte.`;
+
+  try {
+    const better = await handleMessage(chatId, finisherPrompt, userId);
+    if (better && better.trim().length > trimmed.length) {
+      log.info(`[finisher] Re-prompted: ${trimmed.length} → ${better.trim().length} chars`);
+      return better;
+    }
+  } catch (err) {
+    log.warn(`[finisher] Re-prompt failed: ${err}`);
+  }
+
+  return response; // fallback to original if re-prompt fails
+}
 
 // --- Reaction Handles ---
 
@@ -122,6 +176,7 @@ async function sendLong(
 
 export function createBot(): Bot {
   const bot = new Bot(config.telegramToken);
+  bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 60 }));
   const bootTime = Math.floor(Date.now() / 1000);
 
   // Middleware: drop stale messages from before boot
@@ -179,8 +234,14 @@ export function createBot(): Bot {
 
   // Wire bot API into telegram.photo / image.generate skill
   setBotPhotoFn(async (chatId, photo, caption) => {
-    const source = typeof photo === "string" ? new InputFile(photo) : new InputFile(photo, "image.png");
-    await bot.api.sendPhoto(chatId, source, caption ? { caption } : undefined);
+    // If photo is a string URL (http/https), pass it directly to Telegram Bot API
+    // which natively supports sending photos by URL without downloading.
+    if (typeof photo === "string" && (photo.startsWith("http://") || photo.startsWith("https://"))) {
+      await bot.api.sendPhoto(chatId, photo, caption ? { caption } : undefined);
+    } else {
+      const source = typeof photo === "string" ? new InputFile(photo) : new InputFile(photo, "image.png");
+      await bot.api.sendPhoto(chatId, source, caption ? { caption } : undefined);
+    }
   });
 
   // Wire bot API into video.generate skill
@@ -215,6 +276,16 @@ export function createBot(): Bot {
       kb.row();
     }
     const msg = await bot.api.sendMessage(chatId, text, { reply_markup: kb });
+    return msg.message_id;
+  });
+
+  // Wire bot API for polls
+  setBotPollFn(async (chatId, question, options, opts) => {
+    const msg = await bot.api.sendPoll(chatId, question, options, {
+      is_anonymous: opts?.is_anonymous ?? true,
+      allows_multiple_answers: opts?.allows_multiple_answers ?? false,
+      ...(opts?.open_period ? { open_period: opts.open_period } : {}),
+    });
     return msg.message_id;
   });
 
@@ -255,6 +326,7 @@ export function createBot(): Bot {
         "/status — show session info\n" +
         "/compact — compact context history\n" +
         "/help — list available tools\n" +
+        "/app — open dashboard Mini App\n" +
         "/admin &lt;passphrase&gt; — unlock admin tools",
       { parse_mode: "HTML" }
     );
@@ -349,6 +421,22 @@ export function createBot(): Bot {
     }
   });
 
+  bot.command("app", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !isUserAllowed(userId)) {
+      await ctx.reply("You are not authorised to use this bot.");
+      return;
+    }
+    const url = getDashboardPublicUrl();
+    if (!url) {
+      await ctx.reply("Dashboard non disponible — tunnel Cloudflare non actif.\nLe tunnel demarre automatiquement au boot. Reessaie dans quelques secondes.");
+      return;
+    }
+    const webappUrl = url + "/webapp.html";
+    const kb = new InlineKeyboard().webApp("Ouvrir Dashboard", webappUrl);
+    await ctx.reply("Ton dashboard Kingston:", { reply_markup: kb });
+  });
+
   // --- Text message handler (with debouncing, reactions, streaming, chat lock) ---
 
   bot.on("message:text", async (ctx) => {
@@ -404,8 +492,37 @@ export function createBot(): Bot {
       const fromTag = ctx.from.username ? ` @${ctx.from.username}` : "";
       const replyInfo = ctx.message.reply_to_message ? ` replyTo=#${ctx.message.reply_to_message.message_id}` : "";
       const meta = `[msg:${messageId} time:${msgTime} from:${fromName}${fromTag}${replyInfo}]`;
-      const messageWithMeta = `${meta}\n${combined}`;
+      let messageWithMeta = `${meta}\n${combined}`;
 
+      // Bridge context injection for group chats (real Telegram groups have chatId > 1000 or negative)
+      if (hasBridgePartner() && (chatId > 1000 || chatId < 0)) {
+        const bridgeCtx = getBridgeContext(chatId);
+        if (bridgeCtx) {
+          messageWithMeta = `${bridgeCtx}\n\n${messageWithMeta}`;
+          log.debug(`[bridge] Injected bridge context for group chat ${chatId}`);
+        }
+      }
+
+      // Dungeon strategy phase intercept
+      try {
+        const { tryDungeonStrategyIntercept } = await import("../skills/builtin/dungeon.js");
+        const dungeonReply = await tryDungeonStrategyIntercept(chatId, combined);
+        if (dungeonReply) {
+          await sendFormatted(
+            (chunk, parseMode) => bot.api.sendMessage(chatId, chunk, parseMode ? { parse_mode: parseMode as any } : undefined),
+            dungeonReply
+          );
+          await reaction.done();
+          return;
+        }
+      } catch (err) {
+        log.debug(`[telegram] Dungeon strategy intercept skipped: ${err}`);
+      }
+
+      let bridgeResponseText = ""; // Captured for bridge notification
+      let debateHandled = false;
+      const isGroupChat = chatId > 1000 || chatId < 0;
+      const debatePeer = config.bridgeDebatePeer;
       try {
         if (config.streamingEnabled) {
           const draft = createDraftController(bot, chatId);
@@ -430,7 +547,7 @@ export function createBot(): Bot {
 
           // Global timeout: prevents the chat lock from blocking forever
           // if the streaming + tool chain hangs.
-          const GLOBAL_STREAMING_TIMEOUT_MS = 660_000; // 11 minutes (above CLI_TIMEOUT to let CLI finish first)
+          const GLOBAL_STREAMING_TIMEOUT_MS = 720_000; // 12 minutes (above CLI_TIMEOUT to let CLI finish first)
           const globalTimeout = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`Global streaming timeout (${GLOBAL_STREAMING_TIMEOUT_MS / 1000}s)`)), GLOBAL_STREAMING_TIMEOUT_MS)
           );
@@ -459,8 +576,22 @@ export function createBot(): Bot {
             try { await bot.api.deleteMessage(chatId, timeoutMsgId); } catch { /* ignore */ }
           }
 
+          // ── Finisher: detect incomplete responses and re-prompt ──
+          response = await finishResponse(response, chatId, userId, combined);
+          bridgeResponseText = response;
+
           const draftMsgId = draft.getMessageId();
           log.info(`[telegram] Streaming done: response=${response.length} chars, draftMsgId=${draftMsgId}, timedOut=${timedOut}`);
+
+          // ── Debate: notify peer BEFORE posting (streaming path, not yet streamed) ──
+          if (isGroupChat && !draftMsgId && isPeerConnected(debatePeer)) {
+            debateHandled = await debateWithPeer(debatePeer, {
+              chatId,
+              humanMessage: combined,
+              kingstonResponse: response,
+            });
+          }
+
           // Draft controller already sent/edited the message if streaming worked.
           // If draft has no message (e.g. tool call path), send the response normally.
           if (!draftMsgId) {
@@ -490,10 +621,36 @@ export function createBot(): Bot {
           }
         } else {
           const response = await handleMessage(chatId, messageWithMeta, userId);
+          bridgeResponseText = response;
+
+          // ── Debate: notify peer BEFORE posting (batch path) ──
+          if (isGroupChat && isPeerConnected(debatePeer)) {
+            debateHandled = await debateWithPeer(debatePeer, {
+              chatId,
+              humanMessage: combined,
+              kingstonResponse: response,
+            });
+          }
+
           await sendLong(ctx, response);
         }
         await reaction.done();
         emitHookAsync("message:sent", { chatId, userId });
+
+        // Bridge: notify partner bot for group chats
+        if (isGroupChat && bridgeResponseText) {
+          if (isPeerConnected(debatePeer) && !debateHandled) {
+            // WS peer connected but debate wasn't triggered (e.g. streaming draft already posted)
+            notifyPeer(debatePeer, JSON.stringify({
+              type: "notify",
+              chatId,
+              kingstonResponse: bridgeResponseText,
+            }));
+          } else if (!isPeerConnected(debatePeer) && hasBridgePartner()) {
+            // Fallback: HTTP bridge (legacy)
+            notifyPartner(bridgeResponseText, chatId);
+          }
+        }
       } catch (err) {
         log.error("Error handling message:", err);
         logError(err instanceof Error ? err : String(err), "telegram:text_handler");
@@ -626,9 +783,62 @@ export function createBot(): Bot {
     );
   });
 
-  // Error handler
+  // ── Débat Permanent: respond to partner's bridge messages ──
+  if (hasBridgePartner()) {
+    setBridgeResponseHandler(async (from, text, chatId) => {
+      log.info(`[bridge] Débat Permanent: responding to ${from} in chat ${chatId}`);
+
+      // Small delay for natural conversation flow
+      await new Promise((r) => setTimeout(r, 3000));
+
+      try {
+        await bot.api.sendChatAction(Number(chatId), "typing");
+      } catch { /* group may not allow it */ }
+
+      const bridgeCtx = getBridgeContext(chatId);
+      let messageForClaude = `[${from} vient de poster dans le groupe]: ${text}`;
+      if (bridgeCtx) {
+        messageForClaude = `${bridgeCtx}\n\n${messageForClaude}`;
+      }
+      messageForClaude += `\n\n[INSTRUCTION: ${from} a répondu dans le groupe. Donne ta propre perspective en 2-3 phrases max. Ne répète pas ce qu'il/elle a dit — ajoute de la valeur ou exprime un désaccord respectueux.]`;
+
+      try {
+        const response = await handleMessage(Number(chatId), messageForClaude, config.adminChatId);
+
+        await sendFormatted(
+          (chunk, parseMode) => bot.api.sendMessage(Number(chatId), chunk, parseMode ? { parse_mode: parseMode as any } : undefined),
+          response
+        );
+
+        // Notify partner — marked as bridge reply to prevent infinite loop
+        notifyPartner(response, chatId, true);
+        log.info(`[bridge] Débat Permanent: sent response (${response.length} chars)`);
+      } catch (err) {
+        log.error(`[bridge] Débat Permanent failed: ${err}`);
+      }
+    });
+    log.info("[bridge] Débat Permanent handler registered");
+  }
+
+  // Error handler — distinguish error types to avoid unnecessary crashes
   bot.catch((err) => {
-    log.error("Bot error:", err.message || err);
+    const e = err.error;
+
+    if (e instanceof GrammyError) {
+      if (e.error_code === 409) {
+        log.error("[bot] 409 Conflict — another bot instance is polling. Will stop.");
+        return; // Don't crash, let the other instance handle it
+      }
+      if (e.error_code === 429) {
+        log.warn(`[bot] Rate limited. Retry after ${e.parameters?.retry_after ?? "?"}s`);
+        return; // grammY handles retry internally
+      }
+      log.error(`[bot] Telegram API error ${e.error_code}: ${e.description}`);
+    } else if (e instanceof HttpError) {
+      log.error(`[bot] Network error: ${e.message}`);
+    } else {
+      log.error("[bot] Unknown error:", e);
+    }
   });
 
   return bot;

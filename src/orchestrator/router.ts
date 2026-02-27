@@ -1393,6 +1393,18 @@ async function handleMessageStreamingInner(
       await draft.cancel();
       clearSession(chatId);
       const retryResult = await runClaude(chatId, userMessage, userIsAdmin, model);
+
+      // If retry returned a tool_call, process it through the full tool chain
+      // (don't discard it with a generic fallback message)
+      if (retryResult.type === "tool_call" && retryResult.tool) {
+        log.info(`[router-stream] Identity retry returned tool_call: ${retryResult.tool} — routing to batch handler`);
+        clearRateLimit();
+        clearProviderFailures("claude");
+        // Delegate to the batch handler which supports full tool chaining
+        const batchResult = await handleMessage(chatId, userMessage, userId);
+        return batchResult;
+      }
+
       const retryText = retryResult.type === "message" && retryResult.text?.trim()
         ? retryResult.text
         : "Un moment — je me recalibre.";

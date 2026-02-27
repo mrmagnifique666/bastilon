@@ -28,6 +28,7 @@
     "@alpacahq/alpaca-trade-api": "^3.1.3",
     "@anthropic-ai/sdk": "^0.73.0",
     "@google/generative-ai": "^0.24.1",
+    "@grammyjs/auto-retry": "^2.0.2",
     "@picovoice/porcupine-node": "^4.0.1",
     "@picovoice/pvrecorder-node": "^1.2.8",
     "basic-ftp": "^5.1.0",

@@ -13,11 +13,13 @@ registerSkill({
     type: "object",
     properties: {
       text: { type: "string", description: "The note content" },
+      note: { type: "string", description: "Alias for text (the note content)" },
     },
-    required: ["text"],
+    required: [],
   },
   async execute(args): Promise<string> {
-    const text = args.text as string;
+    const text = (args.text || args.note) as string;
+    if (!text) return "Error: missing 'text' (or 'note') argument.";
     const db = getDb();
     const info = db
       .prepare("INSERT INTO notes (text) VALUES (?)")

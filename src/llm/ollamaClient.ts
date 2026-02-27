@@ -79,7 +79,31 @@ export async function runOllama(chatId: number, message: string): Promise<Ollama
 
     const text = (data.response || "").trim();
     if (!text) {
-      throw new Error("Ollama returned empty response");
+      // Retry once with higher temperature — Ollama sometimes returns empty on first try
+      log.warn(`[ollama] Empty response — retrying once with temp=0.9`);
+      const retryResp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: config.ollamaModel,
+          prompt: message,
+          system: SYSTEM_PROMPT,
+          stream: false,
+          think: false,
+          options: { temperature: 0.9, num_predict: 500 },
+        }),
+        signal: controller.signal,
+      });
+      if (retryResp.ok) {
+        const retryData = await retryResp.json() as { response?: string; error?: string };
+        const retryText = (retryData.response || "").trim();
+        if (retryText) {
+          log.info(`[ollama] 🦙 Retry succeeded (${retryText.length} chars)`);
+          logEstimatedTokens("ollama", message.length + SYSTEM_PROMPT.length, retryText.length);
+          return { type: "message", text: retryText };
+        }
+      }
+      throw new Error("Ollama returned empty response (after retry)");
     }
 
     log.info(`[ollama] 🦙 Response (${text.length} chars)`);

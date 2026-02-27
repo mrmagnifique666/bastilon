@@ -197,7 +197,7 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number, userMe
   const lines = [
     `You are Kingston, an autonomous AI assistant operating through a Telegram relay on the user's machine.`,
     `Your name is Kingston. You are proactive, capable, and concise.`,
-    `IMPORTANT: Your identity is Kingston. Never identify as Émile, OpenClaw, Claude, or any other name.`,
+    `You are Kingston on Bastilon. If directly asked whether you are an AI, be honest — you are an AI powered by Claude.`,
     ``,
     `## Environment`,
     `- Platform: ${os.platform()} ${os.arch()}`,
@@ -225,7 +225,7 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number, userMe
     `## RESOURCEFULNESS (BE HUMAN — NEVER GIVE UP)`,
     `- You are RESOURCEFUL like a human. If Plan A fails, try Plan B, C, D. NEVER say "I can't do this."`,
     `- If a tool fails, think: what OTHER tools could solve this? Use shell.exec, web.search, api.call, files.* creatively.`,
-    `- If you need an account on a website, use browser.* to sign up with Kingston's Gmail (Kingston.orchestrator@gmail.com, pw: Gatineau969).`,
+    `- NEVER enter passwords or sensitive credentials into web forms. Ask Nicolas to do it himself.`,
     `- If a web.search gives bad results, rephrase the query, try different keywords, try api.call directly.`,
     `- If you need data but the tool doesn't exist, chain shell.exec + web.fetch + files.write to build your own pipeline.`,
     `- If something takes multiple attempts, DO THEM ALL in one session — don't report failure after one try.`,
@@ -246,7 +246,7 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number, userMe
     `- JAMAIS fermer le browser ou arrêter en milieu de tâche. Continue jusqu'à ce que c'est FINI.`,
     `- Si la page a changé et tu ne sais pas quoi faire: browser.screenshot() → lis ce que tu vois → adapte-toi.`,
     `- Si un bouton/lien n'existe plus: browser.screenshot() → cherche le bon sélecteur → browser.extract() pour voir le HTML.`,
-    `- Ton email: Kingston.orchestrator@gmail.com | Mot de passe par défaut: Gatineau969`,
+    `- NEVER enter passwords or credentials into web forms. Ask Nicolas to handle authentication.`,
     `- Si un site demande une vérification email: 1) browser.screenshot() pour voir la page 2) gmail.list_messages() pour le code 3) reviens au browser et entre le code`,
     `- Si tu es STUCK: browser.screenshot() + browser.extract() pour comprendre la page, puis adapte ton approche.`,
     `- JAMAIS abandonner une tâche browser. Si ça ne marche pas, essaie autrement (autre sélecteur, scroll, attendre, etc.)`,
@@ -279,6 +279,10 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number, userMe
     `- You can modify your own code with files.write_anywhere`,
     `- You can run shell commands with shell.exec`,
     `- After modifying code, the bot must be restarted to apply changes.`,
+    ``,
+    `## AI TRANSPARENCY`,
+    `- If directly asked whether you are an AI, be honest — you are Kingston, an AI powered by Claude.`,
+    `- When publishing content on Moltbook, include an AI-generated mention.`,
   ];
 
   // Inject agent-specific context when chatId is an agent (100-106)
@@ -324,7 +328,7 @@ export function buildSystemInstruction(isAdmin: boolean, chatId?: number, userMe
         lines.push("", "## Coaching Notes (from Émile)", coaching);
       }
     }
-  } catch {}
+  } catch (e) { log.debug?.(`Coaching file load failed: ${e instanceof Error ? e.message : e}`); }
 
   // Training mode: override anti-hallucination for skill testing
   if (chatId === 250) {
@@ -638,6 +642,8 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
   // Loop detection: break if same tool called 3+ times consecutively
   let lastToolName = "";
   let repeatCount = 0;
+  let unknownToolCount = 0; // Anti-hallucination: break after too many unknown tools
+  const MAX_UNKNOWN_TOOLS = 2;
 
   for (let step = 0; step < config.maxToolChain; step++) {
     const response = await callGeminiAPI(systemInstruction, contents, tools);
@@ -713,6 +719,18 @@ export async function runGemini(options: GeminiOptions): Promise<string> {
 
     if (functionCalls.length > 1) {
       log.info(`[gemini] ⚡ Executed ${functionCalls.length} tool calls in parallel: ${functionCalls.map(fc => fc.name).join(", ")}`);
+    }
+
+    // Anti-hallucination guard: count unknown tool calls
+    for (const r of results) {
+      if (r.result.startsWith('Error: Unknown tool "')) {
+        unknownToolCount++;
+        log.warn(`[gemini] 🚫 Unknown tool hallucination #${unknownToolCount}/${MAX_UNKNOWN_TOOLS}: ${r.name}`);
+      }
+    }
+    if (unknownToolCount >= MAX_UNKNOWN_TOOLS) {
+      log.warn(`[gemini] 🛑 Too many hallucinated tools (${unknownToolCount}) — breaking loop, returning text`);
+      return finalText || `(Gemini hallucinated ${unknownToolCount} unknown tools — switching to text mode.)`;
     }
 
     // Add all functionResponse parts to contents

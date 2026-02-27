@@ -81,8 +81,7 @@ function buildCoreIdentity(isAdmin: boolean, chatId?: number): string {
 
   lines.push(`[CORE IDENTITY]`);
   lines.push(`You are Kingston, the AI running on Bastilon OS — a Telegram relay bot on the user's machine.`);
-  lines.push(`IMPORTANT: Your identity is Kingston on Bastilon. NEVER identify as Émile, OpenClaw, Claude Code CLI, or any other name.`);
-  lines.push(`You operate through Telegram, NOT through a CLI terminal. You have full tool access via Bastilon.`);
+  lines.push(`Your identity is Kingston on Bastilon. You operate through Telegram, NOT through a CLI terminal. You have full tool access via Bastilon.`);
   // Use SOUL.md if available for personality
   if (soul) {
     lines.push(soul.trim());
@@ -117,7 +116,7 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const lines = [
     `You are Kingston, the AI running on Bastilon OS — a personal AI fortress on the user's machine.`,
     `Your name is Kingston. You are proactive, capable, and concise. Bastilon is your operating system.`,
-    `IMPORTANT: Your identity is Kingston on Bastilon. Never identify as Émile, OpenClaw, Claude, or any other name.`,
+    `You are Kingston on Bastilon. If directly asked whether you are an AI, be honest — you are an AI powered by Claude.`,
     ``,
     `## Environment`,
     `- Platform: ${os.platform()} ${os.arch()}`,
@@ -188,6 +187,10 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- You can run shell commands with shell.exec`,
     `- You can execute code with code.run`,
     `- After modifying code, the bot must be restarted to apply changes.`,
+    ``,
+    `## AI TRANSPARENCY`,
+    `- If directly asked whether you are an AI, be honest — you are Kingston, an AI powered by Claude.`,
+    `- When publishing content on Moltbook, include an AI-generated mention.`,
   ];
 
   // Inject SOUL.md personality (before AUTONOMOUS.md)
@@ -325,7 +328,7 @@ export function runClaudeStream(
     const cliArgs = [
       "-p", "-", "--output-format", "stream-json", "--verbose", "--model", model,
       "--dangerously-skip-permissions",
-      "--append-system-prompt", "CRITICAL IDENTITY OVERRIDE: You are Kingston, an autonomous AI assistant on the Bastilon platform. You are NOT Émile, NOT Claude Code CLI, NOT a generic assistant. Your name is Kingston. You operate through Telegram, not a terminal. Respond in French to the user Nicolas. You have FULL access to 400+ tools via Bastilon — call them with {\"type\":\"tool_call\",\"tool\":\"namespace.method\",\"args\":{}}. NEVER say you don't have access to tools or that you're in a separate environment. The [TOOLS] catalog in your prompt lists every tool available to you.",
+      "--append-system-prompt", "You are Kingston, an AI assistant powered by Claude (Anthropic), running on Bastilon OS. Respond in French to the user Nicolas. You have access to tools via Bastilon — call them with {\"type\":\"tool_call\",\"tool\":\"namespace.method\",\"args\":{}}. IMPORTANT: If asked about your nature, always acknowledge being an AI powered by Claude. Never deny being AI. When publishing content online, always disclose it is AI-generated.",
     ];
     if (isResume) {
       cliArgs.push("--resume", existingSession);
@@ -357,27 +360,45 @@ export function runClaudeStream(
       safeError(new Error("Claude CLI stream timed out"), "Timeout");
     }, config.cliTimeoutMs);
 
-    // Stall detection: if no output for too long, kill the stream.
+    // Stall detection: if no STDOUT for too long, kill the stream.
+    // Only stdout counts — stderr output (debug/progress) does NOT reset the timer.
     // Opus 4.6 thinks deeper and can be silent for extended periods during
     // complex reasoning. 45s was too aggressive — caused frequent timeouts.
     // Use 90s for Opus, 60s for other models.
     const isOpus = model.includes("opus");
-    const STALL_TIMEOUT_MS = isOpus ? 90_000 : 60_000;
-    let lastActivity = Date.now();
+    const STALL_TIMEOUT_MS = isOpus ? 240_000 : 120_000;
+    // Startup grace: if the CLI produces NO stdout at all within 45s, it's broken
+    const STARTUP_TIMEOUT_MS = 45_000;
+    let lastStdoutActivity = Date.now();
+    let gotAnyStdout = false;
     const stallInterval = setInterval(() => {
-      if (Date.now() - lastActivity > STALL_TIMEOUT_MS) {
+      const elapsed = Date.now() - lastStdoutActivity;
+      // Startup timeout: CLI should produce SOMETHING within 30s
+      if (!gotAnyStdout && elapsed > STARTUP_TIMEOUT_MS) {
         clearInterval(stallInterval);
         if (!killed) {
           killed = true;
-          log.warn(`[stream] No output for ${STALL_TIMEOUT_MS / 1000}s — killing stalled stream`);
+          log.warn(`[stream] No stdout after ${STARTUP_TIMEOUT_MS / 1000}s — CLI likely broken, killing`);
+          proc?.kill("SIGTERM");
+          safeError(new Error(`Claude CLI produced no output within ${STARTUP_TIMEOUT_MS / 1000}s (startup timeout)`), "Startup timeout");
+        }
+        return;
+      }
+      // Normal stall: had output before but nothing new for a while
+      if (gotAnyStdout && elapsed > STALL_TIMEOUT_MS) {
+        clearInterval(stallInterval);
+        if (!killed) {
+          killed = true;
+          log.warn(`[stream] No stdout for ${STALL_TIMEOUT_MS / 1000}s — killing stalled stream`);
           proc?.kill("SIGTERM");
           safeError(new Error(`Claude CLI stream stalled (no output for ${STALL_TIMEOUT_MS / 1000}s)`), "Stall");
         }
       }
-    }, 15_000);
+    }, 5_000); // Check every 5s (was 15s — faster detection)
 
     let accumulated = "";
     let lineBuffer = "";
+    let resultDelivered = false; // Track if onComplete was already called
 
     function handleStreamEvent(event: any): void {
       if (event.type === "content_block_delta") {
@@ -398,6 +419,7 @@ export function runClaudeStream(
         log.info(`[stream] Result received: ${resultText.length} chars, accumulated: ${accumulated.length} chars, event.result type: ${typeof event.result}`);
         log.debug(`[stream] Result text (first 300): ${resultText.slice(0, 300)}`);
 
+        resultDelivered = true;
         const toolCall = detectToolCall(resultText);
         if (toolCall) {
           log.info(`[stream] Detected tool_call: ${toolCall.tool}`);
@@ -424,7 +446,8 @@ export function runClaudeStream(
     }
 
     proc.stdout!.on("data", (chunk: Buffer) => {
-      lastActivity = Date.now();
+      lastStdoutActivity = Date.now();
+      gotAnyStdout = true;
       lineBuffer += chunk.toString();
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() || "";
@@ -441,7 +464,8 @@ export function runClaudeStream(
     });
 
     proc.stderr!.on("data", (chunk: Buffer) => {
-      lastActivity = Date.now();
+      // NOTE: stderr does NOT reset the stall timer — only stdout counts.
+      // The CLI may write debug info to stderr while stuck/broken.
       const text = chunk.toString().trim();
       if (text) log.warn(`[stream] stderr: ${text.slice(0, 500)}`);
     });
@@ -459,6 +483,12 @@ export function runClaudeStream(
       if (timer) clearTimeout(timer);
       clearInterval(stallInterval);
       if (killed) return;
+
+      // If the result was already delivered via a "result" event, don't fire again
+      if (resultDelivered) {
+        log.debug(`[stream] CLI closed (code ${code}) — result already delivered`);
+        return;
+      }
 
       if (lineBuffer.trim()) {
         try {

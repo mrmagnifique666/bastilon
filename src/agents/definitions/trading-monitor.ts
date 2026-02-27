@@ -785,6 +785,24 @@ function evaluateAutoTrade(
   let buyScore = 0;
   let sellScore = 0;
 
+  // DEFER to bracket-manager if it has ATR-based brackets for this symbol
+  // bracket-manager uses science (ATR), this system uses fixed %. ATR wins.
+  try {
+    const fs = require("fs");
+    const bPath = require("path").join(process.cwd(), "data", "bracket-state.json");
+    if (fs.existsSync(bPath)) {
+      const bState = JSON.parse(fs.readFileSync(bPath, "utf-8"));
+      const bracket = bState[pos.symbol];
+      if (bracket?.slOrderId && bracket?.tpOrderId) {
+        // Verify bracket is fresh (< 10 min) — stale brackets = expired coverage
+        const age = bracket.placedAt ? Date.now() - new Date(bracket.placedAt).getTime() : 0;
+        if (age < 600_000) {
+          return { action: "HOLD", symbol: pos.symbol, qty: 0, reason: "Bracket-manager ATR actif — defer", confidence: 0, signals: ["BRACKET_DEFER"] };
+        }
+      }
+    }
+  } catch { /* On error, conservative: fall through to own analysis */ }
+
   // Trailing stop triggered — MUST SELL
   if (trailing?.triggered) {
     return {

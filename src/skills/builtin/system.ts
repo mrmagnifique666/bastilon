@@ -122,17 +122,27 @@ registerSkill({
     const reason = (args.reason as string) || "no reason given";
     log.info(`[system.restart] Restart requested: ${reason}`);
 
-    // Clear all sessions so stale messages don't re-trigger after restart
-    for (const uid of config.allowedUsers) {
-      clearSession(uid);
-      clearTurns(uid);
+    // Clear ALL sessions — user, agents (100-106), cron (200-249), scheduler (1)
+    const allChatIds = [
+      ...config.allowedUsers,
+      1, // scheduler
+      ...Array.from({ length: 7 }, (_, i) => 100 + i), // agents 100-106
+      ...Array.from({ length: 50 }, (_, i) => 200 + i), // cron 200-249
+    ];
+    for (const uid of allChatIds) {
+      try {
+        clearSession(uid);
+        clearTurns(uid);
+      } catch { /* best-effort */ }
     }
 
-    // Detect if wrapper is running
-    const hasWrapper = process.env.__KINGSTON_WRAPPER === "1";
+    // Detect if wrapper is running (heartbeat sets __KINGSTON_LAUNCHER=1)
+    const hasWrapper = process.env.__KINGSTON_WRAPPER === "1" || process.env.__KINGSTON_LAUNCHER === "1";
 
     if (hasWrapper) {
-      // Wrapper catches exit code 42 and restarts
+      // Wrapper catches exit code 42 and restarts the bot in 1.5s
+      // The heartbeat process STAYS ALIVE — only the bot child dies
+      log.info(`[system.restart] Heartbeat detected — exiting with code 42 (heartbeat restarts in 1.5s)`);
       process.exit(42);
     } else {
       // No wrapper — self-respawn then exit
@@ -268,5 +278,145 @@ registerSkill({
   },
   async execute(): Promise<string> {
     return getPatternSummary();
+  },
+});
+
+// ── system.diagnose ── Deep diagnostic of message pipeline
+registerSkill({
+  name: "system.diagnose",
+  description:
+    "Deep diagnostic of the message pipeline: checks Telegram bot connectivity, " +
+    "Claude CLI responsiveness, heartbeat status, LLM fallback chain health, " +
+    "and identifies why messages might fail to be processed. " +
+    "Use this when messages are dropping or responses seem stuck.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {},
+  },
+  async execute(): Promise<string> {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const checks: string[] = [];
+    let issues = 0;
+
+    // 1. Process & heartbeat check
+    const heartbeatLock = path.resolve("data/heartbeat.lock");
+    const botLock = path.resolve("relay/bot.lock");
+    const heartbeatAlive = fs.existsSync(heartbeatLock);
+    const botAlive = fs.existsSync(botLock);
+
+    if (heartbeatAlive) {
+      const hbPid = fs.readFileSync(heartbeatLock, "utf-8").trim();
+      checks.push(`✅ Heartbeat: PID ${hbPid} (lock file exists)`);
+    } else {
+      checks.push(`❌ Heartbeat: NO lock file — supervisor may be dead`);
+      issues++;
+    }
+
+    if (botAlive) {
+      const botPid = fs.readFileSync(botLock, "utf-8").trim();
+      checks.push(`✅ Bot: PID ${botPid} (lock file exists)`);
+    } else {
+      checks.push(`❌ Bot: NO lock file — bot may be dead`);
+      issues++;
+    }
+
+    // 2. Windows watchdog task
+    try {
+      const { execSync } = await import("node:child_process");
+      const taskCheck = execSync(
+        'schtasks /Query /TN "Kingston_Heartbeat_Watchdog" /FO CSV /NH',
+        { encoding: "utf-8", timeout: 5000 }
+      ).trim();
+      if (taskCheck.includes("Ready") || taskCheck.includes("Running")) {
+        checks.push(`✅ Watchdog task: Active`);
+      } else {
+        checks.push(`⚠️ Watchdog task: Exists but status: ${taskCheck.split(",")[2] || "unknown"}`);
+      }
+    } catch {
+      checks.push(`❌ Watchdog task: NOT found — if heartbeat dies, no auto-recovery`);
+      issues++;
+    }
+
+    // 3. Memory usage
+    const mem = process.memoryUsage();
+    const heapMB = Math.round(mem.heapUsed / 1048576);
+    const rssMB = Math.round(mem.rss / 1048576);
+    if (heapMB > 500) {
+      checks.push(`⚠️ Memory: Heap ${heapMB}MB (high!) | RSS ${rssMB}MB`);
+      issues++;
+    } else {
+      checks.push(`✅ Memory: Heap ${heapMB}MB | RSS ${rssMB}MB`);
+    }
+
+    // 4. Claude CLI timeout settings
+    const cliTimeout = Number(process.env.CLAUDE_CLI_TIMEOUT_MS) || 300000;
+    const stallTimeout = Number(process.env.CLAUDE_CLI_STALL_TIMEOUT_MS) || 150000;
+    checks.push(`📋 CLI timeout: ${Math.round(cliTimeout / 60000)}min | Stall: ${Math.round(stallTimeout / 60000)}min`);
+
+    // 5. LLM provider health
+    try {
+      const { isProviderHealthy } = await import("../../llm/failover.js");
+      const providers = ["claude", "gemini", "ollama", "groq", "openrouter"] as const;
+      for (const p of providers) {
+        const healthy = isProviderHealthy(p as any);
+        checks.push(`${healthy ? "✅" : "❌"} ${p}: ${healthy ? "healthy" : "COOLING DOWN"}`);
+        if (!healthy) issues++;
+      }
+    } catch {
+      checks.push(`⚠️ Failover module not loaded`);
+    }
+
+    // 6. Ollama availability
+    try {
+      const { isOllamaAvailable } = await import("../../llm/ollamaClient.js");
+      const ollamaUp = await isOllamaAvailable();
+      checks.push(`${ollamaUp ? "✅" : "⚠️"} Ollama: ${ollamaUp ? "reachable" : "DOWN (no local fallback)"}`);
+      if (!ollamaUp) issues++;
+    } catch {
+      checks.push(`⚠️ Ollama check failed`);
+    }
+
+    // 7. Recent error rate
+    try {
+      const { getDb } = await import("../../storage/store.js");
+      const db = getDb();
+      const hourAgo = Math.floor(Date.now() / 1000) - 3600;
+      const recentErrors = (db.prepare("SELECT COUNT(*) as c FROM error_log WHERE timestamp > ?").get(hourAgo) as any)?.c || 0;
+      const recentTimeouts = (db.prepare("SELECT COUNT(*) as c FROM error_log WHERE timestamp > ? AND message LIKE '%timeout%'").get(hourAgo) as any)?.c || 0;
+      if (recentErrors > 10) {
+        checks.push(`❌ Errors (1h): ${recentErrors} total, ${recentTimeouts} timeouts — PROBLEMATIC`);
+        issues++;
+      } else if (recentErrors > 3) {
+        checks.push(`⚠️ Errors (1h): ${recentErrors} total, ${recentTimeouts} timeouts`);
+      } else {
+        checks.push(`✅ Errors (1h): ${recentErrors} total, ${recentTimeouts} timeouts`);
+      }
+    } catch {
+      checks.push(`⚠️ Error log check failed`);
+    }
+
+    // 8. Pending code requests
+    try {
+      const crPath = path.resolve("relay/code-requests.json");
+      if (fs.existsSync(crPath)) {
+        const crs = JSON.parse(fs.readFileSync(crPath, "utf-8"));
+        const pending = Array.isArray(crs) ? crs.filter((r: any) => r.status === "pending").length : 0;
+        if (pending > 10) {
+          checks.push(`⚠️ Code requests: ${pending} pending (backlog growing)`);
+        } else {
+          checks.push(`📋 Code requests: ${pending} pending`);
+        }
+      }
+    } catch { /* ignore */ }
+
+    const verdict = issues === 0
+      ? "🟢 Pipeline sain — tout fonctionne"
+      : issues <= 2
+        ? `🟡 ${issues} problème(s) mineur(s)`
+        : `🔴 ${issues} problèmes détectés — intervention requise`;
+
+    return `System Diagnostic\n${"═".repeat(30)}\n\n${verdict}\n\n${checks.join("\n")}`;
   },
 });

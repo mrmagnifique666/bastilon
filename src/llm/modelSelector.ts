@@ -2,22 +2,24 @@
  * Model selector — picks the right model tier based on task context.
  *
  * Tiers (pyramid, cheapest first):
- *   ollama — local 14B: heartbeats, greetings, agent tool chains (free, instant)
- *   groq   — cloud 70B: text-only fallback for greetings/heartbeats (free, fast)
- *   haiku  — fast: agent fallback, simple routing
- *   sonnet — balanced: most interactions, analysis, tool chain follow-ups
- *   opus   — premium: content creation, strategic thinking, complex reasoning
+ *   ollama     — local 14B: heartbeats, greetings, agent tool chains (free, instant)
+ *   groq       — cloud 70B: text-only fallback for greetings/heartbeats (free, fast)
+ *   openrouter — unified gateway: 100+ models, free tiers (DeepSeek R1, Llama 405B)
+ *   haiku      — fast: agent fallback, simple routing
+ *   sonnet     — balanced: most interactions, analysis, tool chain follow-ups
+ *   opus       — premium: content creation, strategic thinking, complex reasoning
  */
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { isProviderHealthy, type FailoverProvider } from "./failover.js";
 
-export type ModelTier = "ollama" | "groq" | "haiku" | "sonnet" | "opus";
+export type ModelTier = "ollama" | "groq" | "openrouter" | "haiku" | "sonnet" | "opus";
 
 export function getModelId(tier: ModelTier): string {
   switch (tier) {
     case "ollama": return config.ollamaModel;
     case "groq": return config.groqModel;
+    case "openrouter": return config.openrouterModel;
     case "haiku": return config.claudeModelHaiku;
     case "sonnet": return config.claudeModelSonnet;
     case "opus": return config.claudeModelOpus;
@@ -28,6 +30,7 @@ export function getModelId(tier: ModelTier): string {
 const TIER_TO_PROVIDER: Record<ModelTier, FailoverProvider> = {
   ollama: "ollama",
   groq: "groq",
+  openrouter: "openrouter",
   haiku: "claude",
   sonnet: "claude",
   opus: "claude",
@@ -54,7 +57,7 @@ export function selectModel(
   chatId?: number
 ): ModelTier {
   // Explicit override: [MODEL:opus], [MODEL:haiku], [MODEL:sonnet], [MODEL:ollama]
-  const override = message.match(/\[MODEL:(ollama|groq|haiku|sonnet|opus)\]/i);
+  const override = message.match(/\[MODEL:(ollama|groq|openrouter|haiku|sonnet|opus)\]/i);
   if (override) {
     const tier = override[1].toLowerCase() as ModelTier;
     log.debug(`[model] Explicit override: ${tier}`);
@@ -73,11 +76,16 @@ export function selectModel(
       log.debug(`[model] Agent task → ollama (Ollama-first architecture)`);
       return "ollama";
     }
-    // Ollama unhealthy or disabled → try gemini-routed haiku
+    // Ollama unhealthy or disabled → try OpenRouter (free models with tool support)
+    if (config.openrouterApiKey && isTierHealthy("openrouter")) {
+      log.debug(`[model] Agent task → openrouter (ollama down)`);
+      return "openrouter";
+    }
+    // OpenRouter also down → try haiku
     if (isTierHealthy("haiku")) return "haiku";
     // Claude also down? Try groq as last resort for agents
     if (config.groqApiKey && isTierHealthy("groq")) {
-      log.debug(`[model] Agent task → groq (ollama+claude down)`);
+      log.debug(`[model] Agent task → groq (ollama+openrouter+claude down)`);
       return "groq";
     }
     return "haiku"; // return haiku anyway — router will handle the failure
@@ -89,12 +97,17 @@ export function selectModel(
       log.debug(`[model] Scheduler task → ollama`);
       return "ollama";
     }
-    // Ollama unhealthy → try groq (free, text capable)
+    // Ollama unhealthy → try OpenRouter (free, tool capable)
+    if (config.openrouterApiKey && isTierHealthy("openrouter")) {
+      log.debug(`[model] Scheduler task → openrouter (ollama down)`);
+      return "openrouter";
+    }
+    // OpenRouter also down → try groq (free, text capable)
     if (config.groqApiKey && isTierHealthy("groq")) {
-      log.debug(`[model] Scheduler task → groq (ollama down)`);
+      log.debug(`[model] Scheduler task → groq (ollama+openrouter down)`);
       return "groq";
     }
-    log.debug(`[model] Scheduler task → haiku (ollama+groq unavailable)`);
+    log.debug(`[model] Scheduler task → haiku (ollama+openrouter+groq unavailable)`);
     return "haiku";
   }
 
@@ -109,17 +122,23 @@ export function selectModel(
       log.debug(`[model] Short greeting → groq`);
       return "groq";
     }
-    // Both cheap options down — sonnet will handle it
+    if (config.openrouterApiKey && isTierHealthy("openrouter")) {
+      log.debug(`[model] Short greeting → openrouter`);
+      return "openrouter";
+    }
+    // All cheap options down — sonnet will handle it
   }
 
-  // Real Telegram users (chatId > 1000) → Opus (best model for the owner)
+  // Real Telegram users (chatId > 1000) → Opus (deep reasoning, $0 on Max plan)
+  // Fallback: Opus → Sonnet → Haiku
   if (chatId && chatId > 1000) {
     if (isTierHealthy("opus")) {
-      log.debug(`[model] User message → opus (real user deserves best model)`);
+      log.debug(`[model] User message → opus (default for real users)`);
       return "opus";
     }
-    // Opus unhealthy → fall through to sonnet
     log.warn(`[model] Opus unhealthy for user — falling back to sonnet`);
+    if (isTierHealthy("sonnet")) return "sonnet";
+    log.warn(`[model] Sonnet also unhealthy — falling back to haiku`);
   }
 
   // Everything else → Sonnet (tool chain follow-ups, dashboard, internal)
@@ -140,6 +159,7 @@ export function modelLabel(tier: ModelTier): string {
   const labels: Record<ModelTier, string> = {
     ollama: "🦙",
     groq: "⚡",
+    openrouter: "🌐",
     haiku: "💨",
     sonnet: "🎵",
     opus: "🎼",

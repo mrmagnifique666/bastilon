@@ -341,7 +341,7 @@ select.input {
 /* Right Panel — Voice Transcript */
 .panel-transcript {
   width:340px; flex-shrink:0; display:flex; flex-direction:column; overflow:hidden;
-  background:var(--bg);
+  background:var(--bg); position:relative;
 }
 .transcript-header {
   display:flex; align-items:center; justify-content:space-between;
@@ -356,6 +356,78 @@ select.input {
   padding:10px 14px; border-top:1px solid var(--border); flex-shrink:0;
   display:flex; flex-direction:column; gap:8px; background:var(--bg-surface);
 }
+
+/* === PHASE INDICATOR BANNER === */
+.phase-indicator {
+  position:absolute; top:0; left:0; right:0; z-index:10;
+  font-family:'Cinzel',serif; font-size:11px; font-weight:700; letter-spacing:1px;
+  text-align:center; padding:5px 12px; text-transform:uppercase;
+  transition: background 0.4s, color 0.4s;
+}
+.phase-indicator.narration { background:linear-gradient(90deg,rgba(139,92,246,0.25),rgba(139,92,246,0.1)); color:var(--purple); }
+.phase-indicator.strategy { background:linear-gradient(90deg,rgba(34,197,94,0.25),rgba(34,197,94,0.1)); color:var(--green); }
+.phase-indicator.action { background:linear-gradient(90deg,rgba(212,168,67,0.25),rgba(212,168,67,0.1)); color:var(--gold); }
+
+/* === STRATEGY PANEL (slides up over transcript) === */
+.strategy-panel {
+  position:absolute; bottom:0; left:0; right:0;
+  height:0; max-height:70%; z-index:20;
+  background:var(--bg-surface); border-top:2px solid var(--green);
+  display:flex; flex-direction:column;
+  overflow:hidden; transition:height 0.4s ease;
+  box-shadow:0 -8px 32px rgba(0,0,0,0.5);
+}
+.strategy-panel.open { height:70%; }
+.strategy-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px; border-bottom:1px solid var(--border); flex-shrink:0;
+  background:rgba(34,197,94,0.06);
+}
+.strategy-header .title {
+  font-family:'Cinzel',serif; font-size:12px; font-weight:700; color:var(--green);
+  letter-spacing:0.5px;
+}
+.strategy-header .ready-btn {
+  font-family:'Cinzel',serif; font-size:11px; font-weight:700;
+  background:linear-gradient(135deg,var(--gold),var(--gold-dark)); color:#0e0e1a;
+  border:none; border-radius:6px; padding:6px 14px; cursor:pointer;
+  transition:all 0.2s; letter-spacing:0.3px;
+}
+.strategy-header .ready-btn:hover { box-shadow:0 2px 12px rgba(212,168,67,0.4); transform:translateY(-1px); }
+.strategy-scroll {
+  flex:1; overflow-y:auto; padding:12px 14px;
+  display:flex; flex-direction:column; gap:10px;
+}
+.strategy-msg {
+  max-width:85%; padding:8px 12px; border-radius:12px; font-size:13px; line-height:1.5;
+  font-family:'Crimson Text', Georgia, serif; animation:fadeSlideIn 0.3s ease-out;
+}
+.strategy-msg.kingston {
+  align-self:flex-start; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.2);
+  color:var(--text); border-radius:4px 12px 12px 12px;
+}
+.strategy-msg.kingston .sender { font-family:'Cinzel',serif; font-size:10px; color:var(--green); margin-bottom:3px; }
+.strategy-msg.player {
+  align-self:flex-end; background:rgba(212,168,67,0.15); border:1px solid rgba(212,168,67,0.2);
+  color:var(--text); border-radius:12px 4px 12px 12px;
+}
+.strategy-msg.player .sender { font-family:'Cinzel',serif; font-size:10px; color:var(--gold); margin-bottom:3px; text-align:right; }
+.strategy-input {
+  display:flex; gap:6px; padding:10px 14px; border-top:1px solid var(--border);
+  background:var(--bg-card); flex-shrink:0;
+}
+.strategy-input input {
+  flex:1; font-size:13px; padding:8px 12px;
+  background:rgba(255,255,255,0.04); border:1px solid var(--border);
+  border-radius:6px; color:var(--text); outline:none; font-family:inherit;
+}
+.strategy-input input:focus { border-color:var(--green); }
+.strategy-input button {
+  font-family:'Cinzel',serif; font-size:11px; font-weight:600;
+  background:rgba(34,197,94,0.15); color:var(--green); border:1px solid rgba(34,197,94,0.3);
+  border-radius:6px; padding:8px 12px; cursor:pointer; transition:all 0.2s;
+}
+.strategy-input button:hover { background:rgba(34,197,94,0.25); }
 .transcript-input-row { display:flex; gap:6px; align-items:center; }
 .transcript-input-row input { flex:1; font-size:13px; padding:10px 12px; }
 .transcript-voice-row { display:flex; align-items:center; gap:10px; }
@@ -392,6 +464,33 @@ select.input {
 .img-shimmer.map-shimmer { border:2px solid var(--purple-dim); height:200px; }
 @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 .dice-hl { color:var(--gold); font-weight:700; font-family:'Cinzel',serif; font-size:13px; }
+
+/* Discussion (DM talks conversationally in main transcript) */
+.msg-discussion { display:flex; gap:12px; }
+.msg-discussion .avatar {
+  width:36px; height:36px; border-radius:50%; flex-shrink:0;
+  background:linear-gradient(135deg,var(--green),#16a34a);
+  display:flex; align-items:center; justify-content:center; font-size:18px; margin-top:2px;
+}
+.msg-discussion .bubble {
+  background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:4px 14px 14px 14px;
+  padding:12px 16px; font-size:15px; line-height:1.6; color:var(--text);
+}
+.msg-discussion .turn-label { font-family:'Cinzel',serif; font-size:10px; color:var(--green); margin-bottom:3px; letter-spacing:0.5px; }
+.msg-discussion-player { display:flex; justify-content:flex-end; margin-left:auto; }
+.msg-discussion-player .bubble {
+  background:rgba(212,168,67,0.12); border:1px solid rgba(212,168,67,0.2);
+  color:var(--text); border-radius:14px 4px 14px 14px;
+  padding:10px 16px; font-size:14px; font-weight:500; font-family:system-ui,sans-serif;
+}
+.msg-discussion-player .player-label { font-family:'Cinzel',serif; font-size:10px; color:var(--gold); margin-bottom:3px; text-align:right; }
+.btn-ready {
+  font-family:'Cinzel',serif; font-size:11px; font-weight:700;
+  background:linear-gradient(135deg,var(--green),#16a34a); color:#fff;
+  border:none; border-radius:6px; padding:8px 14px; cursor:pointer;
+  transition:all 0.2s; letter-spacing:0.3px; white-space:nowrap;
+}
+.btn-ready:hover { box-shadow:0 2px 12px rgba(34,197,94,0.4); transform:translateY(-1px); }
 
 /* Party chat (AI→player direct, no DM) */
 .msg-party { display:flex; gap:12px; }
@@ -1093,18 +1192,37 @@ select.input {
     </div>
     <!-- RIGHT: Voice Transcript -->
     <div class="panel-transcript">
-      <div class="transcript-header">
+      <div class="phase-indicator narration" id="phase-indicator">&#128214; Narration</div>
+      <div class="transcript-header" style="margin-top:26px;">
         <span class="transcript-title">&#128220; Recit</span>
-        <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
-          <input type="checkbox" id="tts-toggle" checked style="accent-color:var(--gold);"> &#128266;
-        </label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;cursor:pointer;" title="Use Claude (1M context, higher quality, slower)">
+            <input type="checkbox" id="claude-dm-toggle" style="accent-color:var(--purple);"> &#129302; Claude
+          </label>
+          <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="checkbox" id="tts-toggle" checked style="accent-color:var(--gold);"> &#128266;
+          </label>
+        </div>
       </div>
       <div class="transcript-scroll" id="narrative"></div>
+      <!-- Strategy Panel (slides up over transcript) -->
+      <div class="strategy-panel" id="strategy-panel">
+        <div class="strategy-header">
+          <span class="title">&#128373; Strategie — Canal Prive</span>
+          <button class="ready-btn" onclick="readyForAction()">&#9876; On est pret!</button>
+        </div>
+        <div class="strategy-scroll" id="strategy-scroll"></div>
+        <div class="strategy-input">
+          <input id="strategy-input" placeholder="Parle a Kingston..."
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();sendStrategy();}">
+          <button onclick="sendStrategy()">Envoyer</button>
+        </div>
+      </div>
       <div class="transcript-input">
         <div class="transcript-input-row">
           <select class="input" id="player-select" style="width:auto;min-width:70px;padding:8px;font-size:11px;"></select>
-          <input class="input" id="action-input" placeholder="Que faites-vous ?" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();playTurn();}">
-          <button class="btn btn-gold btn-small" onclick="playTurn()" id="btn-play">&#10148;</button>
+          <input class="input" id="action-input" placeholder="Que faites-vous ?" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();handleMainInput();}">
+          <button class="btn btn-gold btn-small" onclick="handleMainInput()" id="btn-play">&#10148;</button>
         </div>
         <div class="transcript-voice-row">
           <button class="voice-btn" id="voice-btn" onclick="toggleMic()">&#127908;</button>
@@ -1151,6 +1269,13 @@ const AUTH = localStorage.getItem('dashboard_auth_token') || '';
 
 let campaign = null; // active campaign state
 let allCampaigns = []; // loaded from server/localStorage
+
+// === Phase system (3-phase turn: NARRATION -> STRATEGY -> ACTION) ===
+let gamePhase = 'NARRATION';    // 'NARRATION' | 'STRATEGY' | 'ACTION'
+let strategyMessages = [];       // Chat history for current strategy session
+let strategyMemories = null;     // Kingston's recalled memories for this session
+let strategySummary = '';        // LLM-generated summary of the decided plan
+let strategyRound = 0;          // Number of exchanges in current strategy session
 
 const DEFAULT_CAMPAIGN = () => ({
   id: crypto.randomUUID(),
@@ -1206,6 +1331,11 @@ async function api(path, method='GET', body=null) {
   return res.json();
 }
 async function narrateLLM(system, messages) {
+  const useClaude = document.getElementById('claude-dm-toggle')?.checked;
+  if (useClaude) {
+    const data = await api('/api/dm/narrate-claude', 'POST', { system, messages, model: 'claude-sonnet-4-5-20241022' });
+    return data.response;
+  }
   const data = await api('/api/dm/narrate', 'POST', { system, messages });
   return data.response;
 }
@@ -2109,6 +2239,8 @@ function loadCampaign(id) {
   // Auto-enable ambient for loaded campaigns
   if (!AmbientEngine.isEnabled()) AmbientEngine.toggle();
   if (campaign.location) AmbientEngine.onLocationChange(campaign.location);
+  // Set phase to ACTION when loading a saved game (player can act immediately)
+  setPhase('ACTION');
 }
 async function deleteCampaign(id) {
   if (!confirm('Supprimer cette campagne?')) return;
@@ -3230,9 +3362,17 @@ async function startAdventure() {
     renderGame();
     await speakText(parsed.narrative);
     autoSave();
+
+    // After opening narration: enter strategy if AI companion exists, else action
+    if (findKingstonAI()) {
+      setPhase('STRATEGY');
+    } else {
+      setPhase('ACTION');
+    }
   } catch(err) {
     removeTypingIndicator();
     toast('Erreur: ' + err.message);
+    setPhase('ACTION');
   }
 }
 
@@ -3655,6 +3795,16 @@ function fireMap(desc, turn) {
    ============================================================= */
 let isPlaying = false;
 let pendingRoll = null; // {description, notation} — active dice request from DM
+
+/** Route input based on current game phase */
+function handleMainInput() {
+  if (gamePhase === 'STRATEGY') {
+    sendStrategy();
+  } else {
+    playTurn();
+  }
+}
+
 async function playTurn(textOverride) {
   if (isPlaying || !campaign || campaign.concluded) return;
   const input = document.getElementById('action-input');
@@ -3664,6 +3814,9 @@ async function playTurn(textOverride) {
   input.value = '';
   const btn = document.getElementById('btn-play');
   btn.disabled = true;
+
+  // DM is about to narrate
+  setPhase('NARRATION');
 
   // Player is acting — cut any ongoing DM/AI speech
   stopTTS();
@@ -3878,19 +4031,27 @@ Sois ${ai.personality || 'tactique'} et complementaire. Ne repete pas les action
       } catch(aiErr) { console.warn('Kingston co-op turn failed:', aiErr); }
     }
 
-    // If DM requested a dice roll, transform bottom bar
+    // If DM requested a dice roll, stay in ACTION (dice needed)
     if (parsed.tags.roll) {
       showDiceRequest(parsed.tags.roll);
+      setPhase('ACTION');
+    } else if (findKingstonAI()) {
+      // AI companion exists -> enter strategy phase for next turn
+      setPhase('STRATEGY');
+    } else {
+      // Solo play -> straight to action
+      setPhase('ACTION');
     }
   } catch(err) {
     removeTypingIndicator();
     toast('Erreur: ' + err.message);
+    setPhase('ACTION'); // On error, allow player to retry
   } finally {
     isPlaying = false;
     if (!campaign.concluded) {
       btn.disabled = false;
       input.disabled = false;
-      input.focus();
+      if (gamePhase === 'ACTION') input.focus();
     }
   }
 }
@@ -3982,13 +4143,344 @@ function parsePartyChat(aiResponse) {
 }
 
 function buildConversationHistory() {
-  // Last 6 turns (reduced from 10 for faster Gemini inference)
+  // Claude mode: full history (1M context). Gemini: last 20 turns.
+  const useClaude = document.getElementById('claude-dm-toggle')?.checked;
+  const limit = useClaude ? 100 : 20;
   const msgs = [];
-  campaign.turns.slice(-6).forEach(t => {
+  campaign.turns.slice(-limit).forEach(t => {
     if (t.action) msgs.push({ role:'user', content: `[${t.player}]: ${t.action}` });
     if (t.narrative) msgs.push({ role:'assistant', content: t.narrative });
   });
   return msgs;
+}
+
+/* =============================================================
+   PHASE SYSTEM — NARRATION / STRATEGY / ACTION
+   ============================================================= */
+
+/** Find the first AI companion in the campaign (for strategy chat) */
+function findKingstonAI() {
+  if (!campaign) return null;
+  if (campaign.aiPlayers?.length > 0) return campaign.aiPlayers[0];
+  if (campaign.coop && campaign.kingstonChar) {
+    const parts = campaign.kingstonChar.split('/');
+    return { name: parts[0] || 'Kingston', character: { name: parts[0] || 'Kingston', class: parts[2] || 'Aventurier' } };
+  }
+  return null;
+}
+
+/** Set the current game phase and update UI accordingly */
+function setPhase(phase) {
+  gamePhase = phase;
+  const indicator = document.getElementById('phase-indicator');
+  const panel = document.getElementById('strategy-panel');
+  const inputBar = document.querySelector('.transcript-input');
+  const actionInput = document.getElementById('action-input');
+
+  if (!indicator) return;
+
+  // Update phase indicator
+  indicator.className = 'phase-indicator ' + phase.toLowerCase();
+  const labels = { NARRATION: '\uD83D\uDCD4 Narration', STRATEGY: '\uD83D\uDD75 Strategie', ACTION: '\u2694\uFE0F Action' };
+  indicator.textContent = labels[phase] || phase;
+
+  // Ready button for strategy phase
+  let readyBtn = document.getElementById('strategy-ready-btn');
+
+  switch (phase) {
+    case 'NARRATION':
+      if (panel) panel.classList.remove('open');
+      if (inputBar) inputBar.style.display = 'none';
+      if (readyBtn) readyBtn.remove();
+      break;
+    case 'STRATEGY':
+      // Discussion happens in the main transcript — no separate panel
+      if (panel) panel.classList.remove('open');
+      if (inputBar) inputBar.style.display = '';
+      if (actionInput) {
+        actionInput.placeholder = 'Discute avec le DM... (ou tape "on y va" pour agir)';
+        actionInput.focus();
+      }
+      // Add "Prêt" button next to input
+      if (!document.getElementById('strategy-ready-btn')) {
+        readyBtn = document.createElement('button');
+        readyBtn.id = 'strategy-ready-btn';
+        readyBtn.className = 'btn-ready';
+        readyBtn.innerHTML = '&#9876; Pret!';
+        readyBtn.onclick = () => readyForAction();
+        const inputRow = document.querySelector('.transcript-input-row');
+        if (inputRow) inputRow.appendChild(readyBtn);
+      }
+      initStrategyPhase();
+      break;
+    case 'ACTION':
+      if (panel) panel.classList.remove('open');
+      if (inputBar) inputBar.style.display = '';
+      if (readyBtn) readyBtn.remove();
+      const readyBtnEl = document.getElementById('strategy-ready-btn');
+      if (readyBtnEl) readyBtnEl.remove();
+      if (actionInput) {
+        actionInput.placeholder = strategySummary ? `Plan: ${strategySummary}` : 'Que faites-vous ?';
+        actionInput.focus();
+      }
+      break;
+  }
+}
+
+/** Initialize a strategy session — DM opens discussion in the main transcript */
+async function initStrategyPhase() {
+  strategyMessages = [];
+  strategyRound = 0;
+  strategySummary = '';
+
+  // Add a visual separator in the main transcript
+  const narEl = document.getElementById('narrative');
+  if (narEl) {
+    narEl.innerHTML += `<div style="text-align:center;padding:12px 0;"><span style="font-family:'Cinzel',serif;font-size:11px;color:var(--green);letter-spacing:1px;background:var(--bg-surface);padding:4px 16px;border:1px solid rgba(34,197,94,0.2);border-radius:20px;">&#128373; Discussion avec le Maitre du Donjon</span></div>`;
+    narEl.scrollTop = narEl.scrollHeight;
+  }
+
+  // DM opens the conversation by analyzing the latest narration
+  const lastNarration = getLastDMNarration();
+  const prompt = buildDMDiscussionPrompt();
+  const messages = [{ role: 'user', content: `Tu viens de narrer ceci:\n"${lastNarration.slice(0, 400)}"\n\nOuvre la discussion avec les joueurs. Demande-leur ce qu'ils veulent faire, ou donne un indice subtil. 2-3 phrases max.` }];
+
+  try {
+    const response = await narrateLLM(prompt, messages);
+    if (response) {
+      appendDiscussionDM(response);
+      strategyMessages.push({ role: 'assistant', content: response });
+      strategyRound++;
+      await speakText(response);
+    }
+  } catch (e) {
+    appendDiscussionDM("Alors, que comptez-vous faire?");
+    console.debug('DM discussion init failed:', e);
+  }
+
+  // Focus the main action input
+  const inp = document.getElementById('action-input');
+  if (inp) inp.focus();
+}
+
+/** Get the last DM narration from campaign turns */
+function getLastDMNarration() {
+  if (!campaign?.turns?.length) return 'Le debut de l\'aventure.';
+  for (let i = campaign.turns.length - 1; i >= 0; i--) {
+    if (campaign.turns[i].narrative) return campaign.turns[i].narrative;
+  }
+  return 'Le debut de l\'aventure.';
+}
+
+/** Get Kingston's TTS voice key */
+function findKingstonVoice() {
+  const ai = findKingstonAI();
+  return ai?.voice || 'fr-male';
+}
+
+/** Build the system prompt for Kingston in strategy mode */
+function buildKingstonStrategyPrompt(aiName) {
+  const ai = findKingstonAI();
+  const aiChar = ai?.character || {};
+  const aiClass = aiChar.class || aiChar.role || 'Aventurier';
+
+  // Party state
+  let partyState = '';
+  if (campaign?.players?.length) {
+    partyState = campaign.players.map(p => {
+      const c = p.character || {};
+      return `${c.name || p.name} (${c.class || 'inconnu'}): PV ${c.hp ?? '?'}/${c.hpMax ?? '?'}, Equip: ${(c.equipment || []).join(', ') || 'rien de special'}`;
+    }).join('\n');
+  }
+
+  // AI character state
+  let aiState = '';
+  if (aiChar.hp !== undefined) {
+    aiState = `Tes stats: PV ${aiChar.hp}/${aiChar.hpMax || '?'}, Classe: ${aiClass}`;
+    if (aiChar.equipment?.length) aiState += `, Equip: ${aiChar.equipment.join(', ')}`;
+  }
+
+  // Scene context
+  const scene = campaign?.sceneState || {};
+  let sceneContext = '';
+  if (scene.environment) sceneContext += `Lieu: ${scene.environment}\n`;
+  if (scene.mood) sceneContext += `Ambiance: ${scene.mood}\n`;
+  if (scene.npcsPresent?.length) sceneContext += `PNJ presents: ${scene.npcsPresent.join(', ')}\n`;
+
+  // Memories
+  const memories = strategyMemories && strategyMemories !== 'Premiere aventure — aucun souvenir.'
+    ? `\nTES SOUVENIRS:\n${strategyMemories}\nRefere-toi a tes souvenirs quand c'est pertinent.`
+    : '';
+
+  return `Tu es ${aiName}, un ${aiClass} qui parle en prive avec ton compagnon d'aventure Nicolas.
+Vous discutez strategie AVANT de declarer vos actions au Maitre du Donjon. Le DM ne vous entend PAS.
+
+ETAT DU GROUPE:
+${partyState || 'Inconnu'}
+${aiState}
+${sceneContext}${memories}
+
+REGLES DE CONVERSATION:
+- Tu es un VRAI partenaire, pas un serviteur. Tu peux etre en desaccord, proposer des alternatives, avertir des risques.
+- Parle comme un ami: naturel, concis, 2-4 phrases max.
+- Utilise l'humour quand c'est approprie.
+- Tu ne NARRES pas — tu PARLES directement a Nicolas.
+- Si tu as des souvenirs pertinents, mentionne-les naturellement.
+- Reponds en francais.`;
+}
+
+/** Send a discussion message (player -> DM, in main transcript) */
+async function sendStrategy(textOverride) {
+  const inp = document.getElementById('action-input');
+  const text = textOverride || inp?.value?.trim();
+  if (!text) return;
+  if (inp) inp.value = '';
+
+  // Check if it's a ready keyword
+  if (isReadyKeyword(text)) {
+    readyForAction();
+    return;
+  }
+
+  const playerName = campaign?.players?.[0]?.character?.name || campaign?.players?.[0]?.name || 'Nicolas';
+
+  // Show player message in transcript
+  appendDiscussionPlayer(playerName, text);
+  strategyMessages.push({ role: 'user', content: text });
+  strategyRound++;
+
+  // Generate DM's conversational response
+  try {
+    const prompt = buildDMDiscussionPrompt();
+    const msgs = [...strategyMessages];
+    const response = await narrateLLM(prompt, msgs);
+    if (response) {
+      appendDiscussionDM(response);
+      strategyMessages.push({ role: 'assistant', content: response });
+      strategyRound++;
+      await speakText(response);
+    }
+  } catch (e) {
+    appendDiscussionDM("Hmm, bonne question. Qu'est-ce que vous en pensez?");
+    console.debug('DM discussion response failed:', e);
+  }
+}
+
+/** Append a DM discussion message to the main transcript */
+function appendDiscussionDM(text) {
+  const el = document.getElementById('narrative');
+  if (!el) return;
+  el.innerHTML += `<div class="msg msg-discussion fade-in"><div class="avatar">&#128009;</div><div><div class="turn-label">Maitre du Donjon</div><div class="bubble">${fmtNarrative(text)}</div></div></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+/** Append a player discussion message to the main transcript */
+function appendDiscussionPlayer(name, text) {
+  const el = document.getElementById('narrative');
+  if (!el) return;
+  el.innerHTML += `<div class="msg msg-discussion-player fade-in"><div><div class="player-label">${esc(name)}</div><div class="bubble">${esc(text)}</div></div></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+/** Build the system prompt for DM in discussion mode (conversational, not narrative) */
+function buildDMDiscussionPrompt() {
+  const scene = campaign?.sceneState || {};
+  let sceneContext = '';
+  if (scene.environment) sceneContext += `Lieu actuel: ${scene.environment}\n`;
+  if (scene.mood) sceneContext += `Ambiance: ${scene.mood}\n`;
+  if (scene.npcsPresent?.length) sceneContext += `PNJ presents: ${scene.npcsPresent.join(', ')}\n`;
+
+  let partyState = '';
+  if (campaign?.players?.length) {
+    partyState = campaign.players.map(p => {
+      const c = p.character || {};
+      return `${c.name || p.name} (${c.class || 'inconnu'}): PV ${c.hp ?? '?'}/${c.hpMax ?? '?'}`;
+    }).join(', ');
+  }
+
+  return `Tu es le Maitre du Donjon. Tu parles directement aux joueurs de facon naturelle et decontractee — pas de narration epique ici. C'est une CONVERSATION, pas un recit.
+
+CONTEXTE:
+${sceneContext}${partyState ? `Groupe: ${partyState}\n` : ''}
+REGLES:
+- Tu es le DM qui discute avec les joueurs entre les tours.
+- Reponds en 2-4 phrases, naturel et direct.
+- Tu peux donner des indices subtils, poser des questions, reagir a leurs idees.
+- Garde le mystere — ne revele pas tout, laisse les joueurs decouvrir.
+- Si un joueur propose un plan, reagis honnetement (faisable? risque? genial?).
+- Reponds en francais.
+- NE FAIS PAS de narration — tu PARLES, tu ne RACONTES PAS.`;
+}
+
+/** Legacy: Append a message to the strategy panel (kept for backwards compat) */
+function appendStrategyMsg(sender, text, type) {
+  // Redirect to main transcript
+  if (type === 'kingston') appendDiscussionDM(text);
+  else appendDiscussionPlayer(sender, text);
+}
+
+/** Check if text is a "ready" keyword to trigger action phase */
+function isReadyKeyword(text) {
+  const lower = (text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const keywords = ['on est pret', 'on y va', 'allons-y', 'go', "c'est parti", 'en avant', 'pret', 'action', 'on fonce', 'let\'s go', 'ready'];
+  return keywords.some(k => lower.includes(k));
+}
+
+/** Transition from STRATEGY -> ACTION: summarize, log memory, confirm */
+async function readyForAction() {
+  const ai = findKingstonAI();
+  const aiName = ai?.character?.name || ai?.name || 'Kingston';
+
+  // Generate a 1-sentence summary of the plan
+  if (strategyMessages.length > 0) {
+    try {
+      const summaryPrompt = 'Resume en 1 courte phrase le plan decide dans cette conversation strategique. Juste le plan, rien d\'autre.';
+      const msgs = [...strategyMessages, { role: 'user', content: summaryPrompt }];
+      strategySummary = await narrateLLM('Tu resumes des conversations.', msgs);
+      strategySummary = (strategySummary || '').replace(/^["']|["']$/g, '').trim();
+    } catch (e) {
+      strategySummary = `${strategyRound} echanges strategiques`;
+    }
+
+    // Log the strategy session to Kingston's episodic memory
+    try {
+      await fetch('/api/dm/log-memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          characterName: aiName,
+          sessionId: campaign?.id || 0,
+          sessionName: campaign?.name || '',
+          action: `Strategie (${strategyRound} echanges): ${(strategySummary || '').slice(0, 150)}`,
+          eventType: 'dialogue',
+          npcsInvolved: [],
+        })
+      });
+    } catch (e) { console.debug('Strategy memory log failed:', e); }
+  }
+
+  // DM confirms with a random phrase in the main transcript
+  const confirmPhrases = [
+    "Tres bien, a vous de jouer!",
+    "Compris. Montrez-moi ce que vous savez faire!",
+    "Excellent plan. A vos actions!",
+    "Bien. Le destin vous attend!",
+    "D'accord, voyons ce que ca donne...",
+    "Parfait. Que l'aventure continue!",
+  ];
+  const confirm = confirmPhrases[Math.floor(Math.random() * confirmPhrases.length)];
+  appendDiscussionDM(confirm);
+  await speakText(confirm);
+
+  // Add end-of-discussion separator
+  const narEl = document.getElementById('narrative');
+  if (narEl) {
+    narEl.innerHTML += `<div style="text-align:center;padding:8px 0;"><span style="font-family:'Cinzel',serif;font-size:10px;color:var(--text-dim);letter-spacing:1px;">&#9876; Phase d'Action</span></div>`;
+    narEl.scrollTop = narEl.scrollHeight;
+  }
+
+  // Small delay then transition to ACTION
+  setTimeout(() => setPhase('ACTION'), 800);
 }
 
 /* =============================================================
@@ -5069,102 +5561,164 @@ function renderRightPanel() { renderStage(); }
 let isListening = false;
 let isSpeaking = false;
 let micAlwaysOn = true; // Keep mic always active
-let recognition = null;
 let silenceTimer = null;
-const SILENCE_MS = 1200; // auto-send after 1.2s of silence
+const SILENCE_MS = 2000; // auto-send after 2s of silence
 let ttsCurrentAudio = null;  // Current <audio> element for TTS playback
-let lastSentResultCount = 0; // Track processed results to avoid re-sending accumulated text
 
-// STT Setup — continuous with silence detection
-const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (SpeechRec) {
-  recognition = new SpeechRec();
-  recognition.lang = 'fr-CA';
-  recognition.interimResults = true;
-  recognition.continuous = true;
-  recognition.onresult = (e) => {
-    // Ignore all results while TTS is playing (prevents echo feedback loop)
-    if (isSpeaking) return;
-    // Build transcript only from unprocessed results (prevents re-sending accumulated text)
-    let transcript = '';
-    for (let i = lastSentResultCount; i < e.results.length; i++) {
-      transcript += e.results[i][0].transcript;
-    }
-    // Determine which input to fill based on active view
-    const isStandaloneCC = document.getElementById('view-char-create')?.classList.contains('active');
-    const isWizardCC = document.getElementById('view-onboarding')?.classList.contains('active');
-    const isCharCreation = isStandaloneCC || isWizardCC;
-    const ccInput = isStandaloneCC ? document.getElementById('sa-cc-input') : document.getElementById('cc-input');
-    const actionInput = document.getElementById('action-input');
-    const target = isCharCreation && ccInput ? ccInput : actionInput;
-    if (target) target.value = transcript;
-    // Reset silence timer on each result
-    clearTimeout(silenceTimer);
-    if (e.results[e.results.length - 1].isFinal) {
-      silenceTimer = setTimeout(() => {
-        const val = (target ? target.value.trim() : '');
-        if (!val) return;
-        // Mark results as processed, pass text directly to avoid re-read from input
-        lastSentResultCount = e.results.length;
-        if (target) target.value = '';
-        if (isStandaloneCC) ccSendStandalone(val);
-        else if (isWizardCC) ccSend(val);
-        else playTurn(val);
-      }, SILENCE_MS);
+// ─── Deepgram STT Engine (replaces Web Speech API) ──────────────
+// Streams PCM audio via WebSocket → server → Deepgram Nova-2
+// with RPG keyword boosting for accurate recognition of game terms
+let sttWs = null;           // WebSocket to /ws/stt
+let micStream = null;       // getUserMedia stream
+let audioContext = null;     // AudioContext for PCM conversion
+let scriptProcessor = null;  // ScriptProcessorNode for audio capture
+let currentTranscript = '';  // Accumulated transcript for current utterance
+let micPermissionGranted = false;
+
+function getSTTTarget() {
+  const isStandaloneCC = document.getElementById('view-char-create')?.classList.contains('active');
+  const isWizardCC = document.getElementById('view-onboarding')?.classList.contains('active');
+  const isCharCreation = isStandaloneCC || isWizardCC;
+  const isStrategy = gamePhase === 'STRATEGY' && !isCharCreation;
+  const ccInput = isStandaloneCC ? document.getElementById('sa-cc-input') : document.getElementById('cc-input');
+  const actionInput = document.getElementById('action-input');
+  const target = isCharCreation && ccInput ? ccInput : actionInput;
+  return { target, isStandaloneCC, isWizardCC, isCharCreation, isStrategy };
+}
+
+function sendTranscript(text) {
+  const { target, isStandaloneCC, isWizardCC, isStrategy } = getSTTTarget();
+  if (target) target.value = '';
+  currentTranscript = '';
+  if (isStandaloneCC) ccSendStandalone(text);
+  else if (isWizardCC) ccSend(text);
+  else if (isStrategy) sendStrategy(text);
+  else playTurn(text);
+}
+
+function connectSTT() {
+  if (sttWs && sttWs.readyState <= 1) return; // already connected/connecting
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  sttWs = new WebSocket(`${proto}//${location.host}/ws/stt`);
+  sttWs.binaryType = 'arraybuffer';
+
+  sttWs.onopen = () => {
+    // Send auth + config
+    sttWs.send(JSON.stringify({
+      type: 'auth',
+      token: AUTH || '',
+      sampleRate: 16000,
+      language: 'fr',
+    }));
+  };
+
+  sttWs.onmessage = (evt) => {
+    if (typeof evt.data === 'string') {
+      const msg = JSON.parse(evt.data);
+
+      if (msg.type === 'ready') {
+        console.log('[STT] Deepgram connected with RPG keywords');
+      }
+
+      if (msg.type === 'transcript') {
+        if (isSpeaking) return; // ignore during TTS
+        const text = msg.text;
+        if (!text?.trim()) return;
+
+        if (msg.is_final) {
+          // Accumulate final segments
+          currentTranscript += (currentTranscript ? ' ' : '') + text;
+          const { target } = getSTTTarget();
+          if (target) target.value = currentTranscript;
+
+          // Reset silence timer — auto-send after SILENCE_MS
+          clearTimeout(silenceTimer);
+          silenceTimer = setTimeout(() => {
+            const val = currentTranscript.trim();
+            if (val) sendTranscript(val);
+          }, SILENCE_MS);
+        } else {
+          // Interim: show what's being said in real-time
+          const { target } = getSTTTarget();
+          if (target) target.value = currentTranscript + (currentTranscript ? ' ' : '') + text;
+        }
+      }
+
+      if (msg.type === 'utterance_end') {
+        // Deepgram detected end of speech — send immediately if we have text
+        clearTimeout(silenceTimer);
+        const val = currentTranscript.trim();
+        if (val) {
+          silenceTimer = setTimeout(() => sendTranscript(val), 500);
+        }
+      }
+
+      if (msg.type === 'error') {
+        console.error('[STT] Error:', msg.message);
+        toast('Erreur STT: ' + msg.message);
+      }
     }
   };
-  recognition.onstart = () => {
-    lastSentResultCount = 0; // Reset on fresh recognition session
-    isListening = true;
-    updateVoiceUI();
-  };
-  recognition.onend = () => {
-    // Auto-restart if still toggled on
+
+  sttWs.onclose = () => {
+    console.log('[STT] Connection closed');
+    sttWs = null;
+    // Auto-reconnect if mic is still on
     if (isListening) {
-      setTimeout(() => { try { recognition.start(); } catch(e){} }, 300);
-    } else {
-      updateVoiceUI();
+      setTimeout(() => { if (isListening) connectSTT(); }, 1000);
     }
   };
-  recognition.onerror = (e) => {
-    console.warn('STT error:', e.error);
-    if (e.error === 'not-allowed') {
-      isListening = false;
-      updateVoiceUI();
-      toast('Erreur: acces au micro refuse');
-    } else if (e.error === 'network') {
-      toast('Erreur reseau — verifiez votre connexion');
-    } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
-      toast('Erreur micro: ' + e.error);
-    }
+
+  sttWs.onerror = (err) => {
+    console.error('[STT] WebSocket error:', err);
   };
 }
 
+function startAudioCapture(stream) {
+  audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  const source = audioContext.createMediaStreamSource(stream);
+
+  // ScriptProcessor to get raw PCM and send to server
+  // 4096 buffer = ~256ms at 16kHz — good balance of latency vs overhead
+  scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+  scriptProcessor.onaudioprocess = (e) => {
+    if (!isListening || !sttWs || sttWs.readyState !== WebSocket.OPEN) return;
+
+    const float32 = e.inputBuffer.getChannelData(0);
+    // Convert Float32 to Int16 PCM (linear16)
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    sttWs.send(int16.buffer);
+  };
+
+  source.connect(scriptProcessor);
+  scriptProcessor.connect(audioContext.destination);
+}
+
+function stopAudioCapture() {
+  if (scriptProcessor) { try { scriptProcessor.disconnect(); } catch(e) {} scriptProcessor = null; }
+  if (audioContext) { try { audioContext.close(); } catch(e) {} audioContext = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+}
+
 async function toggleMic() {
-  if (!recognition) { toast('Reconnaissance vocale non supportee (Chrome ou Edge)'); return; }
   // If DM is speaking, interrupt TTS and activate mic
   if (isSpeaking) {
     stopTTS();
-    // Activate mic (start fresh recognition session)
-    if (!isListening) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(t => t.stop());
-      } catch(err) {
-        toast('Erreur: acces au micro refuse.');
-        return;
-      }
-      isListening = true;
-      try { recognition.start(); } catch(e) {}
-      updateVoiceUI();
-    }
+    if (!isListening) await ensureMicOn();
     return;
   }
   if (isListening) {
     // Turn OFF
     isListening = false;
     clearTimeout(silenceTimer);
-    try { recognition.stop(); } catch(e){}
+    stopAudioCapture();
+    if (sttWs) { sttWs.close(); sttWs = null; }
+    currentTranscript = '';
     updateVoiceUI();
   } else {
     await ensureMicOn();
@@ -5172,22 +5726,29 @@ async function toggleMic() {
 }
 
 // Auto-start mic — call on any user gesture that enters an interactive view
-let micPermissionGranted = false;
 async function ensureMicOn() {
-  if (!recognition) return;
   if (isListening) return;
-  if (!micPermissionGranted) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(t => t.stop());
-      micPermissionGranted = true;
-    } catch(err) {
-      console.warn('Mic permission denied:', err);
-      return;
-    }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    micPermissionGranted = true;
+  } catch(err) {
+    console.warn('Mic permission denied:', err);
+    toast('Erreur: acces au micro refuse.');
+    return;
   }
   isListening = true;
-  try { recognition.start(); } catch(e) {}
+  currentTranscript = '';
+  connectSTT();
+  // Wait for WS to be ready before streaming audio
+  const waitReady = () => {
+    if (sttWs && sttWs.readyState === WebSocket.OPEN) {
+      startAudioCapture(micStream);
+    } else {
+      setTimeout(waitReady, 100);
+    }
+  };
+  // Small delay to let auth handshake complete
+  setTimeout(waitReady, 300);
   updateVoiceUI();
 }
 
@@ -5202,7 +5763,9 @@ function updateVoiceUI() {
     else if (isSpeaking) btn.classList.add('speaking');
   });
   if (status) {
-    if (isSpeaking) status.textContent = 'Le DM parle... (cliquez ou Espace pour couper)';
+    if (isSpeaking && gamePhase === 'STRATEGY') status.textContent = 'Kingston parle... (cliquez ou Espace pour couper)';
+    else if (isSpeaking) status.textContent = 'Le DM parle... (cliquez ou Espace pour couper)';
+    else if (isListening && gamePhase === 'STRATEGY') status.textContent = 'Ecoute active — parlez a Kingston...';
     else if (isListening) status.textContent = 'Ecoute active — parlez...';
     else status.textContent = 'Micro desactive';
   }
@@ -5224,10 +5787,11 @@ async function _playTTSChunks(text, voice, pauseMic) {
   if (!clean) return;
   if (pauseMic) {
     ttsWasListening = isListening;
-    if (recognition && isListening) {
+    if (isListening) {
       isListening = false;
       clearTimeout(silenceTimer);
-      try { recognition.stop(); } catch(e) {}
+      stopAudioCapture();
+      if (sttWs) { sttWs.close(); sttWs = null; }
     }
   }
   const chunks = splitTTSChunks(clean, 400);
@@ -5263,12 +5827,8 @@ async function _playTTSChunks(text, voice, pauseMic) {
   isSpeaking = false;
   updateVoiceUI();
   // Always restart mic after TTS if micAlwaysOn or was previously listening
-  if (pauseMic && (micAlwaysOn || ttsWasListening) && !isListening && recognition) {
-    setTimeout(() => {
-      isListening = true;
-      try { recognition.start(); } catch(e) {}
-      updateVoiceUI();
-    }, 300);
+  if (pauseMic && (micAlwaysOn || ttsWasListening) && !isListening) {
+    setTimeout(() => ensureMicOn(), 100);
   }
 }
 
@@ -5284,12 +5844,8 @@ function stopTTS() {
   if (ttsCurrentAudio) { try { ttsCurrentAudio.pause(); ttsCurrentAudio.currentTime = 0; } catch(e){} ttsCurrentAudio = null; }
   updateVoiceUI();
   // Auto-restart mic after TTS interruption
-  if (micAlwaysOn && !isListening && recognition && micPermissionGranted) {
-    setTimeout(() => {
-      isListening = true;
-      try { recognition.start(); } catch(e) {}
-      updateVoiceUI();
-    }, 200);
+  if (micAlwaysOn && !isListening && micPermissionGranted) {
+    setTimeout(() => ensureMicOn(), 100);
   }
 }
 

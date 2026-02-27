@@ -32,7 +32,7 @@ export type ErrorClass =
   | "transient"
   | "unknown";
 
-export type FailoverProvider = "ollama" | "groq" | "gemini" | "claude";
+export type FailoverProvider = "ollama" | "groq" | "gemini" | "claude" | "openrouter";
 
 interface FailureRecord {
   errorClass: ErrorClass;
@@ -244,7 +244,7 @@ export function isProviderHealthy(provider: FailoverProvider): boolean {
  * Get list of healthy providers (not in cooldown).
  */
 export function getHealthyProviders(): FailoverProvider[] {
-  const all: FailoverProvider[] = ["ollama", "groq", "gemini", "claude"];
+  const all: FailoverProvider[] = ["ollama", "groq", "openrouter", "gemini", "claude"];
   return all.filter(p => isProviderHealthy(p));
 }
 
@@ -258,7 +258,7 @@ export function providerStatus(): Record<FailoverProvider, {
   cooldownReason: string;
   recentErrors: Array<{ class: ErrorClass; ago: string }>;
 }> {
-  const all: FailoverProvider[] = ["ollama", "groq", "gemini", "claude"];
+  const all: FailoverProvider[] = ["ollama", "groq", "openrouter", "gemini", "claude"];
   const now = Date.now();
   const result = {} as ReturnType<typeof providerStatus>;
 
@@ -339,6 +339,7 @@ export function inferProvider(errorMsg: string): FailoverProvider | null {
   const lower = errorMsg.toLowerCase();
   if (lower.includes("ollama") || lower.includes("localhost:11434")) return "ollama";
   if (lower.includes("groq") || lower.includes("groq.com")) return "groq";
+  if (lower.includes("openrouter") || lower.includes("openrouter.ai")) return "openrouter";
   if (lower.includes("gemini") || lower.includes("generativelanguage")) return "gemini";
   if (lower.includes("claude") || lower.includes("anthropic")) return "claude";
   return null;

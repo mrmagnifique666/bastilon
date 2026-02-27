@@ -1,10 +1,10 @@
 /**
- * Autonomous Stocks Trading Engine — 9h-16h ET Weekdays (Paper Trading)
+ * Autonomous Stocks Trading Engine — Kingston Edge v2 (Paper Trading)
  *
  * Scans watchlist via Yahoo Finance + Alpaca paper API.
- * Strategies: Gap and Go, Gap and Fade, Breakout, Dip Buy.
- * Risk management: SL -2%, TP +4%, trailing +2%, close all at 15h45,
- * -3% daily loss cap, 3-consecutive-loss circuit breaker.
+ * Strategies: Catalyst, Momentum, Dip-Buy, Sector Rotation.
+ * Risk: Volatility-adjusted sizing (1.5% equity / 1.5x ATR), 3-tier exits via bracket-manager.
+ * Macro filters: VIX kill-switch, S&P MA50 exposure reduction.
  *
  * Skills: stocks_auto.tick, stocks_auto.status, stocks_auto.toggle, stocks_auto.signals
  */
@@ -19,19 +19,21 @@ const DATA_URL = "https://data.alpaca.markets";
 const YF_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YF_UA = { "User-Agent": "Mozilla/5.0" };
 
-const MAX_POSITIONS = 3;
-const MAX_BUDGET_PCT = 0.30;    // 30% of capital per trade
-const STOP_LOSS_PCT = -0.02;    // -2%
-const TAKE_PROFIT_PCT = 0.04;   // +4%
-const TRAILING_TRIGGER = 0.02;  // Activate trailing after +2%
-const TRAILING_DROP = 0.015;    // Trailing stop at 1.5% below peak
-const MAX_DAILY_LOSS_PCT = -0.03; // -3% daily
+const MAX_POSITIONS = 4;           // Edge v2: 4 concurrent positions
+const RISK_PCT = 0.015;            // Edge v2: 1.5% of equity per trade
+const MAX_POSITION_PCT = 0.20;     // Edge v2: 20% max per position
+const MAX_EXPOSURE_PCT = 0.60;     // Edge v2: 60% total exposure
+const STOP_LOSS_PCT = -0.02;       // Backup SL if bracket-manager fails
+const TAKE_PROFIT_PCT = 0.04;      // Backup TP
+const TRAILING_TRIGGER = 0.02;     // Trailing after +2% (backup)
+const TRAILING_DROP = 0.015;       // Trailing stop 1.5% below peak (backup)
+const MAX_DAILY_LOSS_PCT = -0.02;  // -2% daily kill-switch
 const CIRCUIT_BREAKER_LOSSES = 3;
-const NO_ENTRY_AFTER_HOUR = 15; // No new trades after 15h ET
-const NO_ENTRY_AFTER_MIN = 30;  // 15h30
-const CLOSE_ALL_HOUR = 15;     // Close all at 15h45
+const NO_ENTRY_AFTER_HOUR = 15;
+const NO_ENTRY_AFTER_MIN = 30;
+const CLOSE_ALL_HOUR = 15;
 const CLOSE_ALL_MIN = 45;
-const MIN_BUY_CONFIDENCE = 45;
+const MIN_BUY_CONFIDENCE = 40;     // Edge v2: lowered threshold (more entry types)
 
 // ─── In-Memory State ───
 
@@ -61,6 +63,7 @@ let consecutiveLosses = 0;
 let dailyPnl = 0;
 let dailyDate = "";
 let dailyTradeCount = 0;
+let dailyNewPositions = 0;  // Edge v2: track new entries for VIX rate limiting
 let lastTickTs = 0;
 
 // ─── Helpers ───
@@ -191,6 +194,13 @@ interface StockData {
   rsi14: number | null;
   high: number;
   low: number;
+  // Edge v2 additions
+  atr14: number | null;
+  macdHistogram: number | null;
+  bollingerLower: number | null;
+  stochRsi: number | null;
+  volTrend20: boolean;
+  ma20AboveMa50: boolean;
 }
 
 async function fetchStockData(symbol: string): Promise<StockData | null> {
@@ -204,18 +214,22 @@ async function fetchStockData(symbol: string): Promise<StockData | null> {
     const meta = result?.meta;
     if (!meta) return null;
 
-    const closes: number[] = (result?.indicators?.quote?.[0]?.close || []).filter((c: any) => c != null);
-    const volumes: number[] = (result?.indicators?.quote?.[0]?.volume || []).filter((v: any) => v != null);
+    const quote = result?.indicators?.quote?.[0];
+    const closes: number[] = (quote?.close || []).filter((c: any) => c != null);
+    const highs: number[] = (quote?.high || []).filter((h: any) => h != null);
+    const lows: number[] = (quote?.low || []).filter((l: any) => l != null);
+    const volumes: number[] = (quote?.volume || []).filter((v: any) => v != null);
     const price = meta.regularMarketPrice;
     const prevClose = meta.chartPreviousClose || meta.previousClose || price;
 
-    // Indicators
+    // MA20 / MA50
     let ma20: number | null = null;
     let ma50: number | null = null;
-    let rsi14: number | null = null;
-
     if (closes.length >= 20) ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
     if (closes.length >= 50) ma50 = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
+
+    // RSI(14)
+    let rsi14: number | null = null;
     if (closes.length >= 15) {
       let gains = 0, losses = 0;
       for (let i = closes.length - 14; i < closes.length; i++) {
@@ -226,10 +240,83 @@ async function fetchStockData(symbol: string): Promise<StockData | null> {
       rsi14 = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
     }
 
-    // Average volume (last 10 days)
-    const avgVolume = volumes.length >= 10
-      ? volumes.slice(-10).reduce((a, b) => a + b, 0) / 10
-      : meta.regularMarketVolume || 1;
+    // ATR(14) — True Range over 14 periods
+    let atr14: number | null = null;
+    const minLen = Math.min(highs.length, lows.length, closes.length);
+    if (minLen >= 15) {
+      let atrSum = 0;
+      for (let i = minLen - 14; i < minLen; i++) {
+        const tr = Math.max(
+          highs[i] - lows[i],
+          Math.abs(highs[i] - closes[i - 1]),
+          Math.abs(lows[i] - closes[i - 1])
+        );
+        atrSum += tr;
+      }
+      atr14 = atrSum / 14;
+    }
+
+    // MACD histogram (12/26/9 EMA)
+    let macdHistogram: number | null = null;
+    if (closes.length >= 35) {
+      const ema = (arr: number[], period: number): number[] => {
+        const k = 2 / (period + 1);
+        const res = [arr[0]];
+        for (let i = 1; i < arr.length; i++) {
+          res.push(arr[i] * k + res[i - 1] * (1 - k));
+        }
+        return res;
+      };
+      const ema12 = ema(closes, 12);
+      const ema26 = ema(closes, 26);
+      const macdLine = ema12.map((v, i) => v - ema26[i]);
+      const signalLine = ema(macdLine.slice(26), 9);
+      macdHistogram = macdLine[macdLine.length - 1] - signalLine[signalLine.length - 1];
+    }
+
+    // Bollinger Lower Band (MA20 - 2σ)
+    let bollingerLower: number | null = null;
+    if (closes.length >= 20 && ma20 !== null) {
+      const recent20 = closes.slice(-20);
+      const variance = recent20.reduce((sum, c) => sum + (c - ma20!) ** 2, 0) / 20;
+      bollingerLower = ma20 - 2 * Math.sqrt(variance);
+    }
+
+    // Stochastic RSI (14-period RSI, then stochastic of RSI)
+    let stochRsi: number | null = null;
+    if (closes.length >= 29) {
+      const rsiValues: number[] = [];
+      for (let j = closes.length - 15; j < closes.length; j++) {
+        let g = 0, l = 0;
+        for (let k = j - 13; k <= j; k++) {
+          const ch = closes[k] - closes[k - 1];
+          if (ch > 0) g += ch; else l += Math.abs(ch);
+        }
+        const ag = g / 14, al = l / 14;
+        rsiValues.push(al === 0 ? 100 : 100 - 100 / (1 + ag / al));
+      }
+      if (rsiValues.length >= 14) {
+        const maxR = Math.max(...rsiValues.slice(-14));
+        const minR = Math.min(...rsiValues.slice(-14));
+        const curR = rsiValues[rsiValues.length - 1];
+        stochRsi = maxR === minR ? 50 : ((curR - minR) / (maxR - minR)) * 100;
+      }
+    }
+
+    // Volume trend (recent 10 days vs prior 10 days)
+    let volTrend20 = false;
+    if (volumes.length >= 20) {
+      const recent10 = volumes.slice(-10).reduce((a, b) => a + b, 0) / 10;
+      const prior10 = volumes.slice(-20, -10).reduce((a, b) => a + b, 0) / 10;
+      volTrend20 = recent10 > prior10;
+    }
+
+    // Average volume (20-day)
+    const avgVolume = volumes.length >= 20
+      ? volumes.slice(-20).reduce((a, b) => a + b, 0) / 20
+      : volumes.length >= 10
+        ? volumes.slice(-10).reduce((a, b) => a + b, 0) / 10
+        : meta.regularMarketVolume || 1;
 
     return {
       symbol: symbol.toUpperCase(),
@@ -240,11 +327,53 @@ async function fetchStockData(symbol: string): Promise<StockData | null> {
       ma20, ma50, rsi14,
       high: meta.regularMarketDayHigh || price,
       low: meta.regularMarketDayLow || price,
+      atr14,
+      macdHistogram,
+      bollingerLower,
+      stochRsi,
+      volTrend20,
+      ma20AboveMa50: (ma20 !== null && ma50 !== null) ? ma20 > ma50 : false,
     };
   } catch { return null; }
 }
 
-// ─── Strategy Engine ───
+// ─── Macro Filters (Edge v2) ───
+
+interface MacroState {
+  vix: number | null;
+  spyAboveMa50: boolean | null;
+}
+
+async function fetchMacroFilters(): Promise<MacroState> {
+  const state: MacroState = { vix: null, spyAboveMa50: null };
+  try {
+    const vixResp = await fetch(`${YF_URL}/%5EVIX?interval=1d&range=5d`, {
+      headers: YF_UA, signal: AbortSignal.timeout(8000),
+    });
+    if (vixResp.ok) {
+      const vixData = await vixResp.json();
+      state.vix = vixData?.chart?.result?.[0]?.meta?.regularMarketPrice || null;
+    }
+  } catch { /* VIX unavailable */ }
+  try {
+    const spyResp = await fetch(`${YF_URL}/SPY?interval=1d&range=3mo`, {
+      headers: YF_UA, signal: AbortSignal.timeout(8000),
+    });
+    if (spyResp.ok) {
+      const spyData = await spyResp.json();
+      const spyResult = spyData?.chart?.result?.[0];
+      const spyPrice = spyResult?.meta?.regularMarketPrice;
+      const spyCloses: number[] = (spyResult?.indicators?.quote?.[0]?.close || []).filter((c: any) => c != null);
+      if (spyCloses.length >= 50 && spyPrice) {
+        const spyMa50 = spyCloses.slice(-50).reduce((a: number, b: number) => a + b, 0) / 50;
+        state.spyAboveMa50 = spyPrice > spyMa50;
+      }
+    }
+  } catch { /* SPY unavailable */ }
+  return state;
+}
+
+// ─── Edge v2 Strategy Engine ───
 
 interface EntrySignal {
   symbol: string;
@@ -252,63 +381,142 @@ interface EntrySignal {
   reason: string;
   price: number;
   strategy: string;
+  atr14: number | null;  // Edge v2: for volatility-adjusted sizing
 }
 
-function evaluateEntry(data: StockData): EntrySignal | null {
-  let score = 0;
-  const reasons: string[] = [];
-  let strategy = "";
+function evaluateEntry(data: StockData, macro: MacroState): EntrySignal | null {
+  // VIX > 35 → DEFENSIVE MODE: no new entries
+  if (macro.vix !== null && macro.vix > 35) return null;
 
   const volRatio = data.avgVolume > 0 ? data.volume / data.avgVolume : 1;
 
-  // ── Gap and Go: gap up > 3% + volume > 1.5x + price > VWAP proxy (MA20) ──
-  if (data.gapPct > 3 && data.gapPct <= 10 && volRatio > 1.5 && data.ma20 && data.price > data.ma20) {
-    score += 45;
-    reasons.push(`Gap&Go: gap +${fmt(data.gapPct, 1)}%, vol ${fmt(volRatio, 1)}x, > MA20`);
-    strategy = "GAP_AND_GO";
+  // ── A. Catalyst Entry (Earnings Play) ──
+  // Detected via: volume > 2x average (proxy for earnings day) + positive reaction + RSI < 70
+  if (volRatio > 2.0 && data.gapPct > 0 && data.rsi14 !== null && data.rsi14 < 70) {
+    let score = 55;
+    const reasons = [`Catalyst: vol ${fmt(volRatio, 1)}x avg, gap +${fmt(data.gapPct, 1)}%`];
+
+    if (data.ma20 && data.price > data.ma20) { score += 10; reasons.push("above MA20"); }
+    if (data.ma50 && data.price > data.ma50) { score += 5; reasons.push("above MA50"); }
+    if (data.macdHistogram !== null && data.macdHistogram > 0) { score += 5; reasons.push("MACD+"); }
+    // Bonus for double-strength volume (> 3x)
+    if (volRatio > 3.0) { score += 5; reasons.push(`extreme vol ${fmt(volRatio, 1)}x`); }
+    // Penalty for chasing (gap too large = risky)
+    if (data.gapPct > 8) { score -= 10; reasons.push("gap >8% — chase risk"); }
+
+    if (score >= MIN_BUY_CONFIDENCE) {
+      return {
+        symbol: data.symbol, confidence: score,
+        reason: reasons.join("; "), price: data.price,
+        strategy: "CATALYST", atr14: data.atr14,
+      };
+    }
   }
 
-  // ── Gap and Fade: gap up > 5% + volume declining (price already fading) ──
-  if (data.gapPct > 5 && data.price < data.high * 0.97) {
-    // Price is already 3%+ below day high → fading
-    score += 35;
-    reasons.push(`Gap&Fade: gap +${fmt(data.gapPct, 1)}%, prix sous high -3%`);
-    strategy = "GAP_AND_FADE";
+  // ── B. Momentum Entry (Trend Following) ──
+  // Price > MA20 > MA50, MACD histogram positive, RSI 40-65, volume trending up
+  if (data.ma20 && data.ma50 && data.ma20AboveMa50 && data.price > data.ma20 &&
+      data.rsi14 !== null && data.rsi14 >= 40 && data.rsi14 <= 65 &&
+      data.macdHistogram !== null && data.macdHistogram > 0 && data.volTrend20) {
+    let score = 50;
+    const reasons = [`Momentum: MA20>MA50, RSI ${fmt(data.rsi14, 0)}, MACD+, vol↑`];
+
+    // Pullback to MA20 bonus (ideal entry — within 2% of MA20)
+    if (data.price <= data.ma20 * 1.02) { score += 10; reasons.push("near MA20 pullback"); }
+    if (volRatio > 1.5) { score += 5; reasons.push(`vol ${fmt(volRatio, 1)}x`); }
+    // Strong trend: price well above MA50
+    if (data.price > data.ma50 * 1.05) { score += 5; reasons.push("strong trend >5% above MA50"); }
+
+    if (score >= MIN_BUY_CONFIDENCE) {
+      return {
+        symbol: data.symbol, confidence: score,
+        reason: reasons.join("; "), price: data.price,
+        strategy: "MOMENTUM", atr14: data.atr14,
+      };
+    }
   }
 
-  // ── Breakout: price > MA20 resistance + volume > 2x ──
-  if (data.ma20 && data.price > data.ma20 * 1.02 && volRatio > 2.0) {
-    score += 30;
-    reasons.push(`Breakout: prix > MA20 +2%, vol ${fmt(volRatio, 1)}x`);
-    if (!strategy) strategy = "BREAKOUT";
+  // ── C. Dip-Buy Entry (Mean Reversion) ──
+  // RSI < 30, price at/below lower Bollinger Band, StochRSI < 20 with confirmation
+  if (data.rsi14 !== null && data.rsi14 < 30 &&
+      data.bollingerLower !== null && data.price <= data.bollingerLower) {
+    let score = 50;
+    const reasons = [`Dip-Buy: RSI ${fmt(data.rsi14, 0)}, below BB lower $${fmt(data.bollingerLower)}`];
+
+    // StochRSI confirmation (bullish crossover zone)
+    if (data.stochRsi !== null && data.stochRsi < 20) { score += 10; reasons.push(`StochRSI ${fmt(data.stochRsi, 0)}`); }
+    // Volume confirms reversal interest
+    if (volRatio > 1.2) { score += 5; reasons.push("volume confirming"); }
+    // Near MA50 support = safer dip buy
+    if (data.ma50 && data.price > data.ma50 * 0.95) { score += 5; reasons.push("near MA50 support"); }
+    // Penalty: sector in downtrend (SPY below MA50 = risk)
+    if (macro.spyAboveMa50 === false) { score -= 15; reasons.push("SPY<MA50 — sector risk"); }
+    // No dip-buy in extreme volatility
+    if (macro.vix !== null && macro.vix > 30) { score -= 10; reasons.push("VIX>30 — high vol caution"); }
+
+    if (score >= MIN_BUY_CONFIDENCE) {
+      return {
+        symbol: data.symbol, confidence: score,
+        reason: reasons.join("; "), price: data.price,
+        strategy: "DIP_BUY", atr14: data.atr14,
+      };
+    }
   }
 
-  // ── Dip Buy: price below MA20 - 2% + RSI < 30 ──
-  if (data.ma20 && data.price < data.ma20 * 0.98 && data.rsi14 !== null && data.rsi14 < 30) {
-    score += 50;
-    reasons.push(`Dip buy: prix < MA20 -2%, RSI ${fmt(data.rsi14, 0)}`);
-    if (!strategy) strategy = "DIP_BUY";
+  // ── D. Sector Rotation Entry ──
+  // Breakout above MA20 with sector momentum, RSI not overbought
+  if (data.ma20 && data.price > data.ma20 * 1.02 && volRatio > 1.5 &&
+      data.rsi14 !== null && data.rsi14 > 30 && data.rsi14 < 60) {
+    let score = 45;
+    const reasons = [`Sector Rotation: breakout >MA20+2%, vol ${fmt(volRatio, 1)}x, RSI ${fmt(data.rsi14, 0)}`];
+
+    if (data.ma50 && data.price > data.ma50) { score += 5; reasons.push("above MA50"); }
+    if (data.macdHistogram !== null && data.macdHistogram > 0) { score += 5; reasons.push("MACD+"); }
+    if (data.ma20AboveMa50) { score += 5; reasons.push("golden alignment MA20>MA50"); }
+    // SPY above MA50 = healthy market for rotation
+    if (macro.spyAboveMa50 === true) { score += 5; reasons.push("SPY>MA50 — healthy market"); }
+
+    if (score >= MIN_BUY_CONFIDENCE) {
+      return {
+        symbol: data.symbol, confidence: score,
+        reason: reasons.join("; "), price: data.price,
+        strategy: "SECTOR_ROTATION", atr14: data.atr14,
+      };
+    }
   }
 
-  // ── RSI Bonus ──
-  if (data.rsi14 !== null) {
-    if (data.rsi14 < 35) { score += 10; reasons.push(`RSI oversold ${fmt(data.rsi14, 0)}`); }
-    if (data.rsi14 > 70) { score -= 15; reasons.push(`RSI overbought ${fmt(data.rsi14, 0)} — caution`); }
-  }
-
-  // ── Volume confirmation ──
-  if (volRatio > 1.5) { score += 5; }
-
-  // ── MA50 trend confirmation ──
-  if (data.ma50 && data.price > data.ma50) {
-    score += 5;
-    reasons.push(`Above MA50 (trend ↑)`);
-  }
-
-  if (score >= MIN_BUY_CONFIDENCE && strategy) {
-    return { symbol: data.symbol, confidence: score, reason: reasons.join("; "), price: data.price, strategy };
-  }
   return null;
+}
+
+// ─── Bracket Manager Deference ───
+// If bracket-manager (heartbeat.ts) has placed ATR-based brackets for a symbol,
+// this system defers to it instead of using fixed % stops.
+
+function hasBracketCoverage(symbol: string): boolean {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const bracketPath = path.join(process.cwd(), "data", "bracket-state.json");
+    if (!fs.existsSync(bracketPath)) return false;
+    const state = JSON.parse(fs.readFileSync(bracketPath, "utf-8"));
+    const bracket = state[symbol];
+    if (!bracket) return false;
+    // Edge v2: check for tp1OrderId (3-tier) instead of tpOrderId
+    if (bracket.version === "edge-v2") {
+      if (!bracket.slOrderId || !bracket.tp1OrderId) return false;
+    } else {
+      if (!bracket?.slOrderId || !bracket?.tpOrderId) return false;
+    }
+    // Verify bracket is fresh (< 10 min) — stale = no coverage
+    if (bracket.placedAt) {
+      const age = Date.now() - new Date(bracket.placedAt).getTime();
+      if (age > 600_000) return false;
+    }
+    return true;
+  } catch {
+    // On error, assume bracket exists (conservative: don't double-exit)
+    return true;
+  }
 }
 
 // ─── Position Exit Checks ───
@@ -318,6 +526,9 @@ type ExitReason = "SL" | "TP" | "TRAILING" | "EOD_CLOSE" | "RSI_OB" | null;
 function checkExit(symbol: string, currentPrice: number, entryPrice: number, rsi: number | null): ExitReason {
   const state = positionStates[symbol];
   if (!state) return null;
+
+  // DEFER to bracket-manager if it has ATR-based brackets for this symbol
+  if (hasBracketCoverage(symbol)) return null;
 
   const pnlPct = (currentPrice - entryPrice) / entryPrice;
 
@@ -358,6 +569,7 @@ async function runTick(): Promise<string> {
     dailyDate = dateStr;
     dailyPnl = 0;
     dailyTradeCount = 0;
+    dailyNewPositions = 0;
     consecutiveLosses = 0;
   }
 
@@ -387,6 +599,26 @@ async function runTick(): Promise<string> {
   }
   if (consecutiveLosses >= CIRCUIT_BREAKER_LOSSES) {
     return `[stocks_auto] CIRCUIT BREAKER: ${consecutiveLosses} consecutive losses.`;
+  }
+
+  // Edge v2: Fetch macro filters (VIX + SPY MA50)
+  let macro: MacroState = { vix: null, spyAboveMa50: null };
+  try {
+    macro = await fetchMacroFilters();
+  } catch { /* use defaults */ }
+
+  // Edge v2: Determine max exposure based on macro
+  let maxExposure = MAX_EXPOSURE_PCT; // Default 60%
+  if (macro.spyAboveMa50 === false) {
+    maxExposure = 0.40; // S&P below MA50 → reduce to 40%
+  }
+
+  // Edge v2: Determine max new entries based on VIX
+  let maxNewEntriesToday = 4; // Default
+  if (macro.vix !== null && macro.vix > 35) {
+    maxNewEntriesToday = 0; // DEFENSIVE MODE
+  } else if (macro.vix !== null && macro.vix > 25) {
+    maxNewEntriesToday = 1; // Max 1 new position per day
   }
 
   // 1. Close all at 15:45
@@ -464,8 +696,45 @@ async function runTick(): Promise<string> {
     }
   }
 
+  // Edge v2: Earnings Protocol — check existing positions
+  for (const pos of positions) {
+    try {
+      const sym = pos.symbol;
+      const entryPrice = parseFloat(pos.avg_entry_price);
+      const currentPrice = parseFloat(pos.current_price);
+      const posQty = Math.abs(parseInt(pos.qty));
+      const posData = await fetchStockData(sym);
+      if (!posData || !posData.atr14) continue;
+
+      const R = 1.5 * posData.atr14;
+      const profitInR = (currentPrice - entryPrice) / R;
+      const volRatio = posData.avgVolume > 0 ? posData.volume / posData.avgVolume : 1;
+
+      // Pre-earnings: If profit > 2R and volume spiking (earnings imminent), sell 50%
+      if (profitInR > 2 && volRatio > 2.5) {
+        const sellQty = Math.floor(posQty * 0.5);
+        if (sellQty > 0) {
+          await placeSell(sym, sellQty);
+          const pnl = (currentPrice - entryPrice) * sellQty;
+          dailyPnl += pnl;
+          dailyTradeCount++;
+          const msg = `📋 *EARNINGS PROTOCOL*\n${sym} — Sold 50% (${sellQty}) @ $${fmt(currentPrice)}\nProfit: ${fmtPnl(pnl)} (+${fmt(profitInR, 1)}R)\nReason: >2R profit + volume spike`;
+          lines.push(msg);
+          addSignal({ ts: Date.now(), symbol: sym, action: "TP" as any, confidence: 100, reason: `Earnings protocol: +${fmt(profitInR, 1)}R`, price: currentPrice, executed: true });
+          sendAlert(msg).catch(() => {});
+        }
+      }
+    } catch { /* skip earnings check on error */ }
+  }
+
   // 3. Scan for new entries (if allowed)
-  if (canOpenNew() && positions.length < MAX_POSITIONS && dailyTradeCount < 15) {
+  // Edge v2: Check exposure limit + VIX entry cap
+  const totalMarketValue = positions.reduce((sum: number, p: any) => sum + Math.abs(parseFloat(p.market_value || "0")), 0);
+  const exposurePct = equity > 0 ? totalMarketValue / equity : 0;
+  const withinExposure = exposurePct < maxExposure;
+  const withinDailyEntryLimit = dailyNewPositions < maxNewEntriesToday;
+
+  if (canOpenNew() && positions.length < MAX_POSITIONS && dailyTradeCount < 15 && withinExposure && withinDailyEntryLimit) {
     const heldSymbols = new Set(positions.map((p: any) => p.symbol));
 
     // Fetch data for watchlist (parallel, with error handling)
@@ -475,30 +744,45 @@ async function runTick(): Promise<string> {
 
     const results = await Promise.all(dataPromises);
 
-    // Evaluate and rank signals
+    // Edge v2: Evaluate and rank signals with macro context
     const signals: EntrySignal[] = [];
     for (const r of results) {
       if (!r.data) continue;
-      const signal = evaluateEntry(r.data);
+      const signal = evaluateEntry(r.data, macro);
       if (signal) signals.push(signal);
     }
 
     // Sort by confidence, take best
     signals.sort((a, b) => b.confidence - a.confidence);
-    const slotsAvailable = MAX_POSITIONS - positions.length;
+    const slotsAvailable = Math.min(
+      MAX_POSITIONS - positions.length,
+      maxNewEntriesToday - dailyNewPositions,
+    );
 
     for (const signal of signals.slice(0, slotsAvailable)) {
+      // Edge v2: Check if adding this position would exceed max exposure
+      const positionValue = signal.price * Math.floor((equity * RISK_PCT) / (1.5 * (signal.atr14 || signal.price * 0.03)));
+      if ((totalMarketValue + positionValue) / equity > maxExposure) continue;
+
       try {
         const buyingPower = parseFloat(account.buying_power || "0");
-        const maxBudget = equity * MAX_BUDGET_PCT;
-        const budget = Math.min(maxBudget, buyingPower * 0.4); // Use max 40% of buying power
-        if (budget < 50) continue; // Min $50
 
-        const qty = Math.floor(budget / signal.price);
+        // Edge v2: Volatility-adjusted position sizing
+        // qty = (Equity × 1.5% risk) / (1.5 × ATR stop distance)
+        const atr = signal.atr14 || signal.price * 0.03; // Fallback: 3% of price
+        const stopDistance = 1.5 * atr;
+        const riskAmount = equity * RISK_PCT; // 1.5% of equity
+        const volAdjustedQty = Math.floor(riskAmount / stopDistance);
+
+        // Cap at 20% of equity AND 40% of buying power
+        const maxQtyByEquity = Math.floor((equity * MAX_POSITION_PCT) / signal.price);
+        const maxQtyByBP = Math.floor((buyingPower * 0.4) / signal.price);
+        const qty = Math.min(volAdjustedQty, maxQtyByEquity, maxQtyByBP);
         if (qty < 1) continue;
 
         await placeBuy(signal.symbol, qty);
         dailyTradeCount++;
+        dailyNewPositions++;
 
         positionStates[signal.symbol] = {
           symbol: signal.symbol,
@@ -508,7 +792,8 @@ async function runTick(): Promise<string> {
         };
 
         const total = qty * signal.price;
-        const msg = `🟢 *STOCK AUTO-BUY (${signal.strategy})*\n${signal.symbol} — ${qty} @ $${fmt(signal.price)}\nTotal: $${fmt(total)}\nConfidence: ${signal.confidence}%\nRaison: ${signal.reason}`;
+        const atrInfo = signal.atr14 ? ` | ATR=$${fmt(signal.atr14)}` : "";
+        const msg = `🟢 *EDGE v2 BUY (${signal.strategy})*\n${signal.symbol} — ${qty} @ $${fmt(signal.price)}\nTotal: $${fmt(total)}${atrInfo}\nConfidence: ${signal.confidence}%\nRaison: ${signal.reason}`;
         lines.push(msg);
         addSignal({ ts: Date.now(), symbol: signal.symbol, action: "BUY", confidence: signal.confidence, reason: signal.reason, price: signal.price, executed: true });
         sendAlert(msg).catch(() => {});
@@ -531,7 +816,9 @@ async function runTick(): Promise<string> {
   } catch { /* alerts module not loaded yet */ }
 
   if (lines.length === 0) {
-    return `[stocks_auto] Tick OK — ${positions.length}/${MAX_POSITIONS} positions, ${dailyTradeCount} trades today, P&L: ${fmtPnl(dailyPnl)}`;
+    const macroInfo = macro.vix !== null ? ` | VIX:${fmt(macro.vix, 1)}` : "";
+    const spyInfo = macro.spyAboveMa50 !== null ? ` | SPY>${macro.spyAboveMa50 ? "MA50" : "⚠️<MA50"}` : "";
+    return `[stocks_auto] Edge v2 Tick OK — ${positions.length}/${MAX_POSITIONS} pos, ${dailyTradeCount} trades, P&L: ${fmtPnl(dailyPnl)}${macroInfo}${spyInfo} | Exp: ${fmt(exposurePct * 100, 0)}%/${fmt(maxExposure * 100, 0)}%`;
   }
 
   return lines.join("\n\n");
@@ -569,7 +856,7 @@ registerSkill({
     let posInfo: string[] = [];
     try {
       const acc = await getAccount();
-      accountInfo = `Equity: $${fmt(parseFloat(acc.equity))} | Cash: $${fmt(parseFloat(acc.cash))} | BP: $${fmt(parseFloat(acc.buying_power))}`;
+      accountInfo = `Equity: $${fmt(Number(acc.equity))} | Cash: $${fmt(Number(acc.cash))} | BP: $${fmt(Number(acc.buying_power))}`;
       const positions = await getPositions();
       for (const p of positions) {
         const pnl = parseFloat(p.unrealized_pl || "0");
@@ -674,4 +961,4 @@ registerSkill({
   },
 });
 
-log.info(`[stocks_auto] Autonomous stock trading engine loaded (${WATCHLIST.length} stocks, SL ${STOP_LOSS_PCT * 100}%, TP ${TAKE_PROFIT_PCT * 100}%)`);
+log.info(`[stocks_auto] Kingston Edge v2 loaded (${WATCHLIST.length} stocks, ${MAX_POSITIONS} max pos, ${RISK_PCT * 100}% risk, ${MAX_EXPOSURE_PCT * 100}% max exposure)`);

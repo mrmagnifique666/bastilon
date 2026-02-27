@@ -444,7 +444,7 @@ class BrowserManager {
       const urlObj = new URL(url);
       const domain = urlObj.hostname;
       await this.restoreDomainCookies(domain);
-    } catch {}
+    } catch (e) { log.debug?.(`Cookie restore failed: ${e instanceof Error ? e.message : e}`); }
 
     await page.goto(url, {
       waitUntil: opts?.waitUntil || "domcontentloaded",
@@ -462,7 +462,7 @@ class BrowserManager {
       try {
         const urlObj = new URL(url);
         await this.saveDomainCookies(urlObj.hostname);
-      } catch {}
+      } catch (e) { log.debug?.(`Cookie save failed: ${e instanceof Error ? e.message : e}`); }
     }
 
     return { page, captchaResult };

@@ -8,7 +8,7 @@
  */
 import { log } from "../utils/log.js";
 
-export type Provider = "gemini" | "groq" | "ollama";
+export type Provider = "gemini" | "groq" | "ollama" | "openrouter";
 
 interface CooldownEntry {
   until: number;
@@ -22,6 +22,7 @@ const cooldowns = new Map<Provider, CooldownEntry>();
 const BASE_COOLDOWN_MS: Record<Provider, number> = {
   gemini: 60_000,    // 1 min (has its own retry logic)
   groq: 60_000,      // 1 min
+  openrouter: 60_000, // 1 min (free tier may queue)
   ollama: 30_000,    // 30s (local, usually comes back fast)
 };
 
@@ -75,7 +76,7 @@ export function clearProviderCooldown(provider: Provider): void {
 
 /** Get status of all providers for monitoring */
 export function getCooldownStatus(): Record<Provider, { active: boolean; secondsLeft: number; reason: string }> {
-  const providers: Provider[] = ["gemini", "groq", "ollama"];
+  const providers: Provider[] = ["gemini", "groq", "openrouter", "ollama"];
   const result = {} as Record<Provider, { active: boolean; secondsLeft: number; reason: string }>;
   for (const p of providers) {
     const entry = cooldowns.get(p);

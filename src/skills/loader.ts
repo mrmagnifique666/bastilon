@@ -529,6 +529,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/ignorance.js");
 
   // ═══ AGENTS — Autonomous systems ═══
+  await import("./builtin/noah-bridge.js");
   await import("./builtin/bridge-ws.js");
   await import("./builtin/agents.js");
   await import("./builtin/mind.js");
@@ -548,6 +549,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/crypto.js");
   await import("./builtin/crypto-paper.js");
   await import("./builtin/crypto-autonomous.js");
+  await import("./builtin/crypto-swing.js");
   await import("./builtin/stocks-autonomous.js");
   await import("./builtin/binance.js");
   await import("./builtin/forex.js");

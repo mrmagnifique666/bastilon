@@ -55,7 +55,11 @@ registerSkill({
     required: ["task"],
   },
   async execute(args): Promise<string> {
-    const task = args.task as string;
+    // Accept both "task" and "description" — LLMs frequently confuse the two
+    const task = (args.task || args.description) as string;
+    if (!task) {
+      return 'Error: missing required parameter "task" (description of the code change needed).';
+    }
     const priority = (args.priority as string) || "normal";
     const filesRaw = args.files as string | undefined;
 

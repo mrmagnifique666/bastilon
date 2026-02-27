@@ -19,6 +19,8 @@ export function getDb(): Database.Database {
     const dbPath = path.resolve("relay.db");
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
+    // Checkpoint WAL on startup to prevent WAL bloat (crash loops leave large WAL files)
+    try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* best effort */ }
     db.exec(`
       CREATE TABLE IF NOT EXISTS turns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -803,6 +805,27 @@ export function getDb(): Database.Database {
       const turnCols = db.prepare("PRAGMA table_info(dungeon_turns)").all() as Array<{ name: string }>;
       if (!turnCols.some(c => c.name === "actor")) {
         db.exec("ALTER TABLE dungeon_turns ADD COLUMN actor TEXT DEFAULT 'player'");
+      }
+    } catch { /* column may already exist */ }
+
+    // Migrate: dungeon adventures table + current_phase column
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dungeon_adventures (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id INTEGER NOT NULL UNIQUE,
+          blueprint TEXT NOT NULL,
+          scene_state TEXT DEFAULT '{}',
+          current_beat INTEGER DEFAULT 0,
+          created_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch())
+        );
+      `);
+    } catch { /* table may already exist */ }
+    try {
+      const sessCols2 = db.prepare("PRAGMA table_info(dungeon_sessions)").all() as Array<{ name: string }>;
+      if (!sessCols2.some(c => c.name === "current_phase")) {
+        db.exec("ALTER TABLE dungeon_sessions ADD COLUMN current_phase TEXT DEFAULT 'idle'");
       }
     } catch { /* column may already exist */ }
 
@@ -1626,7 +1649,7 @@ export function dungeonListSessions(): any[] {
 
 export function dungeonUpdateSession(id: number, fields: Record<string, unknown>): void {
   const d = getDb();
-  const allowed = ["name", "setting", "current_location", "turn_number", "status", "party_level", "notes", "ruleset"];
+  const allowed = ["name", "setting", "current_location", "turn_number", "status", "party_level", "notes", "ruleset", "current_phase"];
   const sets: string[] = [];
   const vals: unknown[] = [];
   for (const [k, v] of Object.entries(fields)) {
@@ -1727,6 +1750,40 @@ export function dungeonGetTurns(sessionId: number, limit = 20): any[] {
     try { dice_rolls = JSON.parse(r.dice_rolls || "[]"); } catch { /* */ }
     return { ...r, dice_rolls };
   });
+}
+
+// --- Dungeon Adventures (blueprints + scene state) ---
+
+export function dungeonSetAdventure(sessionId: number, blueprint: object, sceneState?: object): void {
+  const d = getDb();
+  d.prepare(
+    `INSERT INTO dungeon_adventures (session_id, blueprint, scene_state)
+     VALUES (?, ?, ?)
+     ON CONFLICT(session_id) DO UPDATE SET blueprint = excluded.blueprint, scene_state = excluded.scene_state, updated_at = unixepoch()`
+  ).run(sessionId, JSON.stringify(blueprint), JSON.stringify(sceneState || {}));
+  log.info(`[dungeon] Adventure blueprint set for session #${sessionId}`);
+}
+
+export function dungeonGetAdventure(sessionId: number): { id: number; session_id: number; blueprint: any; scene_state: any; current_beat: number; created_at: number; updated_at: number } | null {
+  const d = getDb();
+  const row = d.prepare("SELECT * FROM dungeon_adventures WHERE session_id = ?").get(sessionId) as any;
+  if (!row) return null;
+  try { row.blueprint = JSON.parse(row.blueprint); } catch { row.blueprint = {}; }
+  try { row.scene_state = JSON.parse(row.scene_state); } catch { row.scene_state = {}; }
+  return row;
+}
+
+export function dungeonUpdateAdventure(sessionId: number, fields: { blueprint?: object; scene_state?: object; current_beat?: number }): void {
+  const d = getDb();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (fields.blueprint !== undefined) { sets.push("blueprint = ?"); vals.push(JSON.stringify(fields.blueprint)); }
+  if (fields.scene_state !== undefined) { sets.push("scene_state = ?"); vals.push(JSON.stringify(fields.scene_state)); }
+  if (fields.current_beat !== undefined) { sets.push("current_beat = ?"); vals.push(fields.current_beat); }
+  if (sets.length === 0) return;
+  sets.push("updated_at = unixepoch()");
+  vals.push(sessionId);
+  d.prepare(`UPDATE dungeon_adventures SET ${sets.join(", ")} WHERE session_id = ?`).run(...vals);
 }
 
 // --- Saved Characters (persistent across sessions) ---
@@ -2010,6 +2067,13 @@ export function cleanupDatabase(): { purged: Record<string, number> } {
   // 11. Reverted self-modifications older than 90 days
   const selfModOld = d.prepare("DELETE FROM self_modifications WHERE reverted = 1 AND created_at < ?").run(ninetyDaysAgo);
   purged.self_mods = selfModOld.changes;
+
+  // WAL checkpoint to prevent WAL file bloat (crash loops leave uncommitted WAL data)
+  try {
+    const ckpt = d.pragma("wal_checkpoint(TRUNCATE)") as any[];
+    const walPages = ckpt?.[0]?.log ?? 0;
+    if (walPages > 0) purged.wal_pages_checkpointed = walPages;
+  } catch { /* best effort */ }
 
   const total = Object.values(purged).reduce((a, b) => a + (b as number), 0);
   if (total > 0) {

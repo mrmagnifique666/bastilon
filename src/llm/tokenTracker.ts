@@ -15,7 +15,7 @@ import { log } from "../utils/log.js";
 
 const CHARS_PER_TOKEN = 4; // rough estimate
 
-export type Provider = "ollama" | "groq" | "gemini" | "claude" | "haiku";
+export type Provider = "ollama" | "groq" | "gemini" | "claude" | "haiku" | "openrouter";
 
 interface TokenUsageRow {
   provider: string;
@@ -34,6 +34,7 @@ export const PRICING_TABLE: Record<Provider, ModelPricing> = {
   gemini:  { inputPer1M: 0.30,  outputPer1M: 1.20 },   // Flash free tier
   ollama:  { inputPer1M: 0,     outputPer1M: 0 },
   groq:    { inputPer1M: 0,     outputPer1M: 0 },
+  openrouter: { inputPer1M: 0, outputPer1M: 0 },  // free tier models
 };
 
 let tableReady = false;
@@ -207,6 +208,7 @@ const lastCallTimestamp: Record<string, number> = {};
 const MIN_DELAY_MS: Record<string, number> = {
   ollama: 0, // local, no limit
   groq: 2000, // 30 req/min = 2s minimum
+  openrouter: 1000, // respect free tier rate limits
   gemini: 1000, // generous free tier but respect it
   claude: 0, // CLI handles its own rate limits
   haiku: 1000,

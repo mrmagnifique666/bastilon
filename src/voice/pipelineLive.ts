@@ -182,11 +182,9 @@ export function handleTwilioStreamLive(twilioWs: WebSocket): void {
     onReady() {
       ready = true;
       log.info("[pipeline-live] Gemini Live session ready — audio streaming enabled");
-      // Trigger Kingston to speak first — the user shouldn't have to say hello.
-      // responseModalities: ["AUDIO"] in setup guarantees audio output regardless of text input.
-      if (session) {
-        session.sendText("[SYSTÈME: L'appel téléphonique vient de se connecter. Présente-toi MAINTENANT. Dis 'Bonjour Nicolas, ici Kingston.' d'une voix chaleureuse, puis demande comment tu peux aider.]");
-      }
+      // IMPORTANT: do not force a second spoken intro here.
+      // TwiML already handles the greeting (VOICE_GREETING) before stream starts.
+      // This avoids repeated "Bonjour, ici Kingston" loops.
     },
     onError(msg: string) {
       log.error(`[pipeline-live] Gemini Live error: ${msg}`);

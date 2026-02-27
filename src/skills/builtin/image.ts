@@ -433,11 +433,11 @@ registerSkill({
       chatId: { type: "string", description: "Telegram chat ID to send the image to" },
       save_to: { type: "string", description: "Optional: save a copy to this absolute path (e.g. C:\\Users\\Nicolas\\Pictures\\meme.png)" },
     },
-    required: ["prompt", "chatId"],
+    required: ["prompt"],
   },
   async execute(args): Promise<string> {
     const prompt = args.prompt as string;
-    const chatId = Number((args.chatId ?? args.chat_id) as string) || 0;
+    const chatId = Number((args.chatId ?? args.chat_id) as string) || config.adminChatId || 0;
     const saveTo = args.save_to as string | undefined;
 
     try {

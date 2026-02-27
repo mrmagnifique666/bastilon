@@ -38,6 +38,7 @@ const ELECTROSHOCK_GRACE_MS = 90_000;
 const STALE_PORTS = [3100, 3200];
 const ENTRY_POINT = path.resolve("src/index.ts");
 const LOCK_FILE = path.resolve("relay/bot.lock");
+const HEARTBEAT_LOCK_FILE = path.resolve("data/heartbeat.lock");
 const DB_PATH = path.resolve("relay.db");
 const DATA_DIR = path.resolve("data");
 const JOURNAL_FILE = path.join(DATA_DIR, "trading-journal.json");
@@ -194,6 +195,44 @@ async function sendTelegramDirect(text: string): Promise<boolean> {
 }
 
 // ═══════════════════════════════════════════
+// HEARTBEAT PID LOCK — prevent multiple instances
+// ═══════════════════════════════════════════
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireHeartbeatLock(): boolean {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (fs.existsSync(HEARTBEAT_LOCK_FILE)) {
+      const raw = fs.readFileSync(HEARTBEAT_LOCK_FILE, "utf-8").trim();
+      try {
+        const { pid } = JSON.parse(raw);
+        if (pid > 0 && pid !== process.pid && isProcessAlive(pid)) {
+          return false; // another heartbeat is running
+        }
+      } catch { /* invalid JSON, stale lock */ }
+    }
+    fs.writeFileSync(HEARTBEAT_LOCK_FILE, JSON.stringify({ pid: process.pid, timestamp: new Date().toISOString() }));
+    return true;
+  } catch {
+    return true; // best-effort, allow startup
+  }
+}
+
+function releaseHeartbeatLock(): void {
+  try {
+    if (fs.existsSync(HEARTBEAT_LOCK_FILE)) fs.unlinkSync(HEARTBEAT_LOCK_FILE);
+  } catch { /* best-effort */ }
+}
+
+// ═══════════════════════════════════════════
 // PORT & LOCK CLEANUP
 // ═══════════════════════════════════════════
 
@@ -240,14 +279,17 @@ function killRivalSupervisors(): void {
       { encoding: "utf-8", timeout: 8000 },
     );
     for (const line of out.split(/\r?\n/)) {
-      // Kill launcher.ts processes that aren't us
-      if (line.includes("launcher.ts") && !line.includes("heartbeat")) {
+      // Kill launcher.ts OR rival heartbeat.ts processes that aren't us
+      const isRival =
+        (line.includes("launcher.ts") && !line.includes("heartbeat")) ||
+        (line.includes("heartbeat.ts") && !line.includes(String(process.pid)));
+      if (isRival) {
         const parts = line.split(",");
         const pid = Number(parts[parts.length - 1]?.trim());
         if (pid > 0 && pid !== process.pid) {
           try {
             process.kill(pid, "SIGTERM");
-            logConsole("\u26A1", "cleanup", `Killed rival launcher.ts (PID ${pid})`);
+            logConsole("\u26A1", "cleanup", `Killed rival supervisor (PID ${pid})`);
           } catch { /* already dead */ }
         }
       }
@@ -295,18 +337,37 @@ function startKingston(): void {
     }
     launchEnv.__KINGSTON_LAUNCHER = "1";
 
-    // Use detached + pipe to prevent Kingston's IO from stalling heartbeat's event loop
-    const child = spawn("npx", ["tsx", ENTRY_POINT], {
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
-      cwd: process.cwd(),
-      env: launchEnv,
-      windowsHide: true,
-    });
+    // Resolve tsx binary — more reliable than npx on Windows (avoids ENOENT loops)
+    const tsxBin = path.resolve("node_modules/.bin/tsx");
+    const useTsx = fs.existsSync(tsxBin) || fs.existsSync(tsxBin + ".cmd");
+
+    // Use pipe to prevent Kingston's IO from stalling heartbeat's event loop
+    // windowsHide: true prevents visible CMD window
+    const child = useTsx
+      ? spawn(tsxBin, [ENTRY_POINT], {
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: true,
+          cwd: process.cwd(),
+          env: launchEnv,
+          windowsHide: true,
+        })
+      : spawn("npx", ["tsx", ENTRY_POINT], {
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: true,
+          cwd: process.cwd(),
+          env: launchEnv,
+          windowsHide: true,
+        });
+
+    if (!useTsx) {
+      logConsole("\u26A0\uFE0F", "bot.start", "tsx not found in node_modules/.bin — falling back to npx");
+    }
 
     // Drain child stdout/stderr to log file (prevent pipe buffer full + freeze)
     const botLogPath = path.join(DATA_DIR, "kingston-output.log");
+    rotateLog(botLogPath); // Rotate before opening new stream (prevent unbounded growth)
     const botLogStream = fs.createWriteStream(botLogPath, { flags: "a" });
+    botLogStream.on("error", (err) => logConsole("⚠️", "log.stream", `Log stream error: ${err.message}`));
     if (child.stdout) child.stdout.pipe(botLogStream);
     if (child.stderr) child.stderr.pipe(botLogStream);
 
@@ -317,6 +378,8 @@ function startKingston(): void {
     setTimeout(() => { startInProgress = false; }, 30_000); // Safety: reset after 30s max
 
     child.on("exit", (code) => {
+      // Clean up log stream to prevent memory leak
+      botLogStream.end();
       startInProgress = false; // Allow restarts now that the process exited
       const uptime = formatUptime(Date.now() - kingstonStartTime);
 
@@ -324,7 +387,13 @@ function startKingston(): void {
       logConsole("\u2705", "bot.stop", `Kingston stopped cleanly after ${uptime}`);
       kingstonStatus = "stopped";
       cleanLock();
-      process.exit(0);
+      // DON'T exit heartbeat — stay alive so the Task Scheduler watchdog
+      // doesn't need to restart us. The bot can be restarted via:
+      //   - system.restart (exit 42 → auto-restart)
+      //   - restart-kingston.bat (kills child, heartbeat restarts it)
+      //   - electroshock (health.bot detects dead child, restarts)
+      logConsole("\u{1F49A}", "heartbeat", "Heartbeat staying alive (bot stopped). Electroshock will restart if needed.");
+      return;
     }
 
     if (code === RESTART_CODE) {
@@ -367,6 +436,25 @@ function startKingston(): void {
     kingstonStatus = "crashed";
     startInProgress = false;
     cleanLock();
+
+    // Track crash times (same logic as exit handler)
+    const t = Date.now();
+    crashTimes.push(t);
+    while (crashTimes.length > 0 && crashTimes[0] < t - RAPID_CRASH_WINDOW_MS) {
+      crashTimes.shift();
+    }
+
+    if (crashTimes.length >= MAX_RAPID_CRASHES) {
+      logConsole("\u{1F534}", "bot.crash", `${MAX_RAPID_CRASHES} spawn errors in ${RAPID_CRASH_WINDOW_MS / 1000}s — cooldown 10min`);
+      sendTelegramDirect(`\u{1F534} *Kingston spawn loop*\n${MAX_RAPID_CRASHES} échecs de démarrage.\nErreur: ${err.message}\nRecovery dans 10 minutes.`);
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+      recoveryTimer = setTimeout(() => {
+        crashTimes.length = 0;
+        startKingston();
+      }, RECOVERY_DELAY_MS);
+      return;
+    }
+
     setTimeout(startKingston, CRASH_DELAY_MS);
   });
   }, 2000); // end of port-wait setTimeout
@@ -573,10 +661,10 @@ registerTask("trading.stocks", "\u{1F4CA}", 5, async () => {
 }, { marketHoursOnly: true });
 
 // ═══════════════════════════════════════════
-// TASK: trading.bracket-manager — ATR-based brackets
-// Ensures every open position has stop-loss & take-profit
-// Strategy: Kingston ATR-Based v1
-//   SL = 1.5x ATR | TP = 3x ATR | Scale out: 50% at 2x ATR
+// TASK: trading.bracket-manager — Kingston Edge v2
+// 3-tier progressive exit system
+// SL = 1.5x ATR | TP1 = 1.5R (33%) | TP2 = 2.5R (33%) | TP3 = 3.5R (34%)
+// After TP1: SL → breakeven | After TP2: SL → +1R
 // ═══════════════════════════════════════════
 
 const ALPACA_DATA_BASE = "https://data.alpaca.markets";
@@ -595,6 +683,80 @@ function saveBracketState(state: Record<string, any>): void {
   fs.writeFileSync(BRACKET_STATE_FILE, JSON.stringify(state, null, 2));
 }
 
+// Calculate ATR from daily bars
+function calculateATR(bars: any[]): number {
+  let atrSum = 0;
+  let atrCount = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const high = bars[i].h;
+    const low = bars[i].l;
+    const prevClose = bars[i - 1].c;
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    atrSum += tr;
+    atrCount++;
+  }
+  return atrCount > 0 ? atrSum / atrCount : 0;
+}
+
+// Place a single order on Alpaca
+async function placeAlpacaOrder(
+  headers: Record<string, string>,
+  order: Record<string, any>
+): Promise<{ ok: boolean; data?: any; error?: string }> {
+  try {
+    const resp = await fetch(`${ALPACA_BASE}/v2/orders`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(order),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (resp.ok) {
+      return { ok: true, data: await resp.json() };
+    }
+    return { ok: false, error: (await resp.text()).slice(0, 80) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// Cancel an order by ID
+async function cancelAlpacaOrder(
+  headers: Record<string, string>,
+  orderId: string
+): Promise<boolean> {
+  try {
+    const resp = await fetch(`${ALPACA_BASE}/v2/orders/${orderId}`, {
+      method: "DELETE",
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+    return resp.ok || resp.status === 404; // 404 = already filled/cancelled
+  } catch {
+    return false;
+  }
+}
+
+// Check if an order has been filled
+async function isOrderFilled(
+  headers: Record<string, string>,
+  orderId: string
+): Promise<{ filled: boolean; filledQty: number }> {
+  try {
+    const resp = await fetch(`${ALPACA_BASE}/v2/orders/${orderId}`, {
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return { filled: false, filledQty: 0 };
+    const order = (await resp.json()) as any;
+    return {
+      filled: order.status === "filled",
+      filledQty: parseInt(order.filled_qty || "0"),
+    };
+  } catch {
+    return { filled: false, filledQty: 0 };
+  }
+}
+
 registerTask("trading.bracket-manager", "\u{1F3AF}", 5, async () => {
   const key = process.env.ALPACA_API_KEY;
   const secret = process.env.ALPACA_SECRET_KEY;
@@ -611,52 +773,132 @@ registerTask("trading.bracket-manager", "\u{1F3AF}", 5, async () => {
     const positions = (await posResp.json()) as any[];
 
     if (positions.length === 0) {
+      // Clean up bracket state for closed positions
+      saveBracketState({});
       return { ok: true, summary: "No positions — no brackets needed" };
     }
 
-    // 2. Fetch open orders to see which positions already have brackets
+    // 2. Fetch open orders to check coverage
     const ordResp = await fetch(`${ALPACA_BASE}/v2/orders?status=open&limit=100`, {
       headers, signal: AbortSignal.timeout(8000),
     });
     const openOrders = ordResp.ok ? ((await ordResp.json()) as any[]) : [];
 
-    // Build set of symbols that have SL or TP orders
-    const coveredSymbols = new Set<string>();
+    // Count sell/buy orders per symbol (for coverage check)
+    const orderCountBySymbol: Record<string, number> = {};
     for (const ord of openOrders) {
-      if (ord.order_class === "oto" || ord.order_class === "bracket" || ord.order_class === "oco") {
-        coveredSymbols.add(ord.symbol);
-      }
-      // Also count any stop or limit sell as coverage
-      if ((ord.type === "stop" || ord.type === "limit") && ord.side === "sell") {
-        coveredSymbols.add(ord.symbol);
-      }
-      // Short positions: buy orders cover them
-      if ((ord.type === "stop" || ord.type === "limit") && ord.side === "buy") {
-        coveredSymbols.add(ord.symbol);
+      if ((ord.type === "stop" || ord.type === "limit") &&
+          (ord.side === "sell" || ord.side === "buy")) {
+        orderCountBySymbol[ord.symbol] = (orderCountBySymbol[ord.symbol] || 0) + 1;
       }
     }
 
     const bracketState = loadBracketState();
     const actions: string[] = [];
     let alert: string | undefined;
+    const posSymbols = new Set(positions.map((p: any) => p.symbol));
 
-    // 3. For each uncovered position, calculate ATR and place bracket
+    // Clean up bracket state for positions that no longer exist
+    for (const sym of Object.keys(bracketState)) {
+      if (!posSymbols.has(sym)) {
+        delete bracketState[sym];
+      }
+    }
+
     for (const pos of positions) {
       const sym = pos.symbol;
-      const qty = Math.abs(parseInt(pos.qty));
+      const totalQty = Math.abs(parseInt(pos.qty));
       const side = parseInt(pos.qty) > 0 ? "long" : "short";
       const entryPrice = parseFloat(pos.avg_entry_price);
+      const slSide = side === "long" ? "sell" : "buy";
 
-      if (coveredSymbols.has(sym)) {
-        continue; // Already has bracket orders
+      // ── PHASE A: Check tier fills for existing brackets ──
+      const existing = bracketState[sym];
+      if (existing && existing.version === "edge-v2") {
+        let stateChanged = false;
+
+        // Check if TP1 filled (tier 1)
+        if (existing.tier === 0 && existing.tp1OrderId) {
+          const tp1Status = await isOrderFilled(headers, existing.tp1OrderId);
+          if (tp1Status.filled) {
+            // TP1 filled! Move SL to breakeven, advance to tier 1
+            existing.tier = 1;
+            stateChanged = true;
+
+            // Cancel old SL, place new SL at breakeven for remaining qty
+            if (existing.slOrderId) await cancelAlpacaOrder(headers, existing.slOrderId);
+            const remainingQty = totalQty; // Alpaca auto-adjusts after partial sell
+            const breakeven = Math.round(entryPrice * 100) / 100;
+            const newSl = await placeAlpacaOrder(headers, {
+              symbol: sym, qty: remainingQty, side: slSide,
+              type: "stop", stop_price: breakeven, time_in_force: "gtc",
+            });
+            if (newSl.ok) {
+              existing.slOrderId = newSl.data.id;
+              existing.currentStop = breakeven;
+            }
+            actions.push(`${sym}: TP1 filled! SL→breakeven $${breakeven}`);
+            alert = `\u{2705} ${sym} TP1 hit (+1.5R)! SL moved to breakeven. Profit locked.`;
+          }
+        }
+
+        // Check if TP2 filled (tier 2)
+        if (existing.tier === 1 && existing.tp2OrderId) {
+          const tp2Status = await isOrderFilled(headers, existing.tp2OrderId);
+          if (tp2Status.filled) {
+            existing.tier = 2;
+            stateChanged = true;
+
+            // Cancel old SL, place new SL at +1R (entry + 1.5*ATR)
+            if (existing.slOrderId) await cancelAlpacaOrder(headers, existing.slOrderId);
+            const remainingQty = totalQty;
+            const r1Price = side === "long"
+              ? Math.round((entryPrice + 1.5 * existing.atr) * 100) / 100
+              : Math.round((entryPrice - 1.5 * existing.atr) * 100) / 100;
+            const newSl = await placeAlpacaOrder(headers, {
+              symbol: sym, qty: remainingQty, side: slSide,
+              type: "stop", stop_price: r1Price, time_in_force: "gtc",
+            });
+            if (newSl.ok) {
+              existing.slOrderId = newSl.data.id;
+              existing.currentStop = r1Price;
+            }
+            actions.push(`${sym}: TP2 filled! SL→+1R $${r1Price}`);
+            alert = `\u{1F525} ${sym} TP2 hit (+2.5R)! SL locked at +1R profit. Last tier running.`;
+          }
+        }
+
+        // Check if TP3 filled (tier 3 — all done)
+        if (existing.tier === 2 && existing.tp3OrderId) {
+          const tp3Status = await isOrderFilled(headers, existing.tp3OrderId);
+          if (tp3Status.filled) {
+            existing.tier = 3;
+            stateChanged = true;
+            // Cancel remaining SL
+            if (existing.slOrderId) await cancelAlpacaOrder(headers, existing.slOrderId);
+            actions.push(`${sym}: TP3 filled! Full exit at +3.5R`);
+            alert = `\u{1F3C6} ${sym} TP3 hit (+3.5R)! Full position closed. Maximum profit!`;
+            delete bracketState[sym];
+          }
+        }
+
+        if (stateChanged) {
+          saveBracketState(bracketState);
+        }
+        continue; // Already managed by Edge v2
       }
 
-      // Fetch 14-day bars for ATR calculation
-      // CRITICAL: Alpaca requires 'start' param or it returns only today's bar
+      // ── PHASE B: Place new Edge v2 brackets for uncovered positions ──
+      // Skip if position already has orders (legacy or manual)
+      if ((orderCountBySymbol[sym] || 0) >= 2) {
+        continue;
+      }
+
+      // Fetch 14-day bars for ATR
       const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 30); // 30 calendar days to get ~14 trading days
+      startDate.setDate(startDate.getDate() - 30);
       const startStr = startDate.toISOString().split("T")[0];
-      const barsUrl = `${ALPACA_DATA_BASE}/v2/stocks/${sym}/bars?timeframe=1Day&limit=15&start=${startStr}`;
+      const barsUrl = `${ALPACA_DATA_BASE}/v2/stocks/${sym}/bars?timeframe=1Day&limit=15&start=${startStr}&feed=iex`;
       const barsResp = await fetch(barsUrl, {
         headers, signal: AbortSignal.timeout(8000),
       });
@@ -668,110 +910,96 @@ registerTask("trading.bracket-manager", "\u{1F3AF}", 5, async () => {
 
       const barsData = (await barsResp.json()) as any;
       const bars = barsData.bars || [];
-
       if (bars.length < 2) {
         actions.push(`${sym}: not enough bars (${bars.length})`);
         continue;
       }
 
-      // Calculate ATR (Average True Range) over available bars
-      let atrSum = 0;
-      let atrCount = 0;
-      for (let i = 1; i < bars.length; i++) {
-        const high = bars[i].h;
-        const low = bars[i].l;
-        const prevClose = bars[i - 1].c;
-        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
-        atrSum += tr;
-        atrCount++;
-      }
-      const atr = atrSum / atrCount;
+      const atr = calculateATR(bars);
+      const R = 1.5 * atr; // 1R = stop distance
 
-      // Kingston ATR-Based v1 strategy
-      // SL: 1.5x ATR from entry | TP: 3x ATR from entry
-      let stopPrice: number;
-      let takeProfitPrice: number;
+      // Edge v2: 3-tier take-profit levels
+      const stopPrice = side === "long"
+        ? Math.round((entryPrice - R) * 100) / 100
+        : Math.round((entryPrice + R) * 100) / 100;
 
-      if (side === "long") {
-        stopPrice = Math.round((entryPrice - 1.5 * atr) * 100) / 100;
-        takeProfitPrice = Math.round((entryPrice + 3.0 * atr) * 100) / 100;
-      } else {
-        // Short position: reversed
-        stopPrice = Math.round((entryPrice + 1.5 * atr) * 100) / 100;
-        takeProfitPrice = Math.round((entryPrice - 3.0 * atr) * 100) / 100;
-      }
+      const tp1Price = side === "long"
+        ? Math.round((entryPrice + 1.5 * R) * 100) / 100
+        : Math.round((entryPrice - 1.5 * R) * 100) / 100;
 
-      // Place OTO (one-triggers-other) with SL and TP as separate GTC orders
-      // Place stop-loss
-      const slSide = side === "long" ? "sell" : "buy";
-      const slOrder = {
-        symbol: sym,
-        qty: qty,
-        side: slSide,
-        type: "stop",
-        stop_price: stopPrice,
-        time_in_force: "gtc",
-      };
+      const tp2Price = side === "long"
+        ? Math.round((entryPrice + 2.5 * R) * 100) / 100
+        : Math.round((entryPrice - 2.5 * R) * 100) / 100;
 
-      const slResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify(slOrder),
-        signal: AbortSignal.timeout(8000),
+      const tp3Price = side === "long"
+        ? Math.round((entryPrice + 3.5 * R) * 100) / 100
+        : Math.round((entryPrice - 3.5 * R) * 100) / 100;
+
+      // Split qty into 3 tiers: 33% / 33% / 34%
+      const qty1 = Math.max(1, Math.floor(totalQty * 0.33));
+      const qty2 = Math.max(1, Math.floor(totalQty * 0.33));
+      const qty3 = Math.max(1, totalQty - qty1 - qty2);
+
+      // Place stop-loss for full position
+      const slResult = await placeAlpacaOrder(headers, {
+        symbol: sym, qty: totalQty, side: slSide,
+        type: "stop", stop_price: stopPrice, time_in_force: "gtc",
       });
 
-      // Place take-profit
-      const tpOrder = {
-        symbol: sym,
-        qty: qty,
-        side: slSide,
-        type: "limit",
-        limit_price: takeProfitPrice,
-        time_in_force: "gtc",
-      };
-
-      const tpResp = await fetch(`${ALPACA_BASE}/v2/orders`, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify(tpOrder),
-        signal: AbortSignal.timeout(8000),
+      // Place 3 take-profit limit orders
+      const tp1Result = await placeAlpacaOrder(headers, {
+        symbol: sym, qty: qty1, side: slSide,
+        type: "limit", limit_price: tp1Price, time_in_force: "gtc",
       });
 
-      const slOk = slResp.ok;
-      const tpOk = tpResp.ok;
+      const tp2Result = await placeAlpacaOrder(headers, {
+        symbol: sym, qty: qty2, side: slSide,
+        type: "limit", limit_price: tp2Price, time_in_force: "gtc",
+      });
 
-      if (slOk && tpOk) {
-        const slData = (await slResp.json()) as any;
-        const tpData = (await tpResp.json()) as any;
+      const tp3Result = await placeAlpacaOrder(headers, {
+        symbol: sym, qty: qty3, side: slSide,
+        type: "limit", limit_price: tp3Price, time_in_force: "gtc",
+      });
+
+      if (slResult.ok && tp1Result.ok) {
         bracketState[sym] = {
+          version: "edge-v2",
           side,
           entry: entryPrice,
           atr: Math.round(atr * 100) / 100,
-          stopLoss: stopPrice,
-          takeProfit: takeProfitPrice,
-          slOrderId: slData.id,
-          tpOrderId: tpData.id,
+          R: Math.round(R * 100) / 100,
+          currentStop: stopPrice,
+          tp1Price, tp2Price, tp3Price,
+          qty1, qty2, qty3,
+          tier: 0, // 0=initial, 1=TP1 filled, 2=TP2 filled, 3=done
+          slOrderId: slResult.data?.id,
+          tp1OrderId: tp1Result.data?.id,
+          tp2OrderId: tp2Result.ok ? tp2Result.data?.id : null,
+          tp3OrderId: tp3Result.ok ? tp3Result.data?.id : null,
           placedAt: new Date().toISOString(),
         };
-        actions.push(`${sym}: SL=$${stopPrice} TP=$${takeProfitPrice} (ATR=$${atr.toFixed(2)})`);
-        alert = `\u{1F3AF} Bracket plac\u00E9 ${sym} ${side}: SL=$${stopPrice}, TP=$${takeProfitPrice}`;
+        actions.push(`${sym}: Edge v2 — SL=$${stopPrice} TP1=$${tp1Price}(${qty1}) TP2=$${tp2Price}(${qty2}) TP3=$${tp3Price}(${qty3})`);
+        alert = `\u{1F3AF} Edge v2 bracket ${sym}: SL=$${stopPrice} | TP1=$${tp1Price} | TP2=$${tp2Price} | TP3=$${tp3Price}`;
       } else {
-        const slErr = !slOk ? await slResp.text() : "";
-        const tpErr = !tpOk ? await tpResp.text() : "";
-        actions.push(`${sym}: order failed (SL:${slOk ? "ok" : slErr.slice(0, 50)}, TP:${tpOk ? "ok" : tpErr.slice(0, 50)})`);
+        const errors = [
+          !slResult.ok ? `SL:${slResult.error}` : "",
+          !tp1Result.ok ? `TP1:${tp1Result.error}` : "",
+        ].filter(Boolean).join(", ");
+        actions.push(`${sym}: order failed (${errors})`);
       }
     }
 
     saveBracketState(bracketState);
 
-    // Update trading journal with bracket info
+    // Update trading journal
     const journal = loadJournal();
     journal.brackets = bracketState;
     saveJournal(journal);
 
     const summary = actions.length > 0
       ? actions.join(" | ")
-      : `${positions.length} pos covered`;
+      : `${positions.length} pos covered (Edge v2)`;
 
     return { ok: true, summary, alert };
   } catch (e) {
@@ -789,7 +1017,7 @@ registerTask("trading.crypto", "\u{1FA99}", 5, async () => {
   try {
     const symbols = encodeURIComponent(JSON.stringify(CRYPTO_SYMBOLS));
     const resp = await fetch(`${BINANCE_BASE}/api/v3/ticker/price?symbols=${symbols}`, {
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!resp.ok) return { ok: false, summary: `Binance error ${resp.status}` };
@@ -852,49 +1080,42 @@ registerTask("trading.crypto", "\u{1FA99}", 5, async () => {
 });
 
 // ═══════════════════════════════════════════
-// TASK: trading.daytrader — invoke crypto-daytrader.cjs
+// TASK: trading.daytrader — MCM v3 crypto auto-trader
+// Calls crypto_auto.tick() directly instead of spawning old .cjs script
 // ═══════════════════════════════════════════
 
 registerTask("trading.daytrader", "\u{1F916}", 5, async () => {
-  if (!fs.existsSync(DAYTRADER_SCRIPT)) {
-    return { ok: false, summary: "Script not found" };
+  try {
+    // Call crypto_auto.tick directly via skill registry (MCM v3)
+    const { getSkill } = await import("./skills/loader.js");
+    const skill = getSkill("crypto_auto.tick");
+    if (!skill) return { ok: false, summary: "crypto_auto.tick skill not loaded" };
+    const result = await skill.execute({});
+    const summary = typeof result === "string" ? result.slice(0, 200) : String(result).slice(0, 200);
+    const ok = !summary.includes("Error") && !summary.includes("CIRCUIT BREAKER");
+    return { ok, summary };
+  } catch (e) {
+    return { ok: false, summary: `MCM tick error: ${e instanceof Error ? e.message : String(e)}` };
   }
+});
 
-  return new Promise<TaskResult>((resolve) => {
-    const child = spawn("node", [DAYTRADER_SCRIPT], {
-      cwd: DATA_DIR,
-      timeout: 30_000,
-      windowsHide: true,
-    });
+// ═══════════════════════════════════════════
+// TASK: trading.crypto-swing — Big Crypto Swing (Module 2)
+// BTC/ETH/SOL/BNB with EMA200+RSI+MACD, 3-tier exits
+// ═══════════════════════════════════════════
 
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (d) => (stdout += d));
-    child.stderr?.on("data", (d) => (stderr += d));
-
-    child.on("exit", (code) => {
-      if (code === 0) {
-        // Read state to get summary
-        try {
-          const statePath = path.join(DATA_DIR, "crypto-daytrader-state.json");
-          if (fs.existsSync(statePath)) {
-            const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-            const posCount = state.openPositions?.length || 0;
-            const balance = state.totalBalance?.toFixed(0) || "?";
-            resolve({ ok: true, summary: `${posCount} position${posCount !== 1 ? "s" : ""}, balance $${balance}` });
-            return;
-          }
-        } catch { /* fall through */ }
-        resolve({ ok: true, summary: stdout.trim().slice(0, 100) || "OK" });
-      } else {
-        resolve({ ok: false, summary: `Exit ${code}: ${stderr.trim().slice(0, 100)}` });
-      }
-    });
-
-    child.on("error", (err) => {
-      resolve({ ok: false, summary: `Spawn error: ${err.message}` });
-    });
-  });
+registerTask("trading.crypto-swing", "\u{1F30A}", 15, async () => {
+  try {
+    const { getSkill } = await import("./skills/loader.js");
+    const skill = getSkill("crypto_swing.tick");
+    if (!skill) return { ok: false, summary: "crypto_swing.tick skill not loaded" };
+    const result = await skill.execute({});
+    const summary = typeof result === "string" ? result.slice(0, 200) : String(result).slice(0, 200);
+    const ok = !summary.includes("Error") && !summary.includes("CIRCUIT BREAKER");
+    return { ok, summary };
+  } catch (e) {
+    return { ok: false, summary: `Swing tick error: ${e instanceof Error ? e.message : String(e)}` };
+  }
 });
 
 // ═══════════════════════════════════════════
@@ -1285,6 +1506,15 @@ async function tick(): Promise<void> {
     }
   }
 
+  // Flush delivery queue (retry failed briefings)
+  try {
+    const { flushDeliveryQueue } = await import("./scheduler/briefings.js");
+    const queueResult = await flushDeliveryQueue();
+    if (queueResult.sent > 0 || queueResult.failed > 0) {
+      logConsole("\u{1F4E8}", "delivery-queue", `Flushed: ${queueResult.sent} sent, ${queueResult.failed} failed`);
+    }
+  } catch { /* delivery queue not critical */ }
+
   // Tick summary (every tick)
   if (ran > 0 || failed > 0) {
     logConsole("\u{1F49A}", "tick", `#${tickCount}: ${ran} OK, ${failed} fail, ${skipped} skip`);
@@ -1356,6 +1586,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
       kingston.kill("SIGTERM");
     }
     cleanLock();
+    releaseHeartbeatLock();
     setTimeout(() => process.exit(0), 2000);
   });
 }
@@ -1404,7 +1635,13 @@ console.log("");
 if (process.argv.includes("--test")) {
   runTestMode();
 } else {
-  // Kill rival supervisors (launcher.ts) before starting
+  // Prevent multiple heartbeat instances
+  if (!acquireHeartbeatLock()) {
+    console.error("\n❌ Another heartbeat instance is already running. Exiting.\n");
+    process.exit(1);
+  }
+
+  // Kill rival supervisors (launcher.ts or stale heartbeat.ts)
   killRivalSupervisors();
 
   // Start bot

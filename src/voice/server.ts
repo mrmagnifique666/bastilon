@@ -5,8 +5,36 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
-import { buildTwiml, buildOutboundTwiml } from "./twiml.js";
+import { buildTwiml, buildOutboundTwiml, buildGatherTwiml, buildTurnReplyTwiml } from "./twiml.js";
 import { handleTwilioStreamLive } from "./pipelineLive.js";
+import { isBridgeEnabled, getConversationHistory, askNoah } from "./noahBridge.js";
+import fs from "node:fs";
+import path from "node:path";
+
+async function generateFallbackVoiceReply(userText: string): Promise<string> {
+  const input = (userText || "").trim();
+  if (!input) return "Je n'ai pas bien entendu. Peux-tu répéter en une phrase?";
+  if (!config.geminiApiKey) return "Je t'entends, mais je suis en mode limité. Réessaie dans un instant.";
+
+  try {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
+    const prompt = `Tu es Kingston, l'assistant IA personnel de Nicolas, et tu agis comme réceptionniste au téléphone. Tu es professionnel mais chaleureux, tu tutoies Nicolas. Tu peux aider avec: son agenda, ses rappels, prendre des messages, donner des infos sur ses projets (trading, Bastilon OS, t-shirts). Réponse concise, naturelle, en français (2-3 phrases max). Si tu ne sais pas, dis-le honnêtement. Message de Nicolas: ${input}`;
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.6, maxOutputTokens: 180 },
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    const out = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join(" ").trim();
+    if (!resp.ok || !out) return "J'ai eu un petit bug technique, mais je suis là. Réessaie ta question.";
+    return out;
+  } catch {
+    return "Petit bug technique de mon côté. Réessaie dans quelques secondes.";
+  }
+}
 
 export function startVoiceServer(): void {
   if (!config.voiceEnabled) {
@@ -20,10 +48,59 @@ export function startVoiceServer(): void {
 
   const server = http.createServer((req, res) => {
     if (req.method === "POST" && req.url === "/voice/incoming") {
+      // Stable mode: turn-based Gather -> Noah bridge (no realtime stream dependency)
+      const mode = (process.env.VOICE_MODE || "").toLowerCase();
+      if (mode === "stable_turn" && isBridgeEnabled()) {
+        const twiml = buildGatherTwiml("Je t'écoute. Parle après le bip.");
+        res.writeHead(200, { "Content-Type": "text/xml" });
+        res.end(twiml);
+        log.info("[voice] Served Gather TwiML (stable_turn mode)");
+        return;
+      }
+
       const twiml = buildTwiml();
       res.writeHead(200, { "Content-Type": "text/xml" });
       res.end(twiml);
       log.info("[voice] Served TwiML for incoming call");
+      return;
+    }
+
+    // Turn-based voice loop (stable mode)
+    if (req.method === "POST" && req.url === "/voice/turn") {
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", async () => {
+        try {
+          const params = new URLSearchParams(body);
+          const speech = (params.get("SpeechResult") || "").trim();
+          const callSid = params.get("CallSid") || undefined;
+
+          let reply = "Je n'ai pas bien entendu. Peux-tu répéter en une phrase?";
+          if (speech) {
+            reply = await askNoah(speech, {
+              type: "voice_turn",
+              callSid,
+              lang: config.voiceLanguage || "fr",
+              timeoutMs: Number(config.noahBridgeTimeoutMs || 12000),
+            });
+
+            // If Noah bridge is unavailable/timeout, fallback to local Gemini text reply
+            if (!reply || /Noah n'a pas répondu|Réessaie dans un instant/i.test(reply)) {
+              reply = await generateFallbackVoiceReply(speech);
+            }
+          }
+
+          const twiml = buildTurnReplyTwiml(reply);
+          res.writeHead(200, { "Content-Type": "text/xml" });
+          res.end(twiml);
+          log.info(`[voice] /voice/turn handled. speech=${speech.length} chars`);
+        } catch (err) {
+          log.error(`[voice] /voice/turn error: ${err instanceof Error ? err.message : String(err)}`);
+          const twiml = buildTurnReplyTwiml("Petit bug technique. Réessaie dans quelques secondes.");
+          res.writeHead(200, { "Content-Type": "text/xml" });
+          res.end(twiml);
+        }
+      });
       return;
     }
 
@@ -73,6 +150,65 @@ export function startVoiceServer(): void {
           res.end("Error");
         }
       });
+      return;
+    }
+
+    // ── Noah Bridge endpoints ──
+    // Noah reads Kingston's messages (inbox)
+    if (req.method === "GET" && req.url === "/bridge/noah/inbox") {
+      if (!isBridgeEnabled()) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Bridge disabled" }));
+        return;
+      }
+      const inbox = config.noahBridgeInbox || "data/kingston-to-noah.jsonl";
+      if (fs.existsSync(inbox)) {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end(fs.readFileSync(inbox, "utf8"));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end("");
+      }
+      return;
+    }
+
+    // Noah writes replies (outbox)
+    if (req.method === "POST" && req.url === "/bridge/noah/reply") {
+      if (!isBridgeEnabled()) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Bridge disabled" }));
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", () => {
+        try {
+          const reply = JSON.parse(body);
+          const outbox = config.noahBridgeOutbox || "data/noah-to-kingston.jsonl";
+          const dir = path.dirname(outbox);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.appendFileSync(outbox, JSON.stringify(reply) + "\n", "utf8");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+          log.info(`[noah-bridge] Noah replied: ${(reply.msg || "").slice(0, 60)}`);
+        } catch (err) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON" }));
+        }
+      });
+      return;
+    }
+
+    // Full conversation history (both directions)
+    if (req.method === "GET" && req.url === "/bridge/noah/history") {
+      if (!isBridgeEnabled()) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Bridge disabled" }));
+        return;
+      }
+      const history = getConversationHistory(50);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(history));
       return;
     }
 

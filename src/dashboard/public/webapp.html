@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Kingston Dashboard</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --tg-bg: var(--tg-theme-bg-color, #1a1a2e);
+    --tg-text: var(--tg-theme-text-color, #e0e0e0);
+    --tg-hint: var(--tg-theme-hint-color, #999);
+    --tg-link: var(--tg-theme-link-color, #5eaaef);
+    --tg-btn: var(--tg-theme-button-color, #5eaaef);
+    --tg-btn-text: var(--tg-theme-button-text-color, #fff);
+    --tg-secondary-bg: var(--tg-theme-secondary-bg-color, #111122);
+    --tg-header-bg: var(--tg-theme-header-bg-color, #0f0f1f);
+    --card-bg: color-mix(in srgb, var(--tg-secondary-bg), var(--tg-bg) 30%);
+    --card-border: color-mix(in srgb, var(--tg-hint), transparent 80%);
+    --positive: #4caf50;
+    --negative: #f44336;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--tg-bg);
+    color: var(--tg-text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* ── Header ── */
+  .header {
+    padding: 16px 16px 12px;
+    background: var(--tg-header-bg);
+    border-bottom: 1px solid var(--card-border);
+  }
+  .header h1 {
+    font-size: 18px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .header .subtitle {
+    font-size: 12px;
+    color: var(--tg-hint);
+    margin-top: 2px;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--positive);
+  }
+  .status-dot.offline { background: var(--negative); }
+
+  /* ── Tabs ── */
+  .tabs {
+    display: flex;
+    gap: 0;
+    background: var(--tg-header-bg);
+    border-bottom: 1px solid var(--card-border);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: 1;
+    min-width: fit-content;
+    padding: 10px 14px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--tg-hint);
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color .2s, border-color .2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tab.active {
+    color: var(--tg-btn);
+    border-bottom-color: var(--tg-btn);
+  }
+
+  /* ── Content ── */
+  .content {
+    padding: 12px;
+    padding-bottom: 80px;
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    padding: 14px;
+    margin-bottom: 10px;
+  }
+  .card-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--tg-hint);
+    margin-bottom: 8px;
+  }
+
+  /* ── Summary row ── */
+  .summary-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .summary-item {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    padding: 12px 10px;
+    text-align: center;
+  }
+  .summary-value {
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .summary-label {
+    font-size: 11px;
+    color: var(--tg-hint);
+    margin-top: 2px;
+  }
+
+  /* ── Position list ── */
+  .position {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .position:last-child { border-bottom: none; }
+  .pos-symbol {
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .pos-side {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+  }
+  .pos-side.long { color: var(--positive); background: color-mix(in srgb, var(--positive), transparent 85%); }
+  .pos-side.short { color: var(--negative); background: color-mix(in srgb, var(--negative), transparent 85%); }
+  .pos-pnl { font-weight: 600; font-size: 14px; }
+  .pos-pnl.positive { color: var(--positive); }
+  .pos-pnl.negative { color: var(--negative); }
+  .pos-detail { font-size: 11px; color: var(--tg-hint); }
+
+  /* ── Agent list ── */
+  .agent-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .agent-item:last-child { border-bottom: none; }
+  .agent-name { font-weight: 600; font-size: 14px; }
+  .agent-status {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .agent-status.idle { color: var(--tg-hint); background: color-mix(in srgb, var(--tg-hint), transparent 85%); }
+  .agent-status.running { color: var(--positive); background: color-mix(in srgb, var(--positive), transparent 85%); }
+  .agent-status.error { color: var(--negative); background: color-mix(in srgb, var(--negative), transparent 85%); }
+  .agent-meta { font-size: 11px; color: var(--tg-hint); margin-top: 2px; }
+
+  /* ── Stats ── */
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--card-border);
+    font-size: 13px;
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--tg-hint); }
+  .stat-value { font-weight: 600; }
+
+  /* ── Notes ── */
+  .note-item {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .note-item:last-child { border-bottom: none; }
+  .note-text { font-size: 13px; line-height: 1.4; }
+  .note-time { font-size: 11px; color: var(--tg-hint); margin-top: 4px; }
+
+  /* ── Loading / Error ── */
+  .loading {
+    text-align: center;
+    padding: 40px 0;
+    color: var(--tg-hint);
+    font-size: 14px;
+  }
+  .spinner {
+    display: inline-block;
+    width: 24px; height: 24px;
+    border: 3px solid var(--card-border);
+    border-top-color: var(--tg-btn);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin-bottom: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-msg {
+    text-align: center;
+    padding: 20px;
+    color: var(--negative);
+    font-size: 13px;
+  }
+
+  /* ── Pull to refresh indicator ── */
+  .refresh-hint {
+    text-align: center;
+    padding: 6px;
+    font-size: 11px;
+    color: var(--tg-hint);
+    display: none;
+  }
+  .refresh-hint.visible { display: block; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span class="status-dot" id="statusDot"></span> Kingston Dashboard</h1>
+  <div class="subtitle" id="headerSubtitle">Loading...</div>
+</div>
+
+<div class="tabs" id="tabBar">
+  <div class="tab active" data-tab="portfolio">Portfolio</div>
+  <div class="tab" data-tab="agents">Agents</div>
+  <div class="tab" data-tab="stats">Stats</div>
+  <div class="tab" data-tab="notes">Notes</div>
+</div>
+
+<div class="content">
+  <!-- PORTFOLIO -->
+  <div class="panel active" id="panel-portfolio">
+    <div class="summary-row" id="portfolioSummary"></div>
+    <div class="card">
+      <div class="card-title">Positions</div>
+      <div id="positionsList"><div class="loading"><div class="spinner"></div><br>Loading portfolio...</div></div>
+    </div>
+  </div>
+
+  <!-- AGENTS -->
+  <div class="panel" id="panel-agents">
+    <div id="agentsList"><div class="loading"><div class="spinner"></div><br>Loading agents...</div></div>
+  </div>
+
+  <!-- STATS -->
+  <div class="panel" id="panel-stats">
+    <div class="summary-row" id="xpSummary"></div>
+    <div class="card" id="llmCard">
+      <div class="card-title">LLM Usage Today</div>
+      <div id="llmStats"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">System</div>
+      <div id="systemStats"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+  </div>
+
+  <!-- NOTES -->
+  <div class="panel" id="panel-notes">
+    <div id="notesList"><div class="loading"><div class="spinner"></div><br>Loading notes...</div></div>
+  </div>
+</div>
+
+<script>
+// ── Telegram WebApp Init ──
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.enableClosingConfirmation?.();
+}
+
+// ── API base — same origin as webapp.html ──
+const API = '';
+
+// ── Auth header — read from Telegram initData or fallback ──
+function apiHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  // If DASHBOARD_TOKEN is needed, it can be passed via Telegram startParam
+  const token = tg?.initDataUnsafe?.start_param || '';
+  if (token) h['X-Auth-Token'] = token;
+  return h;
+}
+
+async function apiFetch(endpoint) {
+  try {
+    const resp = await fetch(API + endpoint, { headers: apiHeaders() });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } catch (err) {
+    console.error(`API error [${endpoint}]:`, err);
+    return null;
+  }
+}
+
+// ── Tab Navigation ──
+const tabs = document.querySelectorAll('.tab');
+const panels = document.querySelectorAll('.panel');
+let activeTab = 'portfolio';
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab;
+    if (target === activeTab) return;
+    activeTab = target;
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === target));
+    panels.forEach(p => p.classList.toggle('active', p.id === `panel-${target}`));
+    // Show back button when not on first tab
+    if (tg?.BackButton) {
+      if (target === 'portfolio') tg.BackButton.hide();
+      else tg.BackButton.show();
+    }
+    loadTab(target);
+  });
+});
+
+// Back button returns to portfolio
+if (tg?.BackButton) {
+  tg.BackButton.onClick(() => {
+    document.querySelector('.tab[data-tab="portfolio"]').click();
+  });
+}
+
+// ── Formatters ──
+function fmtMoney(n) {
+  if (n == null) return '--';
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtPct(n) {
+  if (n == null) return '--';
+  const sign = n >= 0 ? '+' : '';
+  return sign + Number(n).toFixed(2) + '%';
+}
+function fmtPnl(n) {
+  if (n == null) return '--';
+  const sign = n >= 0 ? '+' : '';
+  return sign + fmtMoney(n);
+}
+function fmtTime(ts) {
+  if (!ts) return '--';
+  const d = new Date(typeof ts === 'number' ? (ts < 1e12 ? ts * 1000 : ts) : ts);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return diffMin + 'm ago';
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return diffH + 'h ago';
+  const diffD = Math.floor(diffH / 24);
+  return diffD + 'd ago';
+}
+function timeStr(ts) {
+  if (!ts) return '';
+  const d = new Date(typeof ts === 'number' ? (ts < 1e12 ? ts * 1000 : ts) : ts);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// ── Portfolio Tab ──
+async function loadPortfolio() {
+  const data = await apiFetch('/api/trading');
+  if (!data) {
+    document.getElementById('positionsList').innerHTML = '<div class="error-msg">Could not load trading data</div>';
+    return;
+  }
+
+  const account = data.account || {};
+  const positions = data.positions || [];
+  const equity = parseFloat(account.equity || account.portfolio_value || 0);
+  const cash = parseFloat(account.cash || 0);
+  const dayPnl = parseFloat(account.equity) - parseFloat(account.last_equity || account.equity);
+  const totalUnrealizedPnl = positions.reduce((sum, p) => sum + parseFloat(p.unrealized_pl || 0), 0);
+
+  // Summary cards
+  document.getElementById('portfolioSummary').innerHTML = `
+    <div class="summary-item">
+      <div class="summary-value">${fmtMoney(equity)}</div>
+      <div class="summary-label">Equity</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-value" style="color: ${dayPnl >= 0 ? 'var(--positive)' : 'var(--negative)'}">
+        ${fmtPnl(dayPnl)}
+      </div>
+      <div class="summary-label">Day P&L</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-value">${fmtMoney(cash)}</div>
+      <div class="summary-label">Cash</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-value">${positions.length}</div>
+      <div class="summary-label">Positions</div>
+    </div>
+  `;
+
+  // Positions
+  if (positions.length === 0) {
+    document.getElementById('positionsList').innerHTML = '<div style="padding:16px;text-align:center;color:var(--tg-hint);">No open positions</div>';
+    return;
+  }
+
+  const sorted = positions.sort((a, b) => Math.abs(parseFloat(b.unrealized_pl || 0)) - Math.abs(parseFloat(a.unrealized_pl || 0)));
+
+  document.getElementById('positionsList').innerHTML = sorted.map(p => {
+    const pnl = parseFloat(p.unrealized_pl || 0);
+    const pnlPct = parseFloat(p.unrealized_plpc || 0) * 100;
+    const qty = parseFloat(p.qty || 0);
+    const side = qty >= 0 ? 'long' : 'short';
+    const mktVal = parseFloat(p.market_value || 0);
+    return `
+      <div class="position">
+        <div>
+          <span class="pos-symbol">${p.symbol}</span>
+          <span class="pos-side ${side}">${side}</span>
+          <div class="pos-detail">${Math.abs(qty)} shares @ ${fmtMoney(p.avg_entry_price)} | Val: ${fmtMoney(Math.abs(mktVal))}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="pos-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${fmtPnl(pnl)}</div>
+          <div class="pos-detail">${fmtPct(pnlPct)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Agents Tab ──
+async function loadAgents() {
+  const data = await apiFetch('/api/agents');
+  if (!data) {
+    document.getElementById('agentsList').innerHTML = '<div class="error-msg">Could not load agents</div>';
+    return;
+  }
+
+  const agents = data.agents || [];
+  if (agents.length === 0) {
+    document.getElementById('agentsList').innerHTML = '<div class="card"><div style="padding:16px;text-align:center;color:var(--tg-hint);">No agents registered</div></div>';
+    return;
+  }
+
+  document.getElementById('agentsList').innerHTML = '<div class="card"><div class="card-title">Active Agents</div>' +
+    agents.map(a => {
+      const statusClass = a.lastError ? 'error' : (a.running ? 'running' : 'idle');
+      const statusText = a.lastError ? 'Error' : (a.running ? 'Running' : 'Idle');
+      const lastRun = a.lastRun || a.lastRunAt;
+      return `
+        <div class="agent-item">
+          <div>
+            <div class="agent-name">${a.id || a.name}</div>
+            <div class="agent-meta">
+              Cycle: ${a.cycle || a.totalRuns || '--'} | Last: ${fmtTime(lastRun)}
+              ${a.heartbeatMs ? ` | Every ${Math.round(a.heartbeatMs / 3600000)}h` : ''}
+            </div>
+            ${a.lastError ? `<div class="agent-meta" style="color:var(--negative)">${a.lastError.slice(0, 80)}</div>` : ''}
+          </div>
+          <span class="agent-status ${statusClass}">${statusText}</span>
+        </div>
+      `;
+    }).join('') +
+    '</div>' +
+    (data.rateLimited ? '<div class="card" style="border-color:var(--negative);"><div class="card-title" style="color:var(--negative)">Rate Limited</div><p style="font-size:13px;">Agents paused until rate limit resets.</p></div>' : '');
+}
+
+// ── Stats Tab ──
+async function loadStats() {
+  const [xpData, llmData, statsData] = await Promise.all([
+    apiFetch('/api/xp'),
+    apiFetch('/api/llm-usage/today'),
+    apiFetch('/api/stats'),
+  ]);
+
+  // XP Summary
+  if (xpData) {
+    const level = xpData.level || 'Apprenti';
+    const xp = xpData.xp ?? xpData.totalXp ?? 0;
+    const streak = xpData.streak ?? 0;
+    document.getElementById('xpSummary').innerHTML = `
+      <div class="summary-item">
+        <div class="summary-value" style="font-size:16px;">${level}</div>
+        <div class="summary-label">Level</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value">${xp}</div>
+        <div class="summary-label">XP Total</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value">${streak}</div>
+        <div class="summary-label">Streak</div>
+      </div>
+    `;
+  } else {
+    document.getElementById('xpSummary').innerHTML = '';
+  }
+
+  // LLM Usage
+  if (llmData) {
+    const models = llmData.models || llmData;
+    const entries = Array.isArray(models) ? models : Object.entries(models).map(([k, v]) => ({ model: k, ...v }));
+    const totalCost = entries.reduce((s, e) => s + (e.cost || 0), 0);
+    const totalCalls = entries.reduce((s, e) => s + (e.calls || e.count || 0), 0);
+    document.getElementById('llmStats').innerHTML = `
+      <div class="stat-row"><span class="stat-label">Total calls</span><span class="stat-value">${totalCalls}</span></div>
+      <div class="stat-row"><span class="stat-label">Total cost</span><span class="stat-value">${fmtMoney(totalCost)}</span></div>
+      ${entries.slice(0, 5).map(e => `
+        <div class="stat-row">
+          <span class="stat-label">${e.model || e.name || '--'}</span>
+          <span class="stat-value">${e.calls || e.count || 0} calls</span>
+        </div>
+      `).join('')}
+    `;
+  } else {
+    document.getElementById('llmStats').innerHTML = '<div class="error-msg">No LLM data</div>';
+  }
+
+  // System stats
+  if (statsData) {
+    const uptimeSec = (statsData.uptime || 0) / 1000;
+    const uptimeH = Math.floor(uptimeSec / 3600);
+    const uptimeM = Math.floor((uptimeSec % 3600) / 60);
+    document.getElementById('systemStats').innerHTML = `
+      <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value">${uptimeH}h ${uptimeM}m</span></div>
+      <div class="stat-row"><span class="stat-label">Memory (RSS)</span><span class="stat-value">${statsData.memory?.rss || '--'} MB</span></div>
+      <div class="stat-row"><span class="stat-label">Heap</span><span class="stat-value">${statsData.memory?.heap || '--'} MB</span></div>
+      <div class="stat-row"><span class="stat-label">WS Clients</span><span class="stat-value">${statsData.wsClients || 0}</span></div>
+      <div class="stat-row"><span class="stat-label">Notes</span><span class="stat-value">${statsData.noteCount || 0}</span></div>
+      <div class="stat-row"><span class="stat-label">Errors (24h)</span><span class="stat-value" style="${(statsData.errorCount || 0) > 0 ? 'color:var(--negative)' : ''}">${statsData.errorCount || 0}</span></div>
+    `;
+  } else {
+    document.getElementById('systemStats').innerHTML = '<div class="error-msg">No stats data</div>';
+  }
+}
+
+// ── Notes Tab ──
+async function loadNotes() {
+  const data = await apiFetch('/api/notes?limit=15');
+  if (!data) {
+    document.getElementById('notesList').innerHTML = '<div class="error-msg">Could not load notes</div>';
+    return;
+  }
+
+  const notes = Array.isArray(data) ? data : (data.notes || []);
+  if (notes.length === 0) {
+    document.getElementById('notesList').innerHTML = '<div class="card"><div style="padding:16px;text-align:center;color:var(--tg-hint);">No notes yet</div></div>';
+    return;
+  }
+
+  document.getElementById('notesList').innerHTML = '<div class="card"><div class="card-title">Recent Notes</div>' +
+    notes.map(n => `
+      <div class="note-item">
+        <div class="note-text">${escapeHtml(n.text || n.content || '').slice(0, 300)}${(n.text || n.content || '').length > 300 ? '...' : ''}</div>
+        <div class="note-time">${timeStr(n.created_at)}</div>
+      </div>
+    `).join('') +
+    '</div>';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ── Tab Loader ──
+const loaded = new Set();
+async function loadTab(tab) {
+  // Always reload on explicit navigation for freshness
+  switch (tab) {
+    case 'portfolio': await loadPortfolio(); break;
+    case 'agents': await loadAgents(); break;
+    case 'stats': await loadStats(); break;
+    case 'notes': await loadNotes(); break;
+  }
+  loaded.add(tab);
+}
+
+// ── Subtitle / Status ──
+async function updateStatus() {
+  const data = await apiFetch('/api/stats');
+  if (data) {
+    const uptimeSec = (data.uptime || 0) / 1000;
+    const uptimeH = Math.floor(uptimeSec / 3600);
+    const uptimeM = Math.floor((uptimeSec % 3600) / 60);
+    document.getElementById('headerSubtitle').textContent = `Uptime: ${uptimeH}h ${uptimeM}m | ${data.wsClients || 0} clients`;
+    document.getElementById('statusDot').classList.remove('offline');
+  } else {
+    document.getElementById('headerSubtitle').textContent = 'Offline';
+    document.getElementById('statusDot').classList.add('offline');
+  }
+}
+
+// ── MainButton: Refresh ──
+if (tg?.MainButton) {
+  tg.MainButton.setText('Refresh');
+  tg.MainButton.show();
+  tg.MainButton.onClick(() => {
+    loadTab(activeTab);
+    updateStatus();
+    // Haptic feedback if available
+    tg.HapticFeedback?.impactOccurred('light');
+  });
+}
+
+// ── Init ──
+(async () => {
+  await Promise.all([
+    loadPortfolio(),
+    updateStatus(),
+  ]);
+  // Auto-refresh every 30s
+  setInterval(() => {
+    if (activeTab === 'portfolio') loadPortfolio();
+    updateStatus();
+  }, 30000);
+})();
+</script>
+</body>
+</html>

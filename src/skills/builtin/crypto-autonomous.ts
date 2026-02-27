@@ -1,10 +1,15 @@
 /**
- * Autonomous Crypto Trading Engine — 24/7 Paper Trading
+ * Autonomous Crypto Trading Engine v3 — Micro-Cap Momentum (MCM)
  *
- * Monitors BTC, ETH, SOL, BNB via CoinGecko. Calculates MA20, RSI14.
- * Executes paper trades via crypto_paper DB tables.
- * Risk management: SL -3%, TP +5%, trailing +3%, max 6h hold,
- * -5% daily loss cap, 3-consecutive-loss circuit breaker.
+ * Strategy: Kingston Micro-Cap Momentum v1.1 (RSI Rising Filter)
+ * - Scans Binance ALL USDT pairs for top movers (dynamic, not 4 hardcoded coins)
+ * - ATR-based stops/TP/trailing (adapts to each coin's real volatility)
+ * - RSI MUST be rising (current > 3 candles ago) — Nicolas rule 2026-02-24
+ * - Targets coins with >5% daily move + decent volume ($500K-$50M)
+ * - Position sizing: risk max 1.5% of portfolio per trade
+ * - Scale out: 50% at 2x ATR, trail rest at 2x ATR from high
+ * - Max 3 concurrent positions, 50% max exposure
+ * - Hold max 2h, circuit breaker after 3 consecutive losses
  *
  * Skills: crypto_auto.tick, crypto_auto.status, crypto_auto.toggle, crypto_auto.signals
  */
@@ -14,223 +19,375 @@ import { log } from "../../utils/log.js";
 
 // ─── Configuration ───
 
-const COINS = ["bitcoin", "ethereum", "solana", "binancecoin"] as const;
-const SYMBOL_MAP: Record<string, string> = {
-  bitcoin: "BTC", ethereum: "ETH", solana: "SOL", binancecoin: "BNB",
-};
+// Discovery filters
+const MIN_24H_CHANGE = 5;           // Min 5% daily move
+const MIN_QUOTE_VOLUME = 2_000_000;  // Min $2M daily USDT volume (raised from $500K — filters illiquid coins like ELF)
+const MAX_QUOTE_VOLUME = 50_000_000;// Max $50M (skip mega-caps)
+const EXCLUDED_BASES = new Set([
+  "USDC", "BUSD", "TUSD", "DAI", "FDUSD", "USDD", "USDP",   // stablecoins
+  "WBTC", "WETH", "STETH", "WBETH", "CBETH",                  // wrapped
+]);
 
-const MAX_POSITIONS = 2;
-const MAX_BUDGET_PCT = 0.30;   // 30% of capital per trade
-const STOP_LOSS_PCT = -0.03;   // -3%
-const TAKE_PROFIT_PCT = 0.05;  // +5%
-const TRAILING_TRIGGER = 0.03; // Activate trailing after +3%
-const TRAILING_DROP = 0.02;    // Trailing stop triggers at 2% below peak
-const MAX_HOLD_MS = 6 * 60 * 60 * 1000; // 6 hours
-const MAX_DAILY_LOSS_PCT = -0.05; // -5% daily
+// ATR
+const ATR_PERIOD = 14;
+const ATR_INTERVAL = "1h";
+const MIN_ATR_PCT = 0.5;
+const MAX_ATR_PCT = 20;
+
+// Risk
+const RISK_PER_TRADE = 0.015;     // 1.5% portfolio risk per trade
+const MAX_POSITIONS = 3;
+const MAX_EXPOSURE_PCT = 0.50;    // 50% of portfolio max
+const STOP_ATR_MULT = 1.5;       // SL at 1.5x ATR
+const TP_ATR_MULT = 3.0;         // TP at 3x ATR
+const SCALE_OUT_ATR = 2.0;       // Scale out 50% at 2x ATR
+const TRAILING_ATR_MULT = 2.0;   // Trail at 2x ATR from high
+
+// Time
+const MAX_HOLD_MS = 2 * 60 * 60 * 1000; // 2 hours (micro-caps are pump-and-dump prone)
+const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24h cooldown per symbol after exit (prevents ELF-style re-entry loops)
+const MIN_RSI_DELTA = 3;  // RSI must rise by at least +3 points — "faut qu'il y ait du gaz dans la tank" (Nicolas, 26 fév)
+
+// Circuit breakers
+const MAX_DAILY_LOSS_PCT = -0.05;
 const CIRCUIT_BREAKER_LOSSES = 3;
-const MIN_BUY_CONFIDENCE = 40;
-const MAX_HISTORY = 120; // ~10h at 5min intervals
+const MIN_BUY_SCORE = 6;         // Minimum 6/10 to enter (Nicolas scoring system 2026-02-26)
+const CANDIDATE_LIMIT = 10;
+const MAX_SIGNALS = 50;
 
-// ─── In-Memory State ───
+// ─── Types ───
 
-interface PricePoint {
-  ts: number;
+interface Candidate {
+  symbol: string;       // "DOGEUSDT"
+  base: string;         // "DOGE"
   price: number;
-  vol24h: number;
   change24h: number;
+  volume24h: number;    // USDT volume
+  atr: number;
+  atrPct: number;
+  rsi: number | null;
+  rsiPrev: number | null;  // RSI 3 candles ago — for slope detection
+  volTrend: number;     // ratio of last candle volume vs average (>1 = above avg)
 }
 
-interface TradeSignal {
+interface PosMeta {
+  atr: number;
+  stopPrice: number;
+  tpPrice: number;
+  scaleOutPrice: number;
+  scaledOut: boolean;
+  highWater: number;
+}
+
+interface Signal {
   ts: number;
-  coinId: string;
   symbol: string;
-  action: "BUY" | "SELL" | "SL" | "TP" | "TRAILING" | "TIME_STOP";
+  action: string;
   confidence: number;
   reason: string;
   price: number;
   executed: boolean;
 }
 
-const priceHistory: Record<string, PricePoint[]> = {};
-const highWatermarks: Record<string, number> = {}; // symbol → highest price since entry
-const recentSignals: TradeSignal[] = [];
-const MAX_SIGNALS = 50;
+// ─── State ───
 
+const posMeta: Record<string, PosMeta> = {};
+const cooldownMap: Record<string, number> = {}; // symbol → timestamp of last close (prevents re-entry loops)
+const signals: Signal[] = [];
 let enabled = true;
-let consecutiveLosses = 0;
+let scanOnly = false; // LIVE mode — Nicolas approved 2026-02-22
+let consLosses = 0;
 let dailyPnl = 0;
 let dailyDate = "";
 let lastTickTs = 0;
+let lastCandidates: Candidate[] = [];
 
 // ─── Helpers ───
 
 function fmt(n: number, d = 2): string {
   return n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
+function fmtPnl(n: number): string { return `${n >= 0 ? "+" : ""}$${fmt(n)}`; }
 
-function fmtPnl(n: number): string {
-  return `${n >= 0 ? "+" : ""}$${fmt(n)}`;
-}
-
-function nowET(): { hour: number; dateStr: string } {
+function nowET() {
   const d = new Date();
   const hour = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", hour: "numeric", hour12: false }).format(d));
   const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(d);
   return { hour, dateStr };
 }
 
-async function sendAlert(text: string): Promise<void> {
+async function alert(text: string) {
   try {
     const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.ADMIN_CHAT_ID;
     const token = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN;
     if (!chatId || !token) return;
-    // Try Markdown, fallback to plain text
     for (const pm of ["Markdown", undefined] as const) {
       const body: Record<string, unknown> = { chat_id: chatId, text };
       if (pm) body.parse_mode = pm;
-      const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10_000),
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
       });
-      if (resp.ok) return;
-      if (pm && resp.status === 400) continue; // Markdown failed, retry plain
+      if (r.ok) return;
+      if (pm && r.status === 400) continue;
       return;
     }
-  } catch (e) {
-    log.warn(`[crypto_auto] Alert send failed: ${e}`);
-  }
+  } catch {}
 }
 
-function addSignal(s: TradeSignal): void {
-  recentSignals.unshift(s);
-  if (recentSignals.length > MAX_SIGNALS) recentSignals.length = MAX_SIGNALS;
+function addSignal(s: Signal) {
+  signals.unshift(s);
+  if (signals.length > MAX_SIGNALS) signals.length = MAX_SIGNALS;
 }
 
-// ─── Price Fetching ───
+// ─── Market Scanning (Binance public API — no auth) ───
 
-async function fetchPrices(): Promise<Record<string, PricePoint>> {
-  const ids = COINS.join(",");
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_vol=true&include_24hr_change=true`;
-  const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!resp.ok) throw new Error(`CoinGecko ${resp.status}`);
-  const data = await resp.json();
-  const now = Date.now();
-  const result: Record<string, PricePoint> = {};
-  for (const coinId of COINS) {
-    if (data[coinId]) {
-      result[coinId] = {
-        ts: now,
-        price: data[coinId].usd,
-        vol24h: data[coinId].usd_24h_vol || 0,
-        change24h: data[coinId].usd_24h_change || 0,
-      };
+async function scanMarket(): Promise<Candidate[]> {
+  const url = "https://api.binance.com/api/v3/ticker/24hr";
+  const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!resp.ok) throw new Error(`Binance ticker ${resp.status}`);
+  const tickers = await resp.json() as any[];
+
+  // Filter USDT pairs with big moves and decent volume
+  const raw = tickers
+    .filter((t: any) => {
+      const sym = String(t.symbol);
+      if (!sym.endsWith("USDT")) return false;
+      const base = sym.replace("USDT", "");
+      if (EXCLUDED_BASES.has(base)) return false;
+      const chg = parseFloat(t.priceChangePercent);
+      const vol = parseFloat(t.quoteVolume);
+      // Only positive movers (we go long only) with real volume
+      return chg >= MIN_24H_CHANGE && vol >= MIN_QUOTE_VOLUME && vol <= MAX_QUOTE_VOLUME;
+    })
+    .map((t: any) => ({
+      symbol: String(t.symbol),
+      base: String(t.symbol).replace("USDT", ""),
+      price: parseFloat(t.lastPrice),
+      change24h: parseFloat(t.priceChangePercent),
+      volume24h: parseFloat(t.quoteVolume),
+      atr: 0, atrPct: 0, rsi: null as number | null, rsiPrev: null as number | null, volTrend: 1,
+    }))
+    .sort((a, b) => b.change24h - a.change24h) // Biggest gainers first
+    .slice(0, CANDIDATE_LIMIT * 2);
+
+  // Fetch ATR for top candidates (batches of 5)
+  const result: Candidate[] = [];
+  for (let i = 0; i < raw.length; i += 5) {
+    const batch = raw.slice(i, i + 5);
+    const settled = await Promise.allSettled(batch.map(async (c) => {
+      const data = await fetchATR(c.symbol);
+      if (data) {
+        c.atr = data.atr;
+        c.atrPct = (data.atr / c.price) * 100;
+        c.rsi = data.rsi;
+        c.rsiPrev = data.rsiPrev;
+        c.volTrend = data.volTrend;
+      }
+      return c;
+    }));
+    for (const r of settled) {
+      if (r.status === "fulfilled" && r.value.atr > 0
+          && r.value.atrPct >= MIN_ATR_PCT && r.value.atrPct <= MAX_ATR_PCT) {
+        result.push(r.value);
+      }
     }
+    if (result.length >= CANDIDATE_LIMIT) break;
   }
-  return result;
+  return result.slice(0, CANDIDATE_LIMIT);
 }
 
-function recordPrices(prices: Record<string, PricePoint>): void {
-  for (const [coinId, pp] of Object.entries(prices)) {
-    if (!priceHistory[coinId]) priceHistory[coinId] = [];
-    priceHistory[coinId].push(pp);
-    if (priceHistory[coinId].length > MAX_HISTORY) {
-      priceHistory[coinId] = priceHistory[coinId].slice(-MAX_HISTORY);
+async function fetchATR(symbol: string): Promise<{ atr: number; rsi: number | null; rsiPrev: number | null; volTrend: number } | null> {
+  try {
+    // Fetch 30 candles to have enough data for RSI slope (current vs 3 candles ago)
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${ATR_INTERVAL}&limit=30`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    if (!resp.ok) return null;
+    const klines = await resp.json() as any[];
+    if (klines.length < ATR_PERIOD + 1) return null;
+
+    // ATR = average of True Range over ATR_PERIOD
+    const trs: number[] = [];
+    for (let i = 1; i < klines.length; i++) {
+      const h = parseFloat(klines[i][2]);
+      const l = parseFloat(klines[i][3]);
+      const pc = parseFloat(klines[i - 1][4]);
+      trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
     }
-  }
+    const atr = trs.slice(-ATR_PERIOD).reduce((a, b) => a + b, 0) / ATR_PERIOD;
+
+    // RSI helper — calculates RSI from a slice of closes
+    const calcRsi = (closes: number[]): number | null => {
+      if (closes.length < 15) return null;
+      let avgG = 0, avgL = 0;
+      for (let i = closes.length - 14; i < closes.length; i++) {
+        const d = closes[i] - closes[i - 1];
+        if (d > 0) avgG += d; else avgL += Math.abs(d);
+      }
+      avgG /= 14; avgL /= 14;
+      return avgL === 0 ? 100 : 100 - (100 / (1 + avgG / avgL));
+    };
+
+    const closes = klines.map((k: any) => parseFloat(k[4]));
+    // Current RSI (all closes)
+    const rsi = calcRsi(closes);
+    // RSI 3 candles ago (drop last 3 closes)
+    const rsiPrev = closes.length >= 18 ? calcRsi(closes.slice(0, -3)) : null;
+
+    // Volume trend: last candle volume vs average of prior candles
+    const volumes = klines.map((k: any) => parseFloat(k[5])); // base asset volume
+    const avgVol = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
+    const lastVol = volumes[volumes.length - 1];
+    const volTrend = avgVol > 0 ? lastVol / avgVol : 1;
+
+    return { atr, rsi, rsiPrev, volTrend };
+  } catch { return null; }
 }
 
-// ─── Technical Indicators ───
+// ─── Strategy ───
 
-function calcSMA(prices: number[], period: number): number | null {
-  if (prices.length < period) return null;
-  const slice = prices.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
-
-function calcRSI(prices: number[], period = 14): number | null {
-  if (prices.length < period + 1) return null;
-  let avgGain = 0, avgLoss = 0;
-  for (let i = prices.length - period; i < prices.length; i++) {
-    const change = prices[i] - prices[i - 1];
-    if (change > 0) avgGain += change; else avgLoss += Math.abs(change);
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  if (avgLoss === 0) return 100;
-  return 100 - (100 / (1 + avgGain / avgLoss));
-}
-
-function findSupport(prices: number[]): number {
-  if (prices.length < 5) return prices[prices.length - 1] || 0;
-  const sorted = [...prices].sort((a, b) => a - b);
-  const lowCount = Math.max(2, Math.floor(sorted.length * 0.1));
-  return sorted.slice(0, lowCount).reduce((a, b) => a + b, 0) / lowCount;
-}
-
-// ─── Strategy Engine ───
-
-interface BuySignal {
-  coinId: string;
-  symbol: string;
-  confidence: number;
-  reason: string;
-  price: number;
-}
-
-function evaluateBuySignal(coinId: string): BuySignal | null {
-  const history = priceHistory[coinId];
-  if (!history || history.length < 21) return null;
-
-  const prices = history.map(h => h.price);
-  const current = history[history.length - 1];
-  const symbol = SYMBOL_MAP[coinId] || coinId.toUpperCase();
-
-  const ma20 = calcSMA(prices, 20);
-  const rsi = calcRSI(prices);
-  const support = findSupport(prices.slice(-50));
-  const avgVol = history.slice(-20).reduce((s, h) => s + h.vol24h, 0) / 20;
-  const volRatio = avgVol > 0 ? current.vol24h / avgVol : 1;
-
+/**
+ * Kingston Confidence Score — 0 to 10 (Nicolas system, 2026-02-26)
+ *
+ * | Factor           | Max  | Logic                                              |
+ * |------------------|------|----------------------------------------------------|
+ * | Momentum         | 2.0  | Sweet spot 5-15% = 2, hot 15-30% = 1, pump = 0.5  |
+ * | RSI Zone         | 2.0  | 40-65 rising = 2, reversal = 1.5, warm = 1, OB = 0 |
+ * | RSI Delta        | 1.5  | +8 = 1.5, +5 = 1, +3 = 0.5                        |
+ * | Volume (24h)     | 1.5  | >$10M = 1.5, >$5M = 1, >$2M = 0.5                 |
+ * | ATR Quality      | 1.0  | 2-8% = 1, else 0.5                                 |
+ * | Volume Trend     | 1.0  | Last candle vol > avg = 1, else 0                  |
+ * | Risk/Reward      | 1.0  | TP/SL ratio > 2 = 1, > 1.5 = 0.5                  |
+ * | TOTAL            | 10.0 | Min 6/10 to enter                                  |
+ */
+function evaluate(c: Candidate): { confidence: number; score: number; breakdown: string; reason: string } | null {
   let score = 0;
-  const reasons: string[] = [];
+  const parts: string[] = [];  // detailed breakdown
+  const why: string[] = [];     // compact reason
 
-  // Breakout: price > MA20 + volume > 1.5x + RSI < 70
-  if (ma20 && current.price > ma20 * 1.01) {
-    score += 15;
-    reasons.push(`Prix > MA20 (${fmt(ma20)})`);
-    if (volRatio > 1.5) {
-      score += 15;
-      reasons.push(`Volume ${fmt(volRatio, 1)}x`);
-    }
-    if (rsi !== null && rsi < 70) {
-      score += 10;
-      reasons.push(`RSI ${fmt(rsi, 0)} < 70`);
-    }
+  // ── HARD FILTERS (instant reject) ──
+
+  // RSI must exist
+  if (c.rsi === null) return null;
+
+  const rsiDelta = c.rsiPrev !== null ? c.rsi - c.rsiPrev : 0;
+  const rsiRising = c.rsiPrev !== null && c.rsi > c.rsiPrev;
+
+  // RSI must be rising
+  if (!rsiRising) return null;
+  // RSI delta must be >= MIN_RSI_DELTA
+  if (rsiDelta < MIN_RSI_DELTA) return null;
+
+  // ── FACTOR 1: Momentum (0-2 pts) ──
+  if (c.change24h >= 5 && c.change24h <= 15) {
+    score += 2;
+    parts.push(`Mom:2.0`);
+    why.push(`+${fmt(c.change24h, 1)}% 24h`);
+  } else if (c.change24h > 15 && c.change24h <= 30) {
+    score += 1;
+    parts.push(`Mom:1.0`);
+    why.push(`+${fmt(c.change24h, 1)}% (hot)`);
+  } else if (c.change24h > 30) {
+    score += 0.5;
+    parts.push(`Mom:0.5`);
+    why.push(`+${fmt(c.change24h, 1)}% (pump?)`);
   }
 
-  // Dip buy: price < support -2% + RSI < 30
-  if (current.price < support * 0.98 && rsi !== null && rsi < 30) {
-    score += 50;
-    reasons.push(`Dip: prix ${fmt(current.price)} < support ${fmt(support)} -2%, RSI ${fmt(rsi, 0)}`);
+  // ── FACTOR 2: RSI Zone (0-2 pts) ──
+  if (c.rsi >= 40 && c.rsi <= 65) {
+    score += 2;
+    parts.push(`RSI:2.0`);
+    why.push(`RSI ${fmt(c.rsi, 0)}\u2191`);
+  } else if (c.rsi < 40) {
+    score += 1.5; // rising from oversold = reversal
+    parts.push(`RSI:1.5`);
+    why.push(`RSI ${fmt(c.rsi, 0)}\u2191 rev`);
+  } else if (c.rsi > 65 && c.rsi <= 75) {
+    score += 1;
+    parts.push(`RSI:1.0`);
+    why.push(`RSI ${fmt(c.rsi, 0)}\u2191 warm`);
+  } else if (c.rsi > 75) {
+    score += 0; // overbought = no points
+    parts.push(`RSI:0`);
+    why.push(`RSI ${fmt(c.rsi, 0)}\u2191 OB`);
   }
 
-  // Momentum bonus: 24h change positive
-  if (current.change24h > 3) {
-    score += 5;
-    reasons.push(`Momentum +${fmt(current.change24h, 1)}% 24h`);
+  // ── FACTOR 3: RSI Delta / Momentum Strength (0-1.5 pts) ──
+  if (rsiDelta >= 8) {
+    score += 1.5;
+    parts.push(`\u0394RSI:1.5`);
+  } else if (rsiDelta >= 5) {
+    score += 1;
+    parts.push(`\u0394RSI:1.0`);
+  } else if (rsiDelta >= MIN_RSI_DELTA) {
+    score += 0.5;
+    parts.push(`\u0394RSI:0.5`);
+  }
+  why.push(`\u0394+${fmt(rsiDelta, 1)}`);
+
+  // ── FACTOR 4: Volume 24h (0-1.5 pts) ──
+  if (c.volume24h >= 10_000_000) {
+    score += 1.5;
+    parts.push(`Vol:1.5`);
+  } else if (c.volume24h >= 5_000_000) {
+    score += 1;
+    parts.push(`Vol:1.0`);
+  } else {
+    score += 0.5;
+    parts.push(`Vol:0.5`);
+  }
+  why.push(`Vol $${fmt(c.volume24h / 1e6, 1)}M`);
+
+  // ── FACTOR 5: ATR Quality (0-1 pt) ──
+  if (c.atrPct >= 2 && c.atrPct <= 8) {
+    score += 1;
+    parts.push(`ATR:1.0`);
+  } else {
+    score += 0.5;
+    parts.push(`ATR:0.5`);
+  }
+  why.push(`ATR ${fmt(c.atrPct, 1)}%`);
+
+  // ── FACTOR 6: Volume Trend (0-1 pt) ──
+  if (c.volTrend > 1.2) {
+    score += 1;
+    parts.push(`VT:1.0`);
+  } else if (c.volTrend > 0.8) {
+    score += 0.5;
+    parts.push(`VT:0.5`);
+  } else {
+    parts.push(`VT:0`);
   }
 
-  if (score >= MIN_BUY_CONFIDENCE) {
-    return { coinId, symbol, confidence: score, reason: reasons.join("; "), price: current.price };
+  // ── FACTOR 7: Risk/Reward Setup (0-1 pt) ──
+  const stopDist = STOP_ATR_MULT * c.atr;
+  const tpDist = TP_ATR_MULT * c.atr;
+  const rrRatio = stopDist > 0 ? tpDist / stopDist : 0;
+  if (rrRatio >= 2) {
+    score += 1;
+    parts.push(`RR:1.0`);
+  } else if (rrRatio >= 1.5) {
+    score += 0.5;
+    parts.push(`RR:0.5`);
+  } else {
+    parts.push(`RR:0`);
   }
-  return null;
+
+  // Round to 1 decimal
+  score = Math.round(score * 10) / 10;
+
+  const breakdown = `[${score}/10] ${parts.join(" ")}`;
+  const reason = why.join("; ");
+
+  // Confidence 0-100 mapped from 0-10 for backward compat
+  const confidence = Math.round(score * 10);
+
+  return score >= MIN_BUY_SCORE ? { confidence, score, breakdown, reason } : null;
 }
 
-// ─── Position Management ───
+// ─── DB ───
 
-function getOpenPositions(): any[] {
+function openPositions(): any[] {
   return getDb().prepare("SELECT * FROM crypto_paper_positions WHERE status = 'open' ORDER BY opened_at DESC").all();
 }
 
@@ -239,124 +396,155 @@ function getAccount(): { balance: number; initial_balance: number } {
   let acc = d.prepare("SELECT * FROM crypto_paper_account WHERE id = 1").get() as any;
   if (!acc) {
     d.prepare("INSERT INTO crypto_paper_account (id, balance, initial_balance) VALUES (1, 10000.0, 10000.0)").run();
-    acc = { id: 1, balance: 10000.0, initial_balance: 10000.0 };
+    acc = { balance: 10000.0, initial_balance: 10000.0 };
   }
   return acc;
 }
 
-type ExitReason = "SL" | "TP" | "TRAILING" | "TIME_STOP" | "RSI_OVERBOUGHT" | null;
+// ─── Execution ───
 
-function checkExit(pos: any, currentPrice: number, coinId: string): ExitReason {
-  const pnlPct = (currentPrice - pos.avg_price) / pos.avg_price;
-  const holdMs = Date.now() - (pos.opened_at * 1000);
-  const symbol = pos.symbol;
-
-  // Update high watermark
-  if (!highWatermarks[symbol] || currentPrice > highWatermarks[symbol]) {
-    highWatermarks[symbol] = currentPrice;
-  }
-
-  // Hard stop-loss: -3%
-  if (pnlPct <= STOP_LOSS_PCT) return "SL";
-
-  // Take-profit: +5%
-  if (pnlPct >= TAKE_PROFIT_PCT) return "TP";
-
-  // Trailing stop: triggered after +3%, closes at 2% below peak
-  if (pnlPct >= TRAILING_TRIGGER && highWatermarks[symbol]) {
-    const dropFromPeak = (currentPrice - highWatermarks[symbol]) / highWatermarks[symbol];
-    if (dropFromPeak <= -TRAILING_DROP) return "TRAILING";
-  }
-
-  // Time stop: max 6h
-  if (holdMs >= MAX_HOLD_MS) return "TIME_STOP";
-
-  // RSI overbought
-  const history = priceHistory[coinId];
-  if (history && history.length >= 15) {
-    const rsi = calcRSI(history.map(h => h.price));
-    if (rsi !== null && rsi > 80) return "RSI_OVERBOUGHT";
-  }
-
-  return null;
-}
-
-// ─── Trade Execution ───
-
-function executeBuy(coinId: string, price: number, reason: string, confidence: number): string {
+function buyExec(c: Candidate, conf: number, reason: string, scoreInfo?: { score: number; breakdown: string }): string {
   const d = getDb();
   const acc = getAccount();
-  const symbol = coinId;
-  const displaySymbol = SYMBOL_MAP[coinId] || coinId.toUpperCase();
 
-  const maxBudget = acc.initial_balance * MAX_BUDGET_PCT;
-  const amount = Math.min(maxBudget, acc.balance * 0.9); // Keep 10% cash buffer
-  if (amount < 10) return `Skip ${displaySymbol}: insufficient cash ($${fmt(acc.balance)})`;
+  // ATR-based sizing: risk / stop_distance
+  const riskAmt = acc.balance * RISK_PER_TRADE;
+  const stopDist = STOP_ATR_MULT * c.atr;
+  if (stopDist <= 0) return `Skip ${c.base}: ATR zero`;
+  const maxQty = riskAmt / stopDist;
+  const amount = Math.min(maxQty * c.price, acc.balance * MAX_EXPOSURE_PCT / MAX_POSITIONS);
 
-  const quantity = amount / price;
+  if (amount < 10) return `Skip ${c.base}: cash $${fmt(acc.balance)}`;
+  if (amount > acc.balance * 0.95) return `Skip ${c.base}: exceeds cash`;
 
-  // Record trade
-  d.prepare(
-    "INSERT INTO crypto_paper_trades (symbol, side, quantity, price, total, reasoning) VALUES (?, 'buy', ?, ?, ?, ?)"
-  ).run(symbol, quantity, price, amount, `[AUTO] ${reason}`);
+  const qty = amount / c.price;
+  const stopP = c.price - stopDist;
+  const tpP = c.price + (TP_ATR_MULT * c.atr);
+  const scaleP = c.price + (SCALE_OUT_ATR * c.atr);
 
-  // Create position
-  d.prepare(
-    "INSERT INTO crypto_paper_positions (symbol, quantity, avg_price, current_price, status) VALUES (?, ?, ?, ?, 'open')"
-  ).run(symbol, quantity, price, price);
+  const scoreTag = scoreInfo ? ` | Score: ${scoreInfo.score}/10` : "";
+  const scoreBreakdown = scoreInfo ? ` ${scoreInfo.breakdown}` : "";
 
-  // Deduct cash
+  d.prepare("INSERT INTO crypto_paper_trades (symbol, side, quantity, price, total, reasoning) VALUES (?, 'buy', ?, ?, ?, ?)")
+    .run(c.symbol, qty, c.price, amount, `[MCM] ${reason}${scoreTag} | SL $${fmt(stopP)} TP $${fmt(tpP)}`);
+  d.prepare("INSERT INTO crypto_paper_positions (symbol, quantity, avg_price, current_price, status) VALUES (?, ?, ?, ?, 'open')")
+    .run(c.symbol, qty, c.price, c.price);
   d.prepare("UPDATE crypto_paper_account SET balance = balance - ?, updated_at = unixepoch() WHERE id = 1").run(amount);
 
-  // Set high watermark
-  highWatermarks[symbol] = price;
+  posMeta[c.symbol] = { atr: c.atr, stopPrice: stopP, tpPrice: tpP, scaleOutPrice: scaleP, scaledOut: false, highWater: c.price };
 
-  const msg = `🟢 *CRYPTO AUTO-BUY*\n${displaySymbol} — ${fmt(quantity, 6)} @ $${fmt(price)}\nTotal: $${fmt(amount)}\nConfidence: ${confidence}%\nRaison: ${reason}`;
-  log.info(`[crypto_auto] BUY ${displaySymbol} ${fmt(quantity, 6)} @ $${fmt(price)} = $${fmt(amount)}`);
-  addSignal({ ts: Date.now(), coinId, symbol: displaySymbol, action: "BUY", confidence, reason, price, executed: true });
-  sendAlert(msg).catch(() => {});
+  const msg = `🟢 *MCM BUY ${c.base}* ${scoreInfo ? `(${scoreInfo.score}/10)` : ""}\n${fmt(qty, 4)} @ $${fmt(c.price)} = $${fmt(amount)}\nATR: ${fmt(c.atrPct, 1)}% | SL: $${fmt(stopP)} | TP: $${fmt(tpP)}\nScale 50% @ $${fmt(scaleP)}\n${reason}${scoreBreakdown}`;
+  log.info(`[crypto_auto] MCM BUY ${c.base} ${fmt(qty, 4)} @ $${fmt(c.price)} Score=${scoreInfo?.score || "?"}/10`);
+  addSignal({ ts: Date.now(), symbol: c.base, action: "BUY", confidence: conf, reason: `${scoreInfo?.score || "?"}/10 ${reason}`, price: c.price, executed: true });
+  alert(msg).catch(() => {});
   return msg;
 }
 
-function executeSell(pos: any, currentPrice: number, exitReason: ExitReason): string {
+function scaleOut(pos: any, price: number): string {
   const d = getDb();
-  const coinId = pos.symbol;
-  const displaySymbol = SYMBOL_MAP[coinId] || coinId.toUpperCase();
-  const proceeds = pos.quantity * currentPrice;
+  const sym = pos.symbol;
+  const base = sym.replace("USDT", "");
+  const meta = posMeta[sym];
+  if (!meta) return "";
+
+  const sellQty = pos.quantity * 0.5;
+  const proceeds = sellQty * price;
+  const pnl = proceeds - (sellQty * pos.avg_price);
+  const pnlPct = (pnl / (sellQty * pos.avg_price)) * 100;
+
+  d.prepare("INSERT INTO crypto_paper_trades (symbol, side, quantity, price, total, reasoning) VALUES (?, 'sell', ?, ?, ?, ?)")
+    .run(sym, sellQty, price, proceeds, `[MCM-SCALE] 50% P&L: ${fmtPnl(pnl)}`);
+  d.prepare("UPDATE crypto_paper_positions SET quantity = quantity - ?, current_price = ?, updated_at = unixepoch() WHERE id = ?")
+    .run(sellQty, price, pos.id);
+  d.prepare("UPDATE crypto_paper_account SET balance = balance + ?, updated_at = unixepoch() WHERE id = 1").run(proceeds);
+
+  meta.scaledOut = true;
+  meta.stopPrice = pos.avg_price; // Move stop to breakeven
+  meta.highWater = price;
+  dailyPnl += pnl;
+
+  const msg = `💰 *SCALE OUT 50% ${base}*\n@ $${fmt(price)} | P&L: ${fmtPnl(pnl)} (${fmt(pnlPct)}%)\nRest: ${fmt(pos.quantity - sellQty, 4)} trailing`;
+  log.info(`[crypto_auto] SCALE ${base} 50% @ $${fmt(price)} P&L: ${fmtPnl(pnl)}`);
+  addSignal({ ts: Date.now(), symbol: base, action: "SCALE_OUT", confidence: 100, reason: `${fmtPnl(pnl)}`, price, executed: true });
+  alert(msg).catch(() => {});
+  return msg;
+}
+
+function sellExec(pos: any, price: number, reason: string): string {
+  if (reason === "SCALE_OUT") return scaleOut(pos, price);
+
+  const d = getDb();
+  const sym = pos.symbol;
+  const base = sym.replace("USDT", "");
+  const proceeds = pos.quantity * price;
   const cost = pos.quantity * pos.avg_price;
   const pnl = proceeds - cost;
   const pnlPct = (pnl / cost) * 100;
 
-  // Record trade
-  d.prepare(
-    "INSERT INTO crypto_paper_trades (symbol, side, quantity, price, total, reasoning) VALUES (?, 'sell', ?, ?, ?, ?)"
-  ).run(coinId, pos.quantity, currentPrice, proceeds, `[AUTO-${exitReason}] P&L: ${fmtPnl(pnl)} (${pnlPct >= 0 ? "+" : ""}${fmt(pnlPct)}%)`);
-
-  // Close position
-  d.prepare(
-    "UPDATE crypto_paper_positions SET status = 'closed', current_price = ?, pnl = ?, pnl_percent = ?, updated_at = unixepoch() WHERE id = ?"
-  ).run(currentPrice, pnl, pnlPct, pos.id);
-
-  // Add cash
+  d.prepare("INSERT INTO crypto_paper_trades (symbol, side, quantity, price, total, reasoning) VALUES (?, 'sell', ?, ?, ?, ?)")
+    .run(sym, pos.quantity, price, proceeds, `[MCM-${reason}] P&L: ${fmtPnl(pnl)} (${fmt(pnlPct)}%)`);
+  d.prepare("UPDATE crypto_paper_positions SET status = 'closed', current_price = ?, pnl = ?, pnl_percent = ?, updated_at = unixepoch() WHERE id = ?")
+    .run(price, pnl, pnlPct, pos.id);
   d.prepare("UPDATE crypto_paper_account SET balance = balance + ?, updated_at = unixepoch() WHERE id = 1").run(proceeds);
 
-  // Track daily P&L and consecutive losses
   dailyPnl += pnl;
-  if (pnl < 0) {
-    consecutiveLosses++;
-  } else {
-    consecutiveLosses = 0;
+  if (pnl < 0) consLosses++; else consLosses = 0;
+  delete posMeta[sym];
+  cooldownMap[sym] = Date.now(); // 24h cooldown — prevents re-entry loops (ELF bug fix)
+
+  const e = reason === "TP" || reason === "TRAILING" ? "💰" : reason === "SL" ? "🚨" : "🔴";
+  const msg = `${e} *SELL ${base} (${reason})*\n${fmt(pos.quantity, 4)} @ $${fmt(price)}\nP&L: ${fmtPnl(pnl)} (${fmt(pnlPct)}%)\nDaily: ${fmtPnl(dailyPnl)}`;
+  log.info(`[crypto_auto] SELL ${base} ${reason} P&L: ${fmtPnl(pnl)}`);
+  addSignal({ ts: Date.now(), symbol: base, action: reason, confidence: 100, reason: fmtPnl(pnl), price, executed: true });
+  alert(msg).catch(() => {});
+  return msg;
+}
+
+// ─── Exit Logic ───
+
+function checkExit(pos: any, price: number): string | null {
+  const sym = pos.symbol;
+  const meta = posMeta[sym];
+
+  if (!meta) {
+    // Legacy position — simple % stops
+    const pnl = (price - pos.avg_price) / pos.avg_price;
+    if (pnl <= -0.05) return "SL";
+    if (pnl >= 0.10) return "TP";
+    const hold = Date.now() - (pos.opened_at * 1000);
+    if (hold >= MAX_HOLD_MS) return "TIME_STOP";
+    return null;
   }
 
-  // Clean up watermark
-  delete highWatermarks[coinId];
+  if (price > meta.highWater) meta.highWater = price;
 
-  const emoji = exitReason === "TP" || exitReason === "TRAILING" ? "💰" : exitReason === "SL" ? "🚨" : "🔴";
-  const msg = `${emoji} *CRYPTO AUTO-SELL (${exitReason})*\n${displaySymbol} — ${fmt(pos.quantity, 6)} @ $${fmt(currentPrice)}\nP&L: ${fmtPnl(pnl)} (${pnlPct >= 0 ? "+" : ""}${fmt(pnlPct)}%)\nDaily P&L: ${fmtPnl(dailyPnl)}`;
-  log.info(`[crypto_auto] SELL ${displaySymbol} ${exitReason} P&L: ${fmtPnl(pnl)}`);
-  addSignal({ ts: Date.now(), coinId, symbol: displaySymbol, action: exitReason as any || "SELL", confidence: 100, reason: `${exitReason}: ${fmtPnl(pnl)}`, price: currentPrice, executed: true });
-  sendAlert(msg).catch(() => {});
-  return msg;
+  // 1. Stop-loss (ATR)
+  if (price <= meta.stopPrice) return "SL";
+  // 2. Take-profit (ATR)
+  if (price >= meta.tpPrice) return "TP";
+  // 3. Scale out at 2x ATR
+  if (!meta.scaledOut && price >= meta.scaleOutPrice) return "SCALE_OUT";
+  // 4. Trailing (after scale-out)
+  if (meta.scaledOut) {
+    const trail = meta.highWater - (TRAILING_ATR_MULT * meta.atr);
+    if (price <= trail) return "TRAILING";
+  }
+  // 5. Time stop
+  const hold = Date.now() - (pos.opened_at * 1000);
+  if (hold >= MAX_HOLD_MS) return "TIME_STOP";
+
+  return null;
+}
+
+// ─── Price fetch for existing positions ───
+
+async function getPrice(symbol: string): Promise<number | null> {
+  try {
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`, { signal: AbortSignal.timeout(5_000) });
+    if (!r.ok) return null;
+    const d = await r.json() as any;
+    return parseFloat(d.price);
+  } catch { return null; }
 }
 
 // ─── Main Tick ───
@@ -365,76 +553,71 @@ async function runTick(): Promise<string> {
   const lines: string[] = [];
   const { dateStr } = nowET();
 
-  // Reset daily counters
-  if (dailyDate !== dateStr) {
-    dailyDate = dateStr;
-    dailyPnl = 0;
-    consecutiveLosses = 0;
-  }
+  if (dailyDate !== dateStr) { dailyDate = dateStr; dailyPnl = 0; consLosses = 0; }
 
-  // Circuit breaker checks
-  if (!enabled) return "[crypto_auto] DISABLED — use crypto_auto.toggle to re-enable.";
-
+  if (!enabled) return "[crypto_auto] DISABLED.";
   const acc = getAccount();
-  const dailyLossPct = dailyPnl / acc.initial_balance;
-  if (dailyLossPct <= MAX_DAILY_LOSS_PCT) {
-    return `[crypto_auto] CIRCUIT BREAKER: daily loss ${fmt(dailyLossPct * 100)}% exceeds -5% limit. Paused until tomorrow.`;
-  }
-  if (consecutiveLosses >= CIRCUIT_BREAKER_LOSSES) {
-    return `[crypto_auto] CIRCUIT BREAKER: ${consecutiveLosses} consecutive losses. Paused until next win or reset.`;
-  }
+  if (dailyPnl / acc.initial_balance <= MAX_DAILY_LOSS_PCT)
+    return `[crypto_auto] CIRCUIT BREAKER: daily ${fmt(dailyPnl / acc.initial_balance * 100)}% < -5%.`;
+  if (consLosses >= CIRCUIT_BREAKER_LOSSES)
+    return `[crypto_auto] CIRCUIT BREAKER: ${consLosses} consecutive losses.`;
 
-  // Fetch prices
-  let prices: Record<string, PricePoint>;
+  // 1. Scan market
+  let candidates: Candidate[];
   try {
-    prices = await fetchPrices();
-    recordPrices(prices);
+    candidates = await scanMarket();
+    lastCandidates = candidates;
   } catch (e) {
-    return `[crypto_auto] Price fetch error: ${e instanceof Error ? e.message : String(e)}`;
+    return `[crypto_auto] Scan error: ${e instanceof Error ? e.message : String(e)}`;
   }
 
-  // 1. Check existing positions for exits
-  const openPositions = getOpenPositions();
-  for (const pos of openPositions) {
-    const coinId = pos.symbol;
-    const currentPrice = prices[coinId]?.price;
-    if (!currentPrice) continue;
+  // 2. Check exits on open positions
+  const positions = openPositions();
+  for (const pos of positions) {
+    const price = await getPrice(pos.symbol);
+    if (!price) continue;
+    getDb().prepare("UPDATE crypto_paper_positions SET current_price = ?, updated_at = unixepoch() WHERE id = ?").run(price, pos.id);
 
-    // Update current price in DB
-    getDb().prepare("UPDATE crypto_paper_positions SET current_price = ?, updated_at = unixepoch() WHERE id = ?")
-      .run(currentPrice, pos.id);
-
-    const exit = checkExit(pos, currentPrice, coinId);
+    const exit = checkExit(pos, price);
     if (exit) {
-      const result = executeSell(pos, currentPrice, exit);
-      lines.push(result);
+      if (scanOnly) {
+        lines.push(`📡 [SCAN] Exit ${pos.symbol.replace("USDT", "")}: ${exit} @ $${fmt(price)}`);
+        addSignal({ ts: Date.now(), symbol: pos.symbol.replace("USDT", ""), action: exit, confidence: 100, reason: `scan-only`, price, executed: false });
+      } else {
+        lines.push(sellExec(pos, price, exit));
+      }
     }
   }
 
-  // 2. Look for new entries (if slots available)
-  const currentPositions = getOpenPositions();
-  if (currentPositions.length < MAX_POSITIONS) {
-    const heldCoins = new Set(currentPositions.map((p: any) => p.symbol));
+  // 3. New entries
+  const current = openPositions();
+  if (current.length < MAX_POSITIONS) {
+    const held = new Set(current.map((p: any) => p.symbol));
+    const invested = current.reduce((s: number, p: any) => s + (p.quantity * (p.current_price || p.avg_price)), 0);
 
-    for (const coinId of COINS) {
-      if (heldCoins.has(coinId)) continue; // Already holding
-      if (currentPositions.length + lines.filter(l => l.includes("AUTO-BUY")).length >= MAX_POSITIONS) break;
+    for (const c of candidates) {
+      if (held.has(c.symbol)) continue;
+      // Cooldown: skip symbols closed within last 24h (prevents TIME_STOP re-entry loops)
+      const cd = cooldownMap[c.symbol];
+      if (cd && (Date.now() - cd) < COOLDOWN_MS) continue;
+      if (current.length >= MAX_POSITIONS) break;
+      if (invested >= acc.initial_balance * MAX_EXPOSURE_PCT) break;
 
-      const signal = evaluateBuySignal(coinId);
-      if (signal) {
-        const result = executeBuy(coinId, signal.price, signal.reason, signal.confidence);
-        lines.push(result);
+      const sig = evaluate(c);
+      if (sig) {
+        if (scanOnly) {
+          lines.push(`📡 [SCAN] Buy ${c.base} @ $${fmt(c.price)} (${sig.score}/10): ${sig.reason} ${sig.breakdown}`);
+          addSignal({ ts: Date.now(), symbol: c.base, action: "BUY", confidence: sig.confidence, reason: `${sig.score}/10 ${sig.reason}`, price: c.price, executed: false });
+        } else {
+          lines.push(buyExec(c, sig.confidence, sig.reason, { score: sig.score, breakdown: sig.breakdown }));
+        }
       }
     }
   }
 
   if (lines.length === 0) {
-    // No trades — just log status
-    const posCount = currentPositions.length;
-    const histLen = priceHistory[COINS[0]]?.length || 0;
-    return `[crypto_auto] Tick OK — ${posCount}/${MAX_POSITIONS} positions, ${histLen}/${MAX_HISTORY} price points, daily P&L: ${fmtPnl(dailyPnl)}`;
+    return `[crypto_auto] Tick OK — ${current.length}/${MAX_POSITIONS} pos, ${candidates.length} candidates, P&L: ${fmtPnl(dailyPnl)}`;
   }
-
   return lines.join("\n\n");
 }
 
@@ -442,59 +625,58 @@ async function runTick(): Promise<string> {
 
 registerSkill({
   name: "crypto_auto.tick",
-  description: "Run one autonomous crypto trading cycle. Fetches prices, evaluates strategy, executes trades. Called by cron every 5 minutes.",
+  description: "Run one MCM crypto trading cycle. Scans Binance for top movers, evaluates ATR-based entries/exits.",
   adminOnly: true,
   argsSchema: { type: "object", properties: {} },
   async execute(): Promise<string> {
-    try {
-      lastTickTs = Date.now();
-      return await runTick();
-    } catch (e) {
-      const msg = `[crypto_auto] Tick error: ${e instanceof Error ? e.message : String(e)}`;
-      log.error(msg);
-      return msg;
-    }
+    try { lastTickTs = Date.now(); return await runTick(); }
+    catch (e) { const m = `[crypto_auto] Error: ${e instanceof Error ? e.message : e}`; log.error(m); return m; }
   },
 });
 
 registerSkill({
   name: "crypto_auto.status",
-  description: "Show autonomous crypto trading status: enabled, positions, daily P&L, indicators, circuit breaker state.",
+  description: "Show MCM crypto trading status: mode, positions with ATR levels, candidates, daily P&L.",
   adminOnly: true,
   argsSchema: { type: "object", properties: {} },
   async execute(): Promise<string> {
     const acc = getAccount();
-    const positions = getOpenPositions();
-    const { dateStr } = nowET();
+    const pos = openPositions();
+    const invested = pos.reduce((s: number, p: any) => s + (p.quantity * (p.current_price || p.avg_price)), 0);
 
     const lines = [
-      `📊 *Crypto Auto-Trading Status*`,
-      `Enabled: ${enabled ? "✅" : "❌"}`,
-      `Cash: $${fmt(acc.balance)} / Initial: $${fmt(acc.initial_balance)}`,
-      `Daily P&L: ${fmtPnl(dailyPnl)} (${dateStr})`,
-      `Consecutive losses: ${consecutiveLosses}/${CIRCUIT_BREAKER_LOSSES}`,
-      `Positions: ${positions.length}/${MAX_POSITIONS}`,
-      `Last tick: ${lastTickTs ? new Date(lastTickTs).toISOString() : "never"}`,
+      `📊 *Crypto MCM Status*`,
+      `Mode: ${enabled ? (scanOnly ? "📡 SCAN-ONLY" : "✅ LIVE") : "❌ OFF"}`,
+      `Cash: $${fmt(acc.balance)} | Invested: $${fmt(invested)} | Initial: $${fmt(acc.initial_balance)}`,
+      `Daily P&L: ${fmtPnl(dailyPnl)} | Losses: ${consLosses}/${CIRCUIT_BREAKER_LOSSES}`,
+      `Positions: ${pos.length}/${MAX_POSITIONS} | Exposure: ${fmt(invested / acc.initial_balance * 100, 0)}%/${MAX_EXPOSURE_PCT * 100}%`,
+      `Last tick: ${lastTickTs ? new Date(lastTickTs).toLocaleTimeString("en-US", { timeZone: "America/Toronto", hour12: false }) : "never"}`,
     ];
 
-    // Position details
-    for (const pos of positions) {
-      const sym = SYMBOL_MAP[pos.symbol] || pos.symbol.toUpperCase();
-      const pnl = pos.current_price ? (pos.current_price - pos.avg_price) * pos.quantity : 0;
-      const pnlPct = pos.avg_price ? ((pos.current_price / pos.avg_price) - 1) * 100 : 0;
-      lines.push(`  ${sym}: ${fmt(pos.quantity, 6)} @ $${fmt(pos.avg_price)} → $${fmt(pos.current_price || 0)} (${fmtPnl(pnl)} / ${pnlPct >= 0 ? "+" : ""}${fmt(pnlPct)}%)`);
+    // Position details with ATR levels
+    for (const p of pos) {
+      const base = p.symbol.replace("USDT", "");
+      const pnl = p.current_price ? (p.current_price - p.avg_price) * p.quantity : 0;
+      const pnlPct = p.avg_price ? ((p.current_price / p.avg_price) - 1) * 100 : 0;
+      const meta = posMeta[p.symbol];
+      let metaStr = "";
+      if (meta) {
+        metaStr = `\n    SL: $${fmt(meta.stopPrice)} | TP: $${fmt(meta.tpPrice)} | Scale: ${meta.scaledOut ? "DONE" : `$${fmt(meta.scaleOutPrice)}`}`;
+        if (meta.scaledOut) metaStr += ` | Trail from $${fmt(meta.highWater)}`;
+      } else {
+        metaStr = "\n    ⚠️ Legacy (no ATR data)";
+      }
+      lines.push(`  ${pnl >= 0 ? "🟢" : "🔴"} ${base}: ${fmt(p.quantity, 4)} @ $${fmt(p.avg_price)} → $${fmt(p.current_price || 0)} (${fmtPnl(pnl)} / ${fmt(pnlPct)}%)${metaStr}`);
     }
 
-    // Indicator status
-    lines.push(`\n📈 *Indicators* (${priceHistory[COINS[0]]?.length || 0} data points):`);
-    for (const coinId of COINS) {
-      const h = priceHistory[coinId];
-      if (!h || h.length < 2) { lines.push(`  ${SYMBOL_MAP[coinId]}: collecting data...`); continue; }
-      const prices = h.map(p => p.price);
-      const ma20 = calcSMA(prices, 20);
-      const rsi = calcRSI(prices);
-      const current = h[h.length - 1];
-      lines.push(`  ${SYMBOL_MAP[coinId]}: $${fmt(current.price)} | MA20: ${ma20 ? `$${fmt(ma20)}` : "N/A"} | RSI: ${rsi ? fmt(rsi, 0) : "N/A"} | Vol: ${fmt(current.vol24h / 1e6, 0)}M | 24h: ${current.change24h >= 0 ? "+" : ""}${fmt(current.change24h, 1)}%`);
+    // Last candidates
+    if (lastCandidates.length > 0) {
+      lines.push(`\n🔍 *Top Movers (${lastCandidates.length}):*`);
+      for (const c of lastCandidates.slice(0, 5)) {
+        const sig = evaluate(c);
+        const rsiDir = (c.rsi !== null && c.rsiPrev !== null) ? (c.rsi > c.rsiPrev ? "\u2191" : "\u2193") : "?";
+        lines.push(`  ${c.base}: $${fmt(c.price)} +${fmt(c.change24h, 1)}% | ATR ${fmt(c.atrPct, 1)}% | RSI ${c.rsi ? fmt(c.rsi, 0) : "?"}${rsiDir} | Vol $${fmt(c.volume24h / 1e6, 1)}M${sig ? ` \u2705 ${sig.score}/10` : ""}`);
+      }
     }
 
     return lines.join("\n");
@@ -503,50 +685,39 @@ registerSkill({
 
 registerSkill({
   name: "crypto_auto.toggle",
-  description: "Enable or disable the autonomous crypto trading system.",
+  description: "Toggle MCM crypto trading: 'on' (live), 'scan' (signals only), 'off' (disabled).",
   adminOnly: true,
-  argsSchema: {
-    type: "object",
-    properties: {
-      state: { type: "string", description: "'on' or 'off'" },
-    },
-    required: ["state"],
-  },
+  argsSchema: { type: "object", properties: { state: { type: "string" } }, required: ["state"] },
   async execute(args): Promise<string> {
-    const state = String(args.state).toLowerCase();
-    if (state === "on" || state === "true" || state === "enable") {
-      enabled = true;
-      consecutiveLosses = 0; // Reset circuit breaker
-      return "✅ Crypto auto-trading ENABLED. Circuit breaker reset.";
+    const s = String(args.state).toLowerCase();
+    if (s === "on" || s === "true" || s === "enable" || s === "live") {
+      enabled = true; scanOnly = false; consLosses = 0;
+      return "✅ MCM crypto LIVE — trades will execute.";
+    } else if (s === "scan" || s === "scan-only" || s === "scanonly") {
+      enabled = true; scanOnly = true;
+      return "📡 MCM crypto SCAN-ONLY — signals but no execution.";
     } else {
       enabled = false;
-      return "❌ Crypto auto-trading DISABLED.";
+      return "❌ MCM crypto DISABLED.";
     }
   },
 });
 
 registerSkill({
   name: "crypto_auto.signals",
-  description: "Show recent trading signals detected by the autonomous crypto system.",
+  description: "Show recent MCM crypto trading signals.",
   adminOnly: true,
-  argsSchema: {
-    type: "object",
-    properties: {
-      limit: { type: "number", description: "Number of signals to show (default 10)" },
-    },
-  },
+  argsSchema: { type: "object", properties: { limit: { type: "number" } } },
   async execute(args): Promise<string> {
     const limit = Number(args.limit) || 10;
-    if (recentSignals.length === 0) return "No signals recorded yet. Wait for a few ticks.";
-
-    const lines = [`📡 *Last ${Math.min(limit, recentSignals.length)} Crypto Signals:*`];
-    for (const s of recentSignals.slice(0, limit)) {
-      const time = new Date(s.ts).toLocaleTimeString("en-US", { timeZone: "America/Toronto", hour12: false });
-      const exec = s.executed ? "✅" : "⏭️";
-      lines.push(`${exec} [${time}] ${s.symbol} ${s.action} @ $${fmt(s.price)} (${s.confidence}%) — ${s.reason}`);
+    if (signals.length === 0) return "No signals yet.";
+    const lines = [`📡 *Last ${Math.min(limit, signals.length)} MCM Signals:*`];
+    for (const s of signals.slice(0, limit)) {
+      const t = new Date(s.ts).toLocaleTimeString("en-US", { timeZone: "America/Toronto", hour12: false });
+      lines.push(`${s.executed ? "✅" : "⏭️"} [${t}] ${s.symbol} ${s.action} @ $${fmt(s.price)} (${s.confidence}) — ${s.reason}`);
     }
     return lines.join("\n");
   },
 });
 
-log.info(`[crypto_auto] Autonomous crypto trading engine loaded (${COINS.length} coins, SL ${STOP_LOSS_PCT * 100}%, TP ${TAKE_PROFIT_PCT * 100}%)`);
+log.info(`[crypto_auto] MCM v3 loaded — Binance scanner, ATR-based, ${MAX_POSITIONS} max pos, ${RISK_PER_TRADE * 100}% risk/trade`);

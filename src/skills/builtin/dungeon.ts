@@ -19,6 +19,7 @@ import {
   dungeonUpdateSession, dungeonDeleteSession,
   dungeonAddCharacter, dungeonGetCharacters, dungeonUpdateCharacter,
   dungeonAddTurn, dungeonGetTurns,
+  dungeonSetAdventure, dungeonGetAdventure, dungeonUpdateAdventure,
   kgUpsertEntity, kgAddRelation, kgGetEntity, kgGetRelations, kgTraverse,
   logEpisodicEvent, recallEvents,
   savedCharCreate, savedCharGet, savedCharList, savedCharUpdate, savedCharDelete,
@@ -410,6 +411,16 @@ function createShadowrunCharacter(name: string, metatype: string, roleName: stri
   };
 }
 
+// ── Phase State (3-phase TTRPG system) ──
+
+interface PhaseState {
+  sessionId: number;
+  phase: "narration" | "strategy" | "action" | "idle";
+  lastNarration: string;
+  strategyMessages: { role: string; content: string }[];
+}
+const activePhases = new Map<number, PhaseState>(); // key = Telegram chatId
+
 // ── Call DM via Ollama ──
 
 async function callDM(systemPrompt: string, userMessage: string, chatId = 400): Promise<string> {
@@ -651,19 +662,126 @@ registerSkill({
 });
 
 registerSkill({
+  name: "dungeon.prep",
+  description: "Prepare a full TTRPG adventure blueprint before playing — generates story beats, map, NPCs, factions",
+  argsSchema: {
+    type: "object",
+    properties: {
+      session_id: { type: "number", description: "Session ID to attach the adventure to" },
+      tone: { type: "string", description: "'dark', 'heroic', or 'humorous' (default: dark)" },
+      run_type: { type: "string", description: "'extraction', 'sabotage', 'escort', 'heist' (default: extraction)" },
+    },
+    required: ["session_id"],
+  },
+  async execute(args) {
+    const sessionId = Number(args.session_id);
+    const session = dungeonGetSession(sessionId);
+    if (!session) return "Session introuvable. Creez une session avec dungeon.start d'abord.";
+
+    const tone = String(args.tone || "dark");
+    const runType = String(args.run_type || "extraction");
+    const isShad = session.ruleset === "shadowrun";
+    const characters = dungeonGetCharacters(sessionId);
+    const pcNames = characters.filter((c: any) => !c.is_npc).map((c: any) => `${c.name} (${c.race} ${c.class})`).join(", ");
+
+    const prepPrompt = `Tu es un Game Master expert pour ${isShad ? "Shadowrun" : "D&D 5e"}.
+Genere un blueprint d'aventure complet au format JSON UNIQUEMENT (pas de texte autour).
+Le JSON doit avoir cette structure exacte:
+{
+  "campaign_name": "nom evocateur de la run/aventure",
+  "hook": "la mission en 2-3 phrases",
+  "story_beats": [
+    {"id": 1, "title": "titre", "description": "description detaillee", "trigger": "ce qui declenche ce beat", "completed": false}
+  ],
+  "map": [
+    {"id": "identifiant", "name": "nom du lieu", "description": "description atmospherique", "connects_to": ["autre_lieu"]}
+  ],
+  "key_npcs": [
+    {"name": "nom", "role": "role dans l'histoire", "attitude": "attitude envers les joueurs", "secret": "secret cache"}
+  ],
+  "factions": [
+    {"name": "nom", "goal": "objectif", "attitude_to_players": "attitude"}
+  ],
+  "ending": "conclusion ideale de l'aventure"
+}
+
+CONTRAINTES:
+- Tone: ${tone}
+- Type de run: ${runType}
+- Setting: ${session.setting || (isShad ? "Seattle 2080" : "Heroic Fantasy")}
+- Joueurs: ${pcNames || "pas encore crees"}
+- 4-6 story beats progressifs
+- 5-8 lieux interconnectes
+- 3-5 NPCs avec des secrets
+- 2-3 factions avec des objectifs conflictuels
+- En FRANCAIS
+
+Reponds UNIQUEMENT avec le JSON, rien d'autre.`;
+
+    // Use Gemini for quality one-shot generation
+    let blueprintText = "";
+    try {
+      const { runGemini } = await import("../../llm/gemini.js");
+      blueprintText = await runGemini({
+        chatId: 450,
+        userMessage: prepPrompt,
+        isAdmin: true,
+        userId: 0,
+      });
+    } catch (err) {
+      log.warn(`[dungeon.prep] Gemini failed, falling back to Ollama: ${err}`);
+      blueprintText = await callDM("", prepPrompt, 450);
+    }
+
+    // Extract JSON from response (handle markdown code blocks)
+    let blueprint: any;
+    try {
+      const jsonMatch = blueprintText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON found in response");
+      blueprint = JSON.parse(jsonMatch[0]);
+    } catch (err) {
+      log.error(`[dungeon.prep] Failed to parse blueprint: ${err}`);
+      return `Erreur de generation du blueprint. Reponse brute:\n\n${blueprintText.slice(0, 500)}`;
+    }
+
+    // Save to DB
+    dungeonSetAdventure(sessionId, blueprint);
+    dungeonUpdateSession(sessionId, { current_phase: "idle" });
+
+    const beatCount = blueprint.story_beats?.length || 0;
+    const mapCount = blueprint.map?.length || 0;
+    const npcCount = blueprint.key_npcs?.length || 0;
+    const factionCount = blueprint.factions?.length || 0;
+
+    return `**Aventure preparee: "${blueprint.campaign_name || "Run Sans Nom"}"**\n\n` +
+      `**Hook:** ${blueprint.hook || "???"}\n\n` +
+      `**Contenu:**\n` +
+      `- ${beatCount} story beats\n` +
+      `- ${mapCount} lieux\n` +
+      `- ${npcCount} NPCs cles\n` +
+      `- ${factionCount} factions\n\n` +
+      `**Story beats:**\n${(blueprint.story_beats || []).map((b: any) => `  ${b.id}. ${b.title}`).join("\n")}\n\n` +
+      `**Lieux:**\n${(blueprint.map || []).map((m: any) => `  - ${m.name}`).join("\n")}\n\n` +
+      `*Utilisez \`dungeon.play\` pour commencer la partie!*`;
+  },
+});
+
+registerSkill({
   name: "dungeon.play",
-  description: "Main TTRPG game loop — your action + optional Kingston co-op turn + DM narrative",
+  description: "Main TTRPG game loop — your action + optional Kingston co-op turn + DM narrative (supports 3-phase flow with strategy discussion)",
   argsSchema: {
     type: "object",
     properties: {
       session_id: { type: "number", description: "Session ID" },
       action: { type: "string", description: "What the player does" },
+      chat_id: { type: "number", description: "Telegram chat ID (for phase tracking)" },
     },
     required: ["session_id", "action"],
   },
   async execute(args) {
     const sessionId = Number(args.session_id);
     const action = String(args.action);
+    const chatId = args.chat_id ? Number(args.chat_id) : 0;
 
     const session = dungeonGetSession(sessionId);
     if (!session) return "Session introuvable. Utilisez dungeon.sessions pour lister les campagnes.";
@@ -675,8 +793,24 @@ registerSkill({
     const aiChar = characters.find((c: any) => c.is_ai && !c.is_npc && c.status === "alive");
     const newTurnNumber = (session.turn_number || 0) + 1;
 
-    // Build DM prompt
-    const systemPrompt = buildDMPrompt(session, characters, recentTurns);
+    // Build DM prompt, enriched with adventure blueprint if available
+    let systemPrompt = buildDMPrompt(session, characters, recentTurns);
+    const adventure = dungeonGetAdventure(sessionId);
+    if (adventure?.blueprint) {
+      const bp = adventure.blueprint;
+      const beatIdx = adventure.current_beat || 0;
+      const activeBeat = bp.story_beats?.[beatIdx];
+      const sceneState = adventure.scene_state || {};
+      let blueprintCtx = "\n\nBLUEPRINT DE L'AVENTURE:";
+      if (bp.hook) blueprintCtx += `\nHook: ${bp.hook}`;
+      if (activeBeat) blueprintCtx += `\nBeat actif (#${activeBeat.id}): ${activeBeat.title} — ${activeBeat.description}\nTrigger: ${activeBeat.trigger}`;
+      if (bp.key_npcs?.length > 0) blueprintCtx += `\nNPCs cles: ${bp.key_npcs.map((n: any) => `${n.name} (${n.role}, ${n.attitude})`).join("; ")}`;
+      if (bp.factions?.length > 0) blueprintCtx += `\nFactions: ${bp.factions.map((f: any) => `${f.name}: ${f.goal}`).join("; ")}`;
+      if (sceneState.mood) blueprintCtx += `\nMood: ${sceneState.mood}`;
+      if (sceneState.pendingConsequences) blueprintCtx += `\nConsequences en attente: ${sceneState.pendingConsequences}`;
+      blueprintCtx += `\n\nSuis le beat actif pour guider la narration. Si l'action du joueur complete le trigger du beat, passe au suivant.`;
+      systemPrompt += blueprintCtx;
+    }
     const diceInstruction = isShad
       ? "Inclus les jets de dice pool entre crochets [Pool Xd6: Y succes vs seuil Z]."
       : "Inclus les jets de des entre crochets [dX=resultat].";
@@ -849,6 +983,65 @@ registerSkill({
         details: narrative.slice(0, 300),
         source: "dungeon",
       });
+    }
+
+    // === STEP 3: Transition to STRATEGY phase if AI companions exist ===
+    const aiCharsForPhase = characters.filter((c: any) => c.is_ai && !c.is_npc && c.status === "alive");
+    if (aiCharsForPhase.length > 0 && chatId > 0) {
+      const leadAI = aiCharsForPhase[0] as any;
+
+      // Generate Kingston's opening strategy remark in-character
+      const strategyOpenPrompt = `Tu es ${leadAI.name}, un ${leadAI.race} ${leadAI.class} dans une run ${isShad ? "Shadowrun" : "D&D"}.
+Tu parles en prive avec ton coequipier. Le DM ne vous entend PAS.
+Situation: ${narrative.slice(0, 300)}
+
+Propose une strategie ou donne ton avis sur la situation. Sois concis (2-4 phrases). En francais. Reste in-character.`;
+
+      let strategyOpening = "";
+      try {
+        const { runOllamaChat } = await import("../../llm/ollamaClient.js");
+        strategyOpening = await runOllamaChat({
+          chatId: 460,
+          userMessage: strategyOpenPrompt,
+          isAdmin: true,
+          userId: 0,
+        });
+      } catch { /* fallback below */ }
+
+      if (!strategyOpening) {
+        strategyOpening = `On devrait analyser la situation avant d'agir.`;
+      }
+
+      // Set phase state
+      activePhases.set(chatId, {
+        sessionId,
+        phase: "strategy",
+        lastNarration: narrative.slice(0, 500),
+        strategyMessages: [{ role: leadAI.name, content: strategyOpening }],
+      });
+      dungeonUpdateSession(sessionId, { current_phase: "strategy" });
+
+      fullResponse += `\n\n---\n**--- Canal prive: Strategie ---**\n`;
+      fullResponse += `**${leadAI.name}:** *${strategyOpening}*\n\n`;
+      fullResponse += `_Discute strategie avec ${leadAI.name}. Dis "on y va" quand tu es pret._`;
+    }
+
+    // Advance beat if trigger matched
+    if (adventure?.blueprint?.story_beats) {
+      const beatIdx = adventure.current_beat || 0;
+      const activeBeat = adventure.blueprint.story_beats[beatIdx];
+      if (activeBeat && !activeBeat.completed) {
+        const triggerLower = (activeBeat.trigger || "").toLowerCase();
+        const narrativeLower = narrative.toLowerCase();
+        const actionLower = action.toLowerCase();
+        if (triggerLower && (narrativeLower.includes(triggerLower) || actionLower.includes(triggerLower))) {
+          activeBeat.completed = true;
+          dungeonUpdateAdventure(sessionId, {
+            blueprint: adventure.blueprint,
+            current_beat: beatIdx + 1,
+          });
+        }
+      }
     }
 
     return fullResponse;
@@ -1348,4 +1541,97 @@ registerSkill({
   },
 });
 
-log.info("[dungeon] 12 TTRPG Dungeon Master skills registered (D&D 5e + Shadowrun + Co-op + Roster)");
+log.info("[dungeon] 13 TTRPG Dungeon Master skills registered (D&D 5e + Shadowrun + Co-op + Roster + Prep)");
+
+// ── Strategy Phase Interceptor (called by telegram.ts) ──
+
+const READY_KEYWORDS = ["on y va", "go", "action", "let's go", "lets go", "allons-y", "c'est parti", "pret", "prêt", "ready"];
+
+/**
+ * Intercepts messages during the strategy phase of a dungeon session.
+ * Returns a reply string if intercepted, or null to let normal processing continue.
+ */
+export async function tryDungeonStrategyIntercept(chatId: number, message: string): Promise<string | null> {
+  let state = activePhases.get(chatId);
+
+  // If no in-memory state, try to restore from DB
+  if (!state) {
+    try {
+      const sessions = dungeonListSessions();
+      const activeSession = sessions.find((s: any) => s.status === "active" && s.current_phase === "strategy");
+      if (activeSession) {
+        const recentTurns = dungeonGetTurns(activeSession.id, 1);
+        const lastNarration = recentTurns.length > 0 ? (recentTurns[recentTurns.length - 1].dm_narrative || "") : "";
+        state = {
+          sessionId: activeSession.id,
+          phase: "strategy",
+          lastNarration: lastNarration.slice(0, 500),
+          strategyMessages: [],
+        };
+        activePhases.set(chatId, state);
+        log.info(`[dungeon] Restored strategy phase from DB for session #${activeSession.id}`);
+      }
+    } catch (err) {
+      log.warn(`[dungeon] Failed to restore phase from DB: ${err}`);
+    }
+  }
+
+  if (!state || state.phase !== "strategy") return null;
+
+  const msgLower = message.toLowerCase().trim();
+
+  // Check for "ready" keywords → transition to action phase
+  if (READY_KEYWORDS.some(kw => msgLower.includes(kw))) {
+    state.phase = "action";
+    activePhases.delete(chatId);
+    dungeonUpdateSession(state.sessionId, { current_phase: "action" });
+    return "**Parfait, on agit!** Declare ton action — le DM attend.\n\n_Utilise `dungeon.play` avec ton action._";
+  }
+
+  // Strategy discussion — Kingston responds in-character via Ollama
+  const session = dungeonGetSession(state.sessionId);
+  if (!session) { activePhases.delete(chatId); return null; }
+
+  const characters = dungeonGetCharacters(state.sessionId);
+  const leadAI = characters.find((c: any) => c.is_ai && !c.is_npc && c.status === "alive");
+  if (!leadAI) { activePhases.delete(chatId); return null; }
+
+  const isShad = session.ruleset === "shadowrun";
+
+  // Add player message to strategy history
+  state.strategyMessages.push({ role: "Nicolas", content: message });
+
+  // Build strategy conversation context
+  const recentStrategy = state.strategyMessages.slice(-6).map(m => `${m.role}: ${m.content}`).join("\n");
+
+  const strategyPrompt = `Tu es ${leadAI.name}, un ${leadAI.race} ${leadAI.class} dans une run ${isShad ? "Shadowrun" : "D&D"}.
+Tu parles en prive avec ton coequipier Nicolas. Le DM ne vous entend PAS.
+
+Situation (derniere narration du DM):
+${state.lastNarration}
+
+Conversation strategie en cours:
+${recentStrategy}
+
+Reponds en tant que ${leadAI.name}. Sois concis (2-4 phrases). Propose des strategies, donne ton avis, reagis a ce que Nicolas dit. Reste in-character. En francais.`;
+
+  let reply = "";
+  try {
+    const { runOllamaChat } = await import("../../llm/ollamaClient.js");
+    reply = await runOllamaChat({
+      chatId: 461,
+      userMessage: strategyPrompt,
+      isAdmin: true,
+      userId: 0,
+    });
+  } catch { /* fallback below */ }
+
+  if (!reply) {
+    reply = "Bonne idee. On fait comme ca?";
+  }
+
+  // Save AI response to strategy history
+  state.strategyMessages.push({ role: leadAI.name, content: reply });
+
+  return `**${leadAI.name}:** *${reply}*\n\n_Dis "on y va" quand tu es pret._`;
+}

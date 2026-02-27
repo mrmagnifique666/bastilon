@@ -54,16 +54,21 @@ function emit(level: Level, ...args: unknown[]) {
   );
   const prefix = `[${stamp()}] [${level.toUpperCase()}]`;
 
-  // Console output
-  switch (level) {
-    case "error":
-      console.error(prefix, ...parts);
-      break;
-    case "warn":
-      console.warn(prefix, ...parts);
-      break;
-    default:
-      console.log(prefix, ...parts);
+  // Console output (EPIPE-safe — parent pipe may be dead)
+  try {
+    switch (level) {
+      case "error":
+        console.error(prefix, ...parts);
+        break;
+      case "warn":
+        console.warn(prefix, ...parts);
+        break;
+      default:
+        console.log(prefix, ...parts);
+    }
+  } catch (e: any) {
+    if (e?.code !== "EPIPE" && e?.code !== "ERR_STREAM_DESTROYED") throw e;
+    // Stdout/stderr pipe broken (parent dead) — silently ignore
   }
 
   // Ring buffer + WS broadcast

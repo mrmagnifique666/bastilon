@@ -81,6 +81,15 @@ export async function compactAgentSession(
     }
 
     // 3. Summarize via Ollama (free, $0)
+    // Fast-skip if Ollama isn't available (avoids network timeout on restart)
+    const ollamaUp = (globalThis as any).__ollamaReady !== false;
+    if (!ollamaUp) {
+      log.debug(`[compaction] Ollama not ready — skipping summarization for ${agentId}`);
+      clearTurns(chatId);
+      clearSession(chatId);
+      return null;
+    }
+
     const prompt =
       `Résume cette session d'agent en MAX 3 phrases. Focus sur: décisions prises, résultats obtenus, problèmes rencontrés, et prochaines actions. Sois TRÈS concis.\n\n` +
       `SESSION:\n${turnsText}`;

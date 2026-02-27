@@ -984,6 +984,11 @@
       <span class="nav-label">Engagement</span>
     </a>
 
+    <a class="nav-item" data-view="llm-usage" onclick="navigate('llm-usage')">
+      <span class="nav-icon">&#129689;</span>
+      <span class="nav-label">LLM Usage</span>
+    </a>
+
     <div class="nav-group-title">System</div>
     <a class="nav-item" data-view="system" onclick="navigate('system')">
       <span class="nav-icon">&#128187;</span>
@@ -1108,6 +1113,22 @@
       <div class="view-header">Engagement Dashboard</div>
       <div class="view-body" id="engagement-body" style="padding:16px;">
         <div id="engagement-loading" style="color:var(--text2);">Loading...</div>
+      </div>
+    </div>
+
+    <!-- ═══ VIEW: LLM Usage ═══ -->
+    <div class="view" id="view-llm-usage">
+      <div class="view-header">LLM Token Usage & Cost</div>
+      <div class="view-body" id="llm-usage-body" style="padding:16px;">
+        <div class="cards-grid" id="llm-usage-today"></div>
+        <div style="margin-top:20px;">
+          <h3 style="font-size:14px;color:var(--text);margin-bottom:12px;">7-Day Trend</h3>
+          <div id="llm-usage-chart" style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;min-height:200px;"></div>
+        </div>
+        <div style="margin-top:20px;">
+          <h3 style="font-size:14px;color:var(--text);margin-bottom:12px;">Detail by Provider</h3>
+          <div id="llm-usage-table"></div>
+        </div>
       </div>
     </div>
 
@@ -1328,6 +1349,7 @@ function loadView(view) {
     case 'system': loadSystem(); break;
     case 'trading': loadTrading(); break;
     case 'engagement': loadEngagement(); break;
+    case 'llm-usage': loadLLMUsage(); break;
     case 'gallery': loadGallery(); break;
     case 'dungeon': loadDungeon(); break;
   }
@@ -2086,6 +2108,108 @@ async function loadSystem() {
 // ══════════════════════════════════════════════════════════════
 // VIEW: Trading
 // ══════════════════════════════════════════════════════════════
+// ═══ LLM Usage ═══
+async function loadLLMUsage() {
+  const todayEl = document.getElementById('llm-usage-today');
+  const chartEl = document.getElementById('llm-usage-chart');
+  const tableEl = document.getElementById('llm-usage-table');
+  try {
+    const [todayData, trendData] = await Promise.all([
+      api('llm-usage/today'),
+      api('llm-usage/trend?days=7'),
+    ]);
+    // Today cards
+    const providers = Object.entries(todayData);
+    const totalReqs = providers.reduce((s, [, v]) => s + v.requests, 0);
+    const totalCost = providers.reduce((s, [, v]) => s + v.cost, 0);
+    const totalTokens = providers.reduce((s, [, v]) => s + v.input + v.output, 0);
+    const colors = { gemini: 'var(--accent)', claude: 'var(--purple)', groq: 'var(--green)', ollama: 'var(--orange)', haiku: 'var(--yellow)' };
+    todayEl.innerHTML = `
+      <div class="card" style="border-left:3px solid var(--accent);">
+        <div class="card-title">Today — Requests</div>
+        <div class="card-value">${totalReqs}</div>
+        <div class="card-sub">${providers.map(([p,v]) => `${p}: ${v.requests}`).join(' · ')}</div>
+      </div>
+      <div class="card" style="border-left:3px solid var(--green);">
+        <div class="card-title">Today — Tokens</div>
+        <div class="card-value">${(totalTokens/1000).toFixed(1)}K</div>
+        <div class="card-sub">${providers.map(([p,v]) => `${p}: ${((v.input+v.output)/1000).toFixed(1)}K`).join(' · ')}</div>
+      </div>
+      <div class="card" style="border-left:3px solid var(--yellow);">
+        <div class="card-title">Today — Est. Cost</div>
+        <div class="card-value">$${totalCost.toFixed(4)}</div>
+        <div class="card-sub">${providers.map(([p,v]) => `${p}: $${v.cost.toFixed(4)}`).join(' · ')}</div>
+      </div>
+    `;
+
+    // 7-day trend — simple ASCII-style bar chart
+    const trend = trendData.trend || [];
+    if (trend.length === 0) {
+      chartEl.innerHTML = '<div style="color:var(--text2);text-align:center;padding:40px;">No usage data yet.</div>';
+    } else {
+      // Group by date
+      const byDate = {};
+      for (const r of trend) {
+        if (!byDate[r.date]) byDate[r.date] = { requests: 0, tokens: 0, cost: 0, providers: {} };
+        byDate[r.date].requests += r.requests;
+        byDate[r.date].tokens += r.input_tokens + r.output_tokens;
+        byDate[r.date].cost += r.cost;
+        byDate[r.date].providers[r.provider] = (byDate[r.date].providers[r.provider] || 0) + r.requests;
+      }
+      const dates = Object.keys(byDate).sort();
+      const maxReqs = Math.max(...dates.map(d => byDate[d].requests), 1);
+      let chartHTML = '<div style="display:flex;flex-direction:column;gap:6px;">';
+      for (const date of dates) {
+        const d = byDate[date];
+        const pct = (d.requests / maxReqs * 100).toFixed(0);
+        const provBars = Object.entries(d.providers).map(([p, c]) => {
+          const w = (c / maxReqs * 100).toFixed(0);
+          return `<div style="height:100%;width:${w}%;background:${colors[p]||'var(--accent)'};border-radius:2px;" title="${p}: ${c} reqs"></div>`;
+        }).join('');
+        chartHTML += `
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:11px;color:var(--text2);width:70px;flex-shrink:0;">${date.slice(5)}</span>
+            <div style="flex:1;height:20px;background:var(--bg3);border-radius:3px;display:flex;overflow:hidden;">${provBars}</div>
+            <span style="font-size:11px;color:var(--text2);width:50px;text-align:right;">${d.requests} req</span>
+            <span style="font-size:11px;color:var(--yellow);width:60px;text-align:right;">$${d.cost.toFixed(3)}</span>
+          </div>`;
+      }
+      chartHTML += '</div>';
+      // Legend
+      chartHTML += '<div style="display:flex;gap:12px;margin-top:10px;justify-content:center;">';
+      for (const [p, c] of Object.entries(colors)) {
+        chartHTML += `<span style="font-size:11px;color:var(--text2);display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:10px;height:10px;background:${c};border-radius:2px;"></span>${p}</span>`;
+      }
+      chartHTML += '</div>';
+      chartEl.innerHTML = chartHTML;
+    }
+
+    // Detail table
+    const summary = await api('llm-usage/summary?days=7');
+    if (summary.length === 0) {
+      tableEl.innerHTML = '<div style="color:var(--text2);">No data.</div>';
+    } else {
+      let html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+      html += '<tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:6px;color:var(--text2);">Date</th><th style="text-align:left;padding:6px;color:var(--text2);">Provider</th><th style="text-align:right;padding:6px;color:var(--text2);">Requests</th><th style="text-align:right;padding:6px;color:var(--text2);">In Tokens</th><th style="text-align:right;padding:6px;color:var(--text2);">Out Tokens</th><th style="text-align:right;padding:6px;color:var(--text2);">Cost</th></tr>';
+      for (const r of summary.slice(0, 50)) {
+        const c = colors[r.provider] || 'var(--text)';
+        html += `<tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:6px;">${r.date}</td>
+          <td style="padding:6px;color:${c};font-weight:600;">${r.provider}</td>
+          <td style="padding:6px;text-align:right;">${r.requests}</td>
+          <td style="padding:6px;text-align:right;">${(r.input_tokens/1000).toFixed(1)}K</td>
+          <td style="padding:6px;text-align:right;">${(r.output_tokens/1000).toFixed(1)}K</td>
+          <td style="padding:6px;text-align:right;color:var(--yellow);">$${r.estimated_cost_usd.toFixed(4)}</td>
+        </tr>`;
+      }
+      html += '</table>';
+      tableEl.innerHTML = html;
+    }
+  } catch (err) {
+    todayEl.innerHTML = `<div style="color:var(--red);">Error: ${err.message}</div>`;
+  }
+}
+
 let tradingRefreshTimer = null;
 async function loadTrading() {
   if (tradingRefreshTimer) clearInterval(tradingRefreshTimer);
