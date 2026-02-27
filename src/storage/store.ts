@@ -1655,7 +1655,8 @@ export function dungeonUpdateSession(id: number, fields: Record<string, unknown>
   for (const [k, v] of Object.entries(fields)) {
     if (allowed.includes(k)) {
       sets.push(`${k} = ?`);
-      vals.push(v);
+      // SQLite3 can only bind primitives — stringify objects/arrays
+      vals.push(v !== null && typeof v === "object" ? JSON.stringify(v) : v ?? null);
     }
   }
   if (sets.length === 0) return;
@@ -1712,7 +1713,8 @@ export function dungeonUpdateCharacter(id: number, fields: Record<string, unknow
   for (const [k, v] of Object.entries(fields)) {
     if (allowed.includes(k)) {
       sets.push(`${k} = ?`);
-      vals.push(k === "stats" || k === "inventory" ? JSON.stringify(v) : v);
+      // SQLite3 can only bind primitives — stringify objects/arrays
+      vals.push(v !== null && typeof v === "object" ? JSON.stringify(v) : v ?? null);
     }
   }
   if (sets.length === 0) return;
@@ -1875,7 +1877,8 @@ export function savedCharUpdate(id: number, fields: Record<string, unknown>): vo
   for (const [k, v] of Object.entries(fields)) {
     if (allowed.includes(k)) {
       sets.push(`${k} = ?`);
-      vals.push(["stats", "inventory", "extra"].includes(k) ? JSON.stringify(v) : v);
+      // SQLite3 can only bind primitives — stringify objects/arrays
+      vals.push(v !== null && typeof v === "object" ? JSON.stringify(v) : v ?? null);
     }
   }
   if (sets.length <= 1) return;
