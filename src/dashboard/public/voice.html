@@ -723,17 +723,21 @@ function startLocalSession(){if(sessionActive)return;sessionActive=true;localPro
 function startLocalListening(){
   if(!hasWebSpeech()||localProcessing||localListening)return;
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  localRecognition=new SR(); localRecognition.continuous=true; localRecognition.interimResults=true; localRecognition.lang='fr-CA';
+  localRecognition=new SR(); localRecognition.continuous=true; localRecognition.interimResults=true;
+  // Bilingual: fr-CA understands both French and English reasonably well
+  // but misses English terms — cycle between fr-CA and en-CA on restart
+  localRecognition.lang=document.documentElement.lang==='en'?'en-CA':'fr-CA';
   localRecognition.onstart=()=>{localListening=true;localFinalText='';wakeBar.classList.add('active');wakeText.textContent='Ecoute...';wakeText.className='';setStatus('local-listening','Kingston ecoute...');};
   localRecognition.onresult=(e)=>{
     let interim='',nf='';
     for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)nf+=t;else interim+=t;}
-    if(nf)localFinalText+=(localFinalText?' ':'')+nf.trim();
+    // Filter phantom transcripts: very short ghost results from background noise
+    if(nf){const clean=nf.trim();if(clean.length>1&&!/^[dD]\d$/i.test(clean))localFinalText+=(localFinalText?' ':'')+clean;}
     const d=(localFinalText+(interim?' '+interim:'')).trim();
     if(d)wakeText.textContent=d;
     clearTimeout(localSilenceTimer);
-    // Adaptive silence: generous thresholds to avoid cutting mid-sentence
-    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<5?4000:words<12?3000:2000;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
+    // Very generous silence: let user think and speak at natural pace
+    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<3?5000:words<8?4000:3000;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
   };
   localRecognition.onerror=(e)=>{if(e.error==='no-speech'||e.error==='aborted')return;if(e.error==='not-allowed'){stopLocalSession();return;}if(sessionActive&&!localProcessing){localListening=false;setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},500);}};
   localRecognition.onend=()=>{localListening=false;if(sessionActive&&!localProcessing){setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},400);}else{wakeBar.classList.remove('active');}};

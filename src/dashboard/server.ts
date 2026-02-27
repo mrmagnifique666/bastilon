@@ -1679,7 +1679,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
         // Voice needs speed — try Ollama first (fast, local), fallback to handleMessage
         let response = "";
         const voicePrefix =
-          "[VOICE MODE] Reponds en francais, concis (2-3 phrases max). " +
+          "[VOICE MODE] Reponds dans la langue de l'utilisateur (francais ou anglais). Concis (2-3 phrases max). " +
           "PAS de markdown, PAS de headers, PAS de **bold**, PAS de listes. " +
           "Texte naturel parlé seulement. Tu as accès à toute la mémoire de la journée.\n\n";
 
