@@ -438,11 +438,12 @@ let localAudio = null, localSilenceTimer = null, localFinalText = '';
 function detectVoice(text) {
   if (!text) return 'fr-male';
   const lower = text.toLowerCase();
-  // Common French indicators (accents, words)
+  // Strong French bias: Nicolas is francophone, only switch to English
+  // if the response is overwhelmingly English (e.g. 80%+ English words)
   const frSignals = (lower.match(/[àâäéèêëïîôùûüÿçœæ]/g) || []).length;
   const frWords = ['je ', 'tu ', 'il ', 'elle ', 'nous ', 'vous ', 'les ', 'des ', 'est ', 'une ', 'dans ', 'pour ', 'que ', 'qui ', 'sur ', 'avec ', 'pas ', 'mais ', 'oui ', 'non ', 'bien ', 'fait ', 'très ', 'comme ', 'cette ', 'sont ', 'tout ', 'aussi ', 'entre ', 'après ', 'donc ', 'ici ', 'ses ', 'mes ', 'tes ', 'leur ', "c'est ", "j'ai ", "l'", "d'", "n'", "qu'"];
   const enWords = ['the ', 'is ', 'are ', 'was ', 'were ', 'have ', 'has ', 'been ', 'will ', 'would ', 'could ', 'should ', 'this ', 'that ', 'with ', 'from ', 'they ', 'what ', 'when ', 'where ', 'which ', 'there ', 'their ', 'your ', 'about ', 'just ', 'been ', 'some ', 'than ', 'them ', 'into ', "it's ", "don't ", "can't ", "i'm ", "you're "];
-  let frScore = frSignals * 2;
+  let frScore = frSignals * 2 + 10; // Heavy French bias — default is French
   let enScore = 0;
   for (const w of frWords) { if (lower.includes(w)) frScore++; }
   for (const w of enWords) { if (lower.includes(w)) enScore++; }
@@ -736,8 +737,11 @@ function startLocalListening(){
     const d=(localFinalText+(interim?' '+interim:'')).trim();
     if(d)wakeText.textContent=d;
     clearTimeout(localSilenceTimer);
-    // Very generous silence: let user think and speak at natural pace
-    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<3?5000:words<8?4000:3000;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
+    // Extra-long silence: user needs time to think between sentence fragments
+    // Short utterance (1-2 words): 8s — might be mid-thought
+    // Medium (3-7 words): 6s — probably a partial sentence
+    // Long (8+ words): 5s — likely a complete thought
+    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<3?8000:words<8?6000:5000;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
   };
   localRecognition.onerror=(e)=>{if(e.error==='no-speech'||e.error==='aborted')return;if(e.error==='not-allowed'){stopLocalSession();return;}if(sessionActive&&!localProcessing){localListening=false;setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},500);}};
   localRecognition.onend=()=>{localListening=false;if(sessionActive&&!localProcessing){setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},400);}else{wakeBar.classList.remove('active');}};
