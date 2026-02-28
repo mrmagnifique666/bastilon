@@ -92,12 +92,27 @@ const TASK_TIMEOUT_MS = 480_000;
 /** Max time a task can sit in queue before being skipped (10 minutes) */
 const QUEUE_STALE_MS = 600_000;
 
+/** Max queue size — drop oldest system tasks when exceeded */
+const MAX_QUEUE_SIZE = 50;
+
 /**
  * Enqueue a task in the global admin delivery queue.
  * @param task The async task to run
  * @param type "user" for user messages (interruptible), "system" for agents/cron (not interruptible)
  */
 export function enqueueAdmin(task: Task, type: "user" | "system" = "system"): void {
+  // Backpressure: if queue is full, drop oldest system tasks
+  while (adminQueue.length >= MAX_QUEUE_SIZE) {
+    const sysIdx = adminQueue.findIndex(e => e.type === "system");
+    if (sysIdx >= 0) {
+      log.warn(`[chatLock] Queue full (${adminQueue.length}) — dropping oldest system task`);
+      adminQueue.splice(sysIdx, 1);
+    } else {
+      // All user tasks — drop oldest
+      log.warn(`[chatLock] Queue full (${adminQueue.length}) — dropping oldest task`);
+      adminQueue.shift();
+    }
+  }
   adminQueue.push({ task, type, enqueueTime: Date.now() });
   if (!adminBusy) drainAdmin();
 }

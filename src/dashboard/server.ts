@@ -137,10 +137,21 @@ function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean
 const rateLimitMap = new Map<string, { count: number; reset: number }>();
 const RATE_LIMIT_MAX = 30; // requests per window
 const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_CLEANUP_INTERVAL_MS = 300_000; // cleanup every 5 min
+let lastRateLimitCleanup = Date.now();
 
 function checkRateLimit(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const ip = req.socket.remoteAddress || "unknown";
   const now = Date.now();
+
+  // Periodic cleanup of stale entries
+  if (now - lastRateLimitCleanup > RATE_LIMIT_CLEANUP_INTERVAL_MS) {
+    lastRateLimitCleanup = now;
+    for (const [key, val] of rateLimitMap) {
+      if (now > val.reset) rateLimitMap.delete(key);
+    }
+  }
+
   let entry = rateLimitMap.get(ip);
   if (!entry || now > entry.reset) {
     entry = { count: 0, reset: now + RATE_LIMIT_WINDOW_MS };
@@ -2240,7 +2251,7 @@ export function startDashboard(): void {
               endpointing: "400",
               smart_format: "true",
               interim_results: "true",
-              utterance_end_ms: "1500",
+              utterance_end_ms: "3000",
             });
             for (const kw of rpgKeywords) {
               params.append("keywords", kw);

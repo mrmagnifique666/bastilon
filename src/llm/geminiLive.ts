@@ -233,6 +233,7 @@ export class GeminiLiveSession {
   private reconnectAttempts = 0;
   private cachedMemoryContext = "";
   private conversationLog: string[] = [];
+  private static readonly MAX_CONVERSATION_LOG = 100;
   private lastConnectTime = 0;
 
   /** Compressed summary of the conversation so far (generated before reconnect). */
@@ -254,6 +255,14 @@ export class GeminiLiveSession {
     this.rebuildTools();
     // Restore conversation from a previous session if file exists
     this.restoreConversation();
+  }
+
+  /** Add entry to conversation log, capping at MAX_CONVERSATION_LOG. */
+  private logConversation(entry: string): void {
+    this.conversationLog.push(entry);
+    if (this.conversationLog.length > GeminiLiveSession.MAX_CONVERSATION_LOG) {
+      this.conversationLog.splice(0, this.conversationLog.length - GeminiLiveSession.MAX_CONVERSATION_LOG);
+    }
   }
 
   /** Rebuild tool declarations from the live registry. */
@@ -375,7 +384,7 @@ export class GeminiLiveSession {
     if (!isSystem) {
       this.currentUserText += (this.currentUserText ? " " : "") + text;
     }
-    this.conversationLog.push(isSystem ? `[System] ${text.slice(0, 100)}` : `[Nicolas] ${text}`);
+    this.logConversation(isSystem ? `[System] ${text.slice(0, 100)}` : `[Nicolas] ${text}`);
     this.ws.send(
       JSON.stringify({
         clientContent: {
@@ -840,7 +849,7 @@ export class GeminiLiveSession {
         if (userText) {
           this.currentUserText += (this.currentUserText ? " " : "") + userText;
           this.opts.callbacks.onText(userText, "user");
-          this.conversationLog.push(`[Nicolas] ${userText.slice(0, 200)}`);
+          this.logConversation(`[Nicolas] ${userText.slice(0, 200)}`);
         }
       }
 
@@ -852,7 +861,7 @@ export class GeminiLiveSession {
           if (part.text) {
             this.opts.callbacks.onText(part.text, "model");
             this.currentModelText += part.text;
-            this.conversationLog.push(
+            this.logConversation(
               `[Kingston] ${part.text.slice(0, 200)}`,
             );
           }
@@ -912,7 +921,7 @@ export class GeminiLiveSession {
       `[gemini-live] Tool call: ${geminiName} → ${skillName}(${JSON.stringify(args).slice(0, 100)})`,
     );
     callbacks.onToolCall(skillName, args);
-    this.conversationLog.push(
+    this.logConversation(
       `[Tool] ${skillName}(${JSON.stringify(args).slice(0, 80)})`,
     );
 
@@ -1021,7 +1030,7 @@ export class GeminiLiveSession {
             : JSON.stringify(race.result).slice(0, maxLen);
         this.sendToolResponse(id, geminiName, { result: truncated });
         callbacks.onToolResult(skillName, truncated);
-        this.conversationLog.push(`[Result] ${truncated.slice(0, 100)}`);
+        this.logConversation(`[Result] ${truncated.slice(0, 100)}`);
         this.handleImageResult(skillName, truncated, normalized);
         log.info(`[gemini-live] Tool result (fast): ${skillName} → ${truncated.slice(0, 80)}...`);
       } else {
@@ -1042,7 +1051,7 @@ export class GeminiLiveSession {
                 ? result.slice(0, 2000)
                 : JSON.stringify(result).slice(0, 2000);
             callbacks.onToolResult(skillName, truncated);
-            this.conversationLog.push(`[Result] ${truncated.slice(0, 100)}`);
+            this.logConversation(`[Result] ${truncated.slice(0, 100)}`);
             this.handleImageResult(skillName, truncated, normalized);
 
             if (!this.opts.isPhoneCall && this.connected && this.ws) {

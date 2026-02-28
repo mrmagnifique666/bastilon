@@ -243,6 +243,28 @@ function cleanLock(): void {
   } catch { /* best-effort */ }
 }
 
+function forceKillPid(pid: number): void {
+  if (pid <= 0 || pid === process.pid) return;
+  try {
+    if (process.platform === "win32") {
+      // /F = force, /T = kill child process tree
+      execSync(`taskkill /PID ${pid} /F /T 2>nul`, { timeout: 5000 });
+    } else {
+      process.kill(pid, "SIGKILL");
+    }
+  } catch { /* already dead */ }
+}
+
+function isProcessRunning(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function cleanPorts(): void {
   if (process.platform !== "win32") return;
   for (const port of STALE_PORTS) {
@@ -254,11 +276,10 @@ function cleanPorts(): void {
       if (!out) continue;
       for (const pidStr of out.split(/\r?\n/)) {
         const pid = Number(pidStr.trim());
-        if (pid > 0 && pid !== process.pid && pid !== kingstonPID) {
-          try {
-            process.kill(pid, "SIGTERM");
-            logConsole("\u26A1", "cleanup", `Killed stale process on port ${port} (PID ${pid})`);
-          } catch { /* already dead */ }
+        // Kill ANY process holding our ports (except the wrapper itself)
+        if (pid > 0 && pid !== process.pid) {
+          forceKillPid(pid);
+          logConsole("\u26A1", "cleanup", `Killed stale process on port ${port} (PID ${pid})`);
         }
       }
     } catch { /* port not in use */ }
@@ -281,10 +302,8 @@ function killRivalSupervisors(): void {
         const parts = line.split(",");
         const pid = Number(parts[parts.length - 1]?.trim());
         if (pid > 0 && pid !== process.pid) {
-          try {
-            process.kill(pid, "SIGTERM");
-            logConsole("\u26A1", "cleanup", `Killed rival supervisor (PID ${pid})`);
-          } catch { /* already dead */ }
+          forceKillPid(pid);
+          logConsole("\u26A1", "cleanup", `Killed rival supervisor (PID ${pid})`);
         }
       }
     }
@@ -369,6 +388,50 @@ function getCrashDelay(): number {
   );
 }
 
+async function killOldBot(): Promise<void> {
+  // 1. Kill the tracked child process
+  if (kingston && !kingston.killed) {
+    const oldPid = kingston.pid ?? 0;
+    logConsole("\u26A1", "bot.cleanup", `Killing old bot process (PID ${oldPid})...`);
+    try { kingston.kill("SIGTERM"); } catch { /* already dead */ }
+    // Give it 2s to die gracefully, then force-kill
+    await new Promise((r) => setTimeout(r, 2000));
+    if (oldPid > 0 && isProcessRunning(oldPid)) {
+      logConsole("\u26A1", "bot.cleanup", `Old bot still alive — force killing PID ${oldPid}`);
+      forceKillPid(oldPid);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    kingston = null;
+  }
+
+  // 2. Also kill any process matching the old kingstonPID (in case ref was lost)
+  if (kingstonPID > 0 && kingstonPID !== process.pid && isProcessRunning(kingstonPID)) {
+    logConsole("\u26A1", "bot.cleanup", `Killing tracked PID ${kingstonPID}`);
+    forceKillPid(kingstonPID);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  // 3. Kill anything on our ports
+  cleanPorts();
+
+  // 4. Verify ports are actually free
+  for (const port of STALE_PORTS) {
+    try {
+      const out = execSync(
+        `powershell -Command "Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"`,
+        { encoding: "utf-8", timeout: 5000 },
+      ).trim();
+      if (out) {
+        logConsole("\u26A0\uFE0F", "bot.cleanup", `Port ${port} still occupied after cleanup — force killing`);
+        for (const pidStr of out.split(/\r?\n/)) {
+          const pid = Number(pidStr.trim());
+          if (pid > 0 && pid !== process.pid) forceKillPid(pid);
+        }
+      }
+    } catch { /* ok */ }
+  }
+}
+
 async function startBot(): Promise<void> {
   if (startInProgress) {
     logConsole("\u26A0\uFE0F", "bot.start", "Start already in progress — skipping duplicate");
@@ -377,8 +440,11 @@ async function startBot(): Promise<void> {
   startInProgress = true;
 
   killRivalSupervisors();
+
+  // Kill old bot process BEFORE anything else
+  await killOldBot();
+
   cleanLock();
-  cleanPorts();
 
   kingstonStatus = "starting";
   logConsole("\u{1F680}", "bot.start", "Starting Kingston (waiting 2s for ports)...");
@@ -435,7 +501,8 @@ async function startBot(): Promise<void> {
   kingston = child;
   kingstonPID = child.pid ?? 0;
   kingstonStatus = "running";
-  setTimeout(() => { startInProgress = false; }, 30_000);
+  // Reset startInProgress after 60s (enough for full startup) or on exit
+  setTimeout(() => { startInProgress = false; }, 60_000);
 
   child.on("exit", (code, signal) => {
     botLogStream.end();
@@ -646,13 +713,9 @@ registerTask("health.bot", "\u2705", 5, async () => {
 
   logConsole("\u26A1", "electroshock", "Bot dead — restarting...");
   lastElectroshockTime = Date.now();
-  cleanPorts();
   cleanLock();
 
-  if (kingston && !kingston.killed) {
-    try { kingston.kill("SIGTERM"); } catch { /* already dead */ }
-  }
-
+  // startBot() handles full cleanup (killOldBot + cleanPorts)
   setTimeout(startBot, 2000);
   const alert = "\u26A1 Kingston down \u2014 red\u00E9marrage automatique";
   sendTelegramDirect(alert);
