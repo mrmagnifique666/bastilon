@@ -1,36 +1,20 @@
-# D&D Voice Session — Aventure
-*Dernière MAJ: 2026-02-26T13:01*
-*Setting: heroic shadowrun*
-*Lieu: Bar du Coyote Rouille, redmond*
-*Tour: 0*
-*Session ID: 9*
+# D&D Voice Session — Soirée Kingston & Nicolas
+*Dernière MAJ: 2026-02-28T23:22*
+*Setting: Heroic Fantasy classique*
+*Lieu: Taverne du Dragon Endormi*
+*Tour: 1*
+*Session ID: 10*
 
 ## Personnages
 
-### Elias Moreau, alias Glitch/Pixel
-- Race: Elfe, Classe: Decker, Niveau: 1
-- HP: 11/11
-- Inventaire: Mitsuhama Otomo (Rusty, commlink modifié), Lunettes AR rafistolées, Kit de crochetage électronique, Datachip x5, Vêtements discrets, Ghostwalker (programme personnalisé)
-- Status: alive
-
-### Kingston
-- Race: Elf, Classe: Street Samurai, Niveau: 1
-- HP: 11/11
-- Inventaire: Ares Predator V, Katana, Armure corporelle, Smartlink, Reflexes cables Niv.2, Commlink
-- Status: alive
-
-### Nicolay Kuchensky
-- Race: Nain, Classe: Rigger, Niveau: 1
-- HP: 11/11
-- Inventaire: Console de controle, Drone MCT Fly-Spy x2, Drone Steel Lynx (combat), Interface de commande, Van blindee, Commlink
-- Status: alive
-
-### Nicolay Kuchensky
-- Race: Nain, Classe: Rigger, Niveau: 1
-- HP: 9/9
-- Inventaire: *   Commlink
+### Aventurier
+- Race: Humain, Classe: Guerrier, Niveau: 1
+- HP: 12/12
+- Inventaire: Sac a dos, Rations (5j), Torche x3, 50 pieces d'or
 - Status: alive
 
 ## Chronique récente
 
-
+**Tour 1** (exploration)
+> Kingston, un Warforged Artificer au corps de metal grave de runes arcanes, pousse la porte de la taverne. Ses yeux bleus lumineux balaient la piece. Un petit automate metallique en forme de loup - Bastilon, son Steel Defender - trottine a ses cotes. Kingston s'approche du bar, pose une piece d'or sur le comptoir et dit d'une voix metallique mais chaleureuse: 'Grimbald. Une huile de qualite pour mes joints, et une biere pour... l'atmosphere. J'ai entendu dire qu'il y avait du travail pour ceux qui n'ont pas peur de se faire redemarrer.'
+(Loop détecté: time.now appelé en boucle.)

@@ -470,7 +470,7 @@ export function seedDefaultCronJobs(): void {
         prompt: "Utilise content.calendar avec create_drafts=true et posts_per_day=2 pour generer le calendrier de contenu de la semaine. Envoie le résultat à Nicolas via telegram.send.",
         sessionTarget: "isolated",
         deliveryMode: "announce",
-        modelOverride: "ollama",
+        modelOverride: "haiku",
       });
       log.info("[cron] Seeded: content-calendar-weekly (Monday 9h)");
     } catch (err) {
@@ -488,7 +488,7 @@ export function seedDefaultCronJobs(): void {
         prompt: "Utilise content.weekly_synthesis pour generer le rapport hebdomadaire complet. Envoie le résultat à Nicolas via telegram.send.",
         sessionTarget: "isolated",
         deliveryMode: "announce",
-        modelOverride: "ollama",
+        modelOverride: "haiku",
       });
       log.info("[cron] Seeded: weekly-synthesis (Friday 20h)");
     } catch (err) {
@@ -534,7 +534,7 @@ export function seedDefaultCronJobs(): void {
           "RÈGLES: Sois HONNÊTE. Si quelque chose ne marche pas, dis-le. L'objectif est de s'améliorer CHAQUE JOUR.",
         sessionTarget: "isolated",
         deliveryMode: "announce",
-        modelOverride: "ollama",
+        modelOverride: "haiku",
       });
       log.info("[cron] Seeded: nightly-self-review (Daily 21h)");
     } catch (err) {
@@ -578,7 +578,7 @@ export function seedDefaultCronJobs(): void {
           "RÈGLES: Ne spamme PAS Nicolas. Seulement les trouvailles vraiment pertinentes. Qualité > quantité.",
         sessionTarget: "isolated",
         deliveryMode: "none", // Silent by default — only telegram.send on high-value finds
-        modelOverride: "ollama",
+        modelOverride: "haiku",
       });
       log.info("[cron] Seeded: nightly-tech-watch (Daily 22h)");
     } catch (err) {
@@ -597,7 +597,7 @@ export function seedDefaultCronJobs(): void {
           "[CRON] Run Mnemosyne memory decay: score all memories, archive low-scoring ones, prune old episodic events.",
         sessionTarget: "isolated",
         deliveryMode: "none",
-        modelOverride: "ollama",
+        modelOverride: "haiku",
       });
       log.info("[cron] Seeded: mnemosyne_nightly_decay (Daily 23h)");
     } catch (err) {

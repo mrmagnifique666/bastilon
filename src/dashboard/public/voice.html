@@ -430,8 +430,9 @@ let playCtx = null, nextPlayTime = 0, playQueue = [];
 let webcamOn = false, visionOn = false, visionInterval = null;
 let currentTranscriptEl = null, isSpeaking = false;
 let wakeWordEnabled = false, wakeRecognition = null, wakeWordActive = false;
-let localRecognition = null, localListening = false, localProcessing = false;
+let localProcessing = false, localListening = false;
 let localAudio = null, localSilenceTimer = null, localFinalText = '';
+let sttWs = null, localMicStream = null, localAudioCtx = null, localWorkletNode = null;
 
 // ─── Language detection for dual voice ───
 // Returns 'fr-male' or 'en-male' based on text content
@@ -717,37 +718,72 @@ function toggleWakeWord() {
 function playBeep(f,d){try{const c=new AudioContext();const o=c.createOscillator();const g=c.createGain();o.frequency.value=f;o.type='sine';g.gain.value=0.12;o.connect(g);g.connect(c.destination);o.start();g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+d/1000);o.stop(c.currentTime+d/1000+.05);setTimeout(()=>c.close(),d+200);}catch{}}
 
 // ═══════════════════════════════════════════════════════
-// LOCAL MODE — Web Speech → Claude API → Edge TTS
+// LOCAL MODE — Push-to-Talk + Noise Gate + Deepgram STT
 // ═══════════════════════════════════════════════════════
-function startLocalSession(){if(sessionActive)return;sessionActive=true;localProcessing=false;localFinalText='';stopWakeWord();addMsg('system','Mode local — parle, Kingston ecoute...');startLocalListening();}
+// PTT: 1st click = start listening, 2nd click = send text
+// Noise gate: RMS threshold — only send audio above -40dB
+const NOISE_GATE_THRESHOLD = 0.01; // ~-40dB — tune up if still noisy
 
-function startLocalListening(){
-  if(!hasWebSpeech()||localProcessing||localListening)return;
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  localRecognition=new SR(); localRecognition.continuous=true; localRecognition.interimResults=true;
-  // Bilingual: fr-CA understands both French and English reasonably well
-  // but misses English terms — cycle between fr-CA and en-CA on restart
-  localRecognition.lang=document.documentElement.lang==='en'?'en-CA':'fr-CA';
-  localRecognition.onstart=()=>{localListening=true;localFinalText='';wakeBar.classList.add('active');wakeText.textContent='Ecoute...';wakeText.className='';setStatus('local-listening','Kingston ecoute...');};
-  localRecognition.onresult=(e)=>{
-    let interim='',nf='';
-    for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)nf+=t;else interim+=t;}
-    // Filter phantom transcripts: very short ghost results from background noise
-    if(nf){const clean=nf.trim();if(clean.length>1&&!/^[dD]\d$/i.test(clean))localFinalText+=(localFinalText?' ':'')+clean;}
-    const d=(localFinalText+(interim?' '+interim:'')).trim();
-    if(d)wakeText.textContent=d;
-    clearTimeout(localSilenceTimer);
-    // Extra-long silence: user needs time to think between sentence fragments
-    // Short utterance (1-2 words): 8s — might be mid-thought
-    // Medium (3-7 words): 6s — probably a partial sentence
-    // Long (8+ words): 5s — likely a complete thought
-    if(localFinalText){const words=localFinalText.trim().split(/\s+/).length;const silenceMs=words<3?8000:words<8?6000:5000;localSilenceTimer=setTimeout(()=>{if(localFinalText&&!localProcessing&&sessionActive)processLocal(localFinalText.trim());},silenceMs);}
-  };
-  localRecognition.onerror=(e)=>{if(e.error==='no-speech'||e.error==='aborted')return;if(e.error==='not-allowed'){stopLocalSession();return;}if(sessionActive&&!localProcessing){localListening=false;setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},500);}};
-  localRecognition.onend=()=>{localListening=false;if(sessionActive&&!localProcessing){setTimeout(()=>{if(sessionActive&&!localProcessing)startLocalListening();},400);}else{wakeBar.classList.remove('active');}};
-  try{localRecognition.start();}catch{localListening=false;}
+function startLocalSession(){if(sessionActive)return;sessionActive=true;localProcessing=false;localFinalText='';stopWakeWord();addMsg('system','Push-to-Talk — clique pour parler, re-clique pour envoyer.');startLocalListening();}
+
+async function startLocalListening(){
+  if(localProcessing||localListening)return;
+  try{
+    const proto=location.protocol==='https:'?'wss:':'ws:';
+    sttWs=new WebSocket(proto+'//'+location.host+'/ws/stt');
+    sttWs.onopen=()=>{sttWs.send(JSON.stringify({type:'auth',token:TOKEN,sampleRate:16000,language:'fr'}));};
+    sttWs.onmessage=(ev)=>{
+      let m;try{m=JSON.parse(ev.data);}catch{return;}
+      if(m.type==='ready'){localListening=true;localFinalText='';wakeBar.classList.add('active');wakeText.textContent='Parle...';wakeText.className='';setStatus('local-listening','Ecoute (PTT)');startLocalMic();}
+      else if(m.type==='transcript'){
+        const text=m.text;
+        if(m.is_final&&text){localFinalText+=(localFinalText?' ':'')+text;}
+        const display=(localFinalText+(m.is_final?'':' '+text)).trim();
+        if(display)wakeText.textContent=display;
+        // NO auto-send — user clicks mic again to send
+      }else if(m.type==='error'){addMsg('system','STT erreur: '+m.message);stopLocalSession();}
+    };
+    sttWs.onerror=()=>{addMsg('system','Erreur connexion Deepgram');};
+    sttWs.onclose=()=>{localListening=false;};
+  }catch(err){addMsg('system','Erreur STT: '+err.message);}
 }
-function stopLocalListening(){localListening=false;clearTimeout(localSilenceTimer);try{if(localRecognition)localRecognition.stop();}catch{}localRecognition=null;wakeBar.classList.remove('active');}
+
+// PTT send: user clicked mic while listening → send accumulated text
+function pttSend(){
+  const text=localFinalText.trim();
+  stopLocalListening();
+  if(text){processLocal(text);}
+  else{addMsg('system','Rien entendu — re-clique pour parler.');startLocalListening();}
+}
+
+async function startLocalMic(){
+  try{
+    localMicStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:true,noiseSuppression:true}});
+    localAudioCtx=new AudioContext({sampleRate:16000});
+    if(localAudioCtx.state==='suspended')await localAudioCtx.resume();
+    const code=`class P extends AudioWorkletProcessor{constructor(){super();this.b=[];}process(i){const c=i[0]?.[0];if(!c)return true;for(let j=0;j<c.length;j++)this.b.push(c[j]);if(this.b.length>=1600){this.port.postMessage(new Float32Array(this.b.splice(0,1600)));}return true;}}registerProcessor('lp',P);`;
+    const blob=new Blob([code],{type:'application/javascript'});const url=URL.createObjectURL(blob);await localAudioCtx.audioWorklet.addModule(url);URL.revokeObjectURL(url);
+    const src=localAudioCtx.createMediaStreamSource(localMicStream);localWorkletNode=new AudioWorkletNode(localAudioCtx,'lp');
+    localWorkletNode.port.onmessage=(e)=>{
+      if(!sttWs||sttWs.readyState!==1)return;
+      const f=e.data;
+      // Noise gate: compute RMS, skip silent chunks
+      let sum=0;for(let j=0;j<f.length;j++)sum+=f[j]*f[j];
+      const rms=Math.sqrt(sum/f.length);
+      if(rms<NOISE_GATE_THRESHOLD)return; // below threshold — don't send
+      const pcm=new Int16Array(f.length);for(let j=0;j<f.length;j++)pcm[j]=Math.max(-32768,Math.min(32767,Math.round(f[j]*32767)));
+      sttWs.send(pcm.buffer);
+    };
+    src.connect(localWorkletNode);
+    const silentGain=localAudioCtx.createGain();silentGain.gain.value=0;
+    localWorkletNode.connect(silentGain);silentGain.connect(localAudioCtx.destination);
+    console.log('[local-mic] PTT + noise gate active');
+  }catch(err){console.warn('[local-mic] fail:',err);addMsg('system','Erreur micro: '+err.message);}
+}
+
+function stopLocalMic(){if(localWorkletNode){localWorkletNode.disconnect();localWorkletNode=null;}if(localMicStream){localMicStream.getTracks().forEach(t=>t.stop());localMicStream=null;}if(localAudioCtx){localAudioCtx.close().catch(()=>{});localAudioCtx=null;}}
+
+function stopLocalListening(){localListening=false;clearTimeout(localSilenceTimer);stopLocalMic();if(sttWs){try{sttWs.close();}catch{}sttWs=null;}wakeBar.classList.remove('active');}
 
 async function processLocal(text){
   if(!text||localProcessing)return; localProcessing=true; localFinalText='';
@@ -862,7 +898,11 @@ async function toggleCam(){
 // ─── Session management ───
 function startSession(){if(sessionActive)return;if(voiceMode==='local'){startLocalSession();return;}sessionActive=true;stopWakeWord();connectWS();}
 function stopSession(){if(voiceMode==='local'){stopLocalSession();return;}sessionActive=false;stopMic();stopPlayback();if(ws){ws.close();ws=null;}isSpeaking=false;currentTranscriptEl=null;if(wakeWordEnabled)setTimeout(()=>{if(!sessionActive){startWakeWord();setStatus('wakeword','Dis "Computer"...');}},500);else setStatus('disconnected','Pret');}
-function toggleSession(){if(sessionActive)stopSession();else startSession();}
+function toggleSession(){
+  // PTT: if local mode + listening → send text (don't stop session)
+  if(voiceMode==='local'&&sessionActive&&localListening&&!localProcessing){pttSend();return;}
+  if(sessionActive)stopSession();else startSession();
+}
 
 // ─── Text input ───
 function sendText(){

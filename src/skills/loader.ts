@@ -45,7 +45,121 @@ export function registerSkill(skill: Skill): void {
 }
 
 export function getSkill(name: string): Skill | undefined {
-  return registry.get(name);
+  const exact = registry.get(name);
+  if (exact) return exact;
+
+  // Fuzzy fallback: LLMs (especially Gemini) hallucinate underscores instead of dots
+  // e.g. "trading_account" → "trading.account", "crypto_price" → "crypto.price"
+  if (name.includes("_")) {
+    const dotName = name.replace(/_/g, ".");
+    const fuzzy = registry.get(dotName);
+    if (fuzzy) {
+      log.debug(`[loader] Fuzzy-matched "${name}" → "${dotName}"`);
+      return fuzzy;
+    }
+    // Try replacing only the FIRST underscore (namespace separator)
+    const firstDot = name.replace("_", ".");
+    if (firstDot !== dotName) {
+      const partial = registry.get(firstDot);
+      if (partial) {
+        log.debug(`[loader] Fuzzy-matched "${name}" → "${firstDot}"`);
+        return partial;
+      }
+    }
+  }
+
+  // Advanced fuzzy matching: Levenshtein distance + prefix matching
+  const fuzzyResult = findClosestSkill(name);
+  if (fuzzyResult) return fuzzyResult;
+
+  return undefined;
+}
+
+// ── Fuzzy matching helpers ──────────────────────────────────────────
+
+/** Compute Levenshtein distance between two strings. */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  // Use single-row optimization for memory efficiency
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+/**
+ * Find closest skill match using multi-strategy fuzzy matching.
+ * Strategies (in order):
+ *  1. Prefix match (e.g. "trading.pos" → "trading.positions")
+ *  2. Same-namespace Levenshtein (match method within correct namespace)
+ *  3. Global Levenshtein (max 2 edits, last resort)
+ */
+function findClosestSkill(name: string): Skill | undefined {
+  const dotName = name.includes("_") ? name.replace(/_/g, ".") : name;
+  const allNames = Array.from(registry.keys());
+
+  // Strategy 1: Prefix match — only accept if exactly ONE skill matches
+  const prefixMatches = allNames.filter(
+    (n) => n.startsWith(dotName) || (dotName.length > 4 && dotName.startsWith(n)),
+  );
+  if (prefixMatches.length === 1) {
+    log.info(`[loader] Fuzzy prefix-matched "${name}" → "${prefixMatches[0]}"`);
+    return registry.get(prefixMatches[0]);
+  }
+
+  // Strategy 2: Same-namespace Levenshtein on the method portion
+  const dotParts = dotName.split(".");
+  if (dotParts.length >= 2) {
+    const ns = dotParts[0];
+    const method = dotParts.slice(1).join(".");
+    const sameNs = allNames.filter((n) => n.startsWith(ns + "."));
+    let bestMatch: string | null = null;
+    let bestDist = Infinity;
+    for (const candidate of sameNs) {
+      const candidateMethod = candidate.slice(ns.length + 1);
+      const dist = levenshtein(method, candidateMethod);
+      // Allow up to 40% of method length edits, minimum 1, maximum 3
+      const maxDist = Math.min(3, Math.max(1, Math.floor(method.length * 0.4)));
+      if (dist < bestDist && dist <= maxDist) {
+        bestDist = dist;
+        bestMatch = candidate;
+      }
+    }
+    if (bestMatch) {
+      log.info(`[loader] Fuzzy ns-matched "${name}" → "${bestMatch}" (dist=${bestDist})`);
+      return registry.get(bestMatch);
+    }
+  }
+
+  // Strategy 3: Global Levenshtein — only for very close matches (max 2 edits)
+  let bestMatch: string | null = null;
+  let bestDist = Infinity;
+  for (const candidate of allNames) {
+    // Quick length check to skip obviously different names
+    if (Math.abs(dotName.length - candidate.length) > 2) continue;
+    const dist = levenshtein(dotName, candidate);
+    if (dist < bestDist && dist <= 2) {
+      bestDist = dist;
+      bestMatch = candidate;
+    }
+  }
+  if (bestMatch) {
+    log.info(`[loader] Fuzzy global-matched "${name}" → "${bestMatch}" (dist=${bestDist})`);
+    return registry.get(bestMatch);
+  }
+
+  return undefined;
 }
 
 export function getRegistry(): Map<string, Skill> {

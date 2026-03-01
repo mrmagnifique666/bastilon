@@ -1,9 +1,23 @@
 # Kingston — Aveux d'Ignorance
 
-> Ce fichier est auto-généré. 23 lacunes ouvertes.
-> Dernière mise à jour: 2026-02-25T11:49:14.231Z
+> Ce fichier est auto-généré. 25 lacunes ouvertes.
+> Dernière mise à jour: 2026-03-01T00:56:40.013Z
 
-## 🟡 MEDIUM (23)
+## 🟡 MEDIUM (25)
+
+### #59 — Agent mind (Kingston Mind) — cycle 1405
+- **Ce que je ne sais pas**: Échec: Agent mind (Kingston Mind) — cycle 1405. Erreur: Agent mind cycle timed out after 300s
+- **Contexte**: Agent mind [timeout] erreur consécutive #0. Role: Autonomous business brain — strategy, clients, trading, communication. Provider: unknown
+- **Pourquoi c'est important**: Fonctionnalité bloquée: Agent mind (Kingston Mind) — cycle 1405
+- **Comment corriger**: Erreur non catégorisée. Analyser le message: "Agent mind cycle timed out after 300s". Chercher dans les logs.
+- Source: agent-mind | Tentatives: 0 | 2026-03-01T00:56
+
+### #58 — error-handling
+- **Ce que je ne sais pas**: Incorrect argument type for 'tags' parameter
+- **Contexte**: Manual admission via learn.admit
+- **Pourquoi c'est important**: This affects proper categorization and resolution of knowledge gaps
+- **Comment corriger**: Validate input types before function calls
+- Source: kingston | Tentatives: 0 | 2026-02-28T22:23
 
 ### #57 — Agent night-worker (Night Worker) — cycle 725
 - **Ce que je ne sais pas**: Échec: Agent night-worker (Night Worker) — cycle 725. Erreur: Agent night-worker cycle timed out after 180s

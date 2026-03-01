@@ -70,44 +70,47 @@ export function selectModel(
     return isTierHealthy("sonnet") ? "sonnet" : "haiku";
   }
 
-  // Agent tasks — ALL go to Ollama when enabled (local, free, 24/7 with tools)
+  // Agent tasks — Haiku-first (reliable tool calls, $0 on Max plan)
+  // Ollama qwen3:14b was causing crash loops due to malformed tool args
   if (message.startsWith("[AGENT:")) {
+    if (isTierHealthy("haiku")) {
+      log.debug(`[model] Agent task → haiku (reliable tool calls)`);
+      return "haiku";
+    }
+    // Haiku down → try ollama as fallback
     if (config.ollamaEnabled && isTierHealthy("ollama")) {
-      log.debug(`[model] Agent task → ollama (Ollama-first architecture)`);
+      log.debug(`[model] Agent task → ollama (haiku down)`);
       return "ollama";
     }
-    // Ollama unhealthy or disabled → try OpenRouter (free models with tool support)
-    if (config.openrouterApiKey && isTierHealthy("openrouter")) {
-      log.debug(`[model] Agent task → openrouter (ollama down)`);
-      return "openrouter";
-    }
-    // OpenRouter also down → try haiku
-    if (isTierHealthy("haiku")) return "haiku";
-    // Claude also down? Try groq as last resort for agents
+    // Both down → try groq
     if (config.groqApiKey && isTierHealthy("groq")) {
-      log.debug(`[model] Agent task → groq (ollama+openrouter+claude down)`);
+      log.debug(`[model] Agent task → groq (haiku+ollama down)`);
       return "groq";
     }
     return "haiku"; // return haiku anyway — router will handle the failure
   }
 
-  // Scheduler events — ALL go to Ollama (free, local) when enabled
+  // Scheduler events — Haiku for tool-heavy tasks, Ollama for simple ones
   if (context === "scheduler" || message.startsWith("[SCHEDULER]") || message.startsWith("[HEARTBEAT")) {
-    if (config.ollamaEnabled && isTierHealthy("ollama")) {
-      log.debug(`[model] Scheduler task → ollama`);
+    // Heartbeats are simple — ollama is fine
+    if (message.startsWith("[HEARTBEAT") && config.ollamaEnabled && isTierHealthy("ollama")) {
+      log.debug(`[model] Heartbeat → ollama (simple, no tools)`);
       return "ollama";
     }
-    // Ollama unhealthy → try OpenRouter (free, tool capable)
-    if (config.openrouterApiKey && isTierHealthy("openrouter")) {
-      log.debug(`[model] Scheduler task → openrouter (ollama down)`);
-      return "openrouter";
+    // Everything else → Haiku (reliable tool calls)
+    if (isTierHealthy("haiku")) {
+      log.debug(`[model] Scheduler task → haiku (reliable tool calls)`);
+      return "haiku";
     }
-    // OpenRouter also down → try groq (free, text capable)
+    // Haiku down → fallback chain
+    if (config.ollamaEnabled && isTierHealthy("ollama")) {
+      log.debug(`[model] Scheduler task → ollama (haiku down)`);
+      return "ollama";
+    }
     if (config.groqApiKey && isTierHealthy("groq")) {
-      log.debug(`[model] Scheduler task → groq (ollama+openrouter down)`);
+      log.debug(`[model] Scheduler task → groq (haiku+ollama down)`);
       return "groq";
     }
-    log.debug(`[model] Scheduler task → haiku (ollama+openrouter+groq unavailable)`);
     return "haiku";
   }
 

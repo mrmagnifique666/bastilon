@@ -77,15 +77,18 @@ export function startVoiceServer(): void {
 
           let reply = "Je n'ai pas bien entendu. Peux-tu répéter en une phrase?";
           if (speech) {
-            reply = await askNoah(speech, {
-              type: "voice_turn",
-              callSid,
-              lang: config.voiceLanguage || "fr",
-              timeoutMs: Number(config.noahBridgeTimeoutMs || 12000),
-            });
+            // Try Noah bridge only if enabled; otherwise go straight to Gemini
+            if (isBridgeEnabled()) {
+              reply = await askNoah(speech, {
+                type: "voice_turn",
+                callSid,
+                lang: config.voiceLanguage || "fr",
+                timeoutMs: Number(config.noahBridgeTimeoutMs || 12000),
+              });
+            }
 
-            // If Noah bridge is unavailable/timeout, fallback to local Gemini text reply
-            if (!reply || /Noah n'a pas répondu|Réessaie dans un instant/i.test(reply)) {
+            // Fallback to local Gemini text reply if bridge disabled or Noah didn't respond
+            if (!isBridgeEnabled() || !reply || /Noah n'a pas répondu|Réessaie dans un instant/i.test(reply)) {
               reply = await generateFallbackVoiceReply(speech);
             }
           }
@@ -107,10 +110,17 @@ export function startVoiceServer(): void {
     if (req.method === "POST" && req.url?.startsWith("/voice/outbound-twiml")) {
       const parsed = new URL(req.url, `http://localhost:${config.voicePort}`);
       const reason = parsed.searchParams.get("reason") || "Kingston vous appelle.";
-      const twiml = buildOutboundTwiml(reason);
+      const mode = (process.env.VOICE_MODE || "").toLowerCase();
+      let twiml: string;
+      if (mode === "stable_turn") {
+        twiml = buildGatherTwiml(reason);
+        log.info(`[voice] Served outbound Gather TwiML (stable_turn) — reason: ${reason.slice(0, 60)}`);
+      } else {
+        twiml = buildOutboundTwiml(reason);
+        log.info(`[voice] Served outbound Stream TwiML — reason: ${reason.slice(0, 60)}`);
+      }
       res.writeHead(200, { "Content-Type": "text/xml" });
       res.end(twiml);
-      log.info(`[voice] Served outbound TwiML — reason: ${reason.slice(0, 60)}`);
       return;
     }
 
