@@ -164,22 +164,61 @@ async function main() {
     } catch { /* best effort */ }
   }
 
-  // Trace ALL exits
+  // Trace ALL exits — use writeCrashDiag (file-based), NOT console.error (pipes may be broken)
   process.on("exit", (code) => {
     if (code !== 0) {
-      const msg = `Kingston exiting with code ${code}`;
-      console.error(`[EXIT] ${msg}`);
-      writeCrashDiag("EXIT", `${msg}\nStack: ${new Error().stack}`);
+      writeCrashDiag("EXIT", `Kingston exiting with code ${code}\nStack: ${new Error().stack}`);
     }
   });
-  // Catch unhandled errors
-  // uncaughtException: crash hard so the wrapper can restart cleanly (truly broken state)
-  process.on("uncaughtException", (err) => {
+  // ── Stream-level EPIPE guard ──────────────────────────────────
+  // When wrapper restarts, stdout/stderr pipes break. Catch at stream level
+  // BEFORE they reach uncaughtException and kill the bot.
+  for (const stream of [process.stdout, process.stderr]) {
+    stream?.on?.("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE" || err.code === "ERR_STREAM_DESTROYED") return; // harmless
+      writeCrashDiag("STREAM_ERROR", `${err.code}: ${err.message}`);
+    });
+  }
+  // ── Process stdin guard (Windows pipe safety) ──────────────────
+  process.stdin?.on?.("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE" || err.code === "ERR_STREAM_DESTROYED") return;
+    writeCrashDiag("STDIN_ERROR", `${err.code}: ${err.message}`);
+  });
+
+  // ── Catch unhandled errors ───────────────────────────────────
+  // Non-fatal list: errors that should NOT crash the bot
+  const NON_FATAL_CODES = new Set([
+    "EPIPE", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END",
+    "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTCONN", "ENETUNREACH",
+    "ERR_STREAM_PREMATURE_CLOSE",
+  ]);
+  let nonFatalCount = 0;
+
+  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+    const code = err?.code || "";
     const msg = `Uncaught exception: ${err?.message || err}\n${err?.stack || ""}`;
+
+    // EPIPE / network errors: log and survive — the bot can keep running
+    if (NON_FATAL_CODES.has(code)) {
+      nonFatalCount++;
+      writeCrashDiag("NON_FATAL", `#${nonFatalCount} (${code}): ${err.message}`);
+      // Only crash if we get flooded (50+ in 5 min = something is really wrong)
+      if (nonFatalCount > 50) {
+        writeCrashDiag("FATAL", `Too many non-fatal errors (${nonFatalCount}) — restarting`);
+        process.exit(1);
+      }
+      return; // ← survive, don't exit
+    }
+
+    // Everything else: crash for wrapper to handle
     log.error(`[FATAL] ${msg}`);
     writeCrashDiag("FATAL", msg);
     process.exit(1);
   });
+
+  // Reset non-fatal counter every 5 minutes
+  setInterval(() => { nonFatalCount = 0; }, 5 * 60_000);
+
   // unhandledRejection: LOG but do NOT crash — transient network errors (Ollama, APIs)
   // are the #1 cause and crashing is worse than continuing with degraded service
   let rejectionCount = 0;

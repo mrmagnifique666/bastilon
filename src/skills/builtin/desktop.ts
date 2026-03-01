@@ -180,10 +180,12 @@ registerSkill({
           , { timeout: 5000 });
       } else if (process.platform === "darwin") {
         const proc = spawn("pbcopy");
+        proc.stdin.on("error", () => { /* swallow */ });
         proc.stdin.write(text);
         proc.stdin.end();
       } else {
         const proc = spawn("xclip", ["-selection", "clipboard"]);
+        proc.stdin.on("error", () => { /* swallow */ });
         proc.stdin.write(text);
         proc.stdin.end();
       }

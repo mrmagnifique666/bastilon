@@ -17,6 +17,7 @@ import { buildMemoryContext } from "./shared/memoryContext.js";
 import { getPersonalityPrompt } from "../personality/personality.js";
 import { getCurrentMoodContext } from "../personality/mood.js";
 import { getPluginSummary } from "../plugins/loader.js";
+import { acquireCli, releaseCli } from "./cliSemaphore.js";
 
 export interface StreamResult {
   text: string;
@@ -324,6 +325,9 @@ export function runClaudeStream(
 
     if (killed) return; // Cancelled while building prompt
 
+    // Acquire semaphore slot (waits if max concurrent CLIs reached or low RAM)
+    await acquireCli();
+
     const model = modelOverride || config.claudeModel;
     const cliArgs = [
       "-p", "-", "--output-format", "stream-json", "--verbose", "--model", model,
@@ -445,6 +449,17 @@ export function runClaudeStream(
       }
     }
 
+    // Guard ALL child process streams — unhandled stream errors crash the process silently on Windows
+    proc.stdout!.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(`[stream] stdout error (${err.code || "unknown"}): ${err.message}`);
+    });
+    proc.stderr!.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(`[stream] stderr error (${err.code || "unknown"}): ${err.message}`);
+    });
+    proc.stdin!.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(`[stream] stdin error (${err.code || "unknown"}): ${err.message}`);
+    });
+
     proc.stdout!.on("data", (chunk: Buffer) => {
       lastStdoutActivity = Date.now();
       gotAnyStdout = true;
@@ -470,18 +485,25 @@ export function runClaudeStream(
       if (text) log.warn(`[stream] stderr: ${text.slice(0, 500)}`);
     });
 
-    proc.stdin!.write(prompt);
-    proc.stdin!.end();
+    try {
+      proc.stdin!.write(prompt);
+      proc.stdin!.end();
+    } catch (err) {
+      log.warn(`[stream] stdin write failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Don't crash — the close handler will deal with the empty response
+    }
 
     proc.on("error", (err) => {
       if (timer) clearTimeout(timer);
       clearInterval(stallInterval);
+      releaseCli();
       safeError(err, "Spawn error");
     });
 
     proc.on("close", (code) => {
       if (timer) clearTimeout(timer);
       clearInterval(stallInterval);
+      releaseCli();
       if (killed) return;
 
       // If the result was already delivered via a "result" event, don't fire again
@@ -529,6 +551,7 @@ export function runClaudeStream(
   })().catch((err) => {
     // Last-resort catch — should never reach here with the inner try-catch,
     // but prevents unhandled rejection from killing the process
+    releaseCli(); // safety: ensure semaphore is released on unexpected errors
     safeError(err, "Unhandled async error in stream IIFE");
   });
 

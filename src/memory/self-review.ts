@@ -218,6 +218,10 @@ async function deriveRuleSmart(pattern: ErrorPattern): Promise<string> {
 
       let output = "";
       proc.stdout.on("data", (d: Buffer) => (output += d.toString()));
+      // Guard all streams against unhandled errors (silent crash on Windows)
+      proc.stdout.on("error", () => { /* swallow */ });
+      proc.stderr.on("error", () => { /* swallow */ });
+      proc.stdin.on("error", () => { /* swallow */ });
       proc.on("close", (code) => {
         if (code === 0 && output.trim().startsWith("RULE")) {
           log.info(`[self-review] Claude generated smart rule for "${pattern.key}"`);
@@ -229,8 +233,10 @@ async function deriveRuleSmart(pattern: ErrorPattern): Promise<string> {
       proc.on("error", () => resolve(deriveRuleFallback(pattern)));
 
       // Write prompt via stdin for long prompts
-      proc.stdin.write(prompt);
-      proc.stdin.end();
+      try {
+        proc.stdin.write(prompt);
+        proc.stdin.end();
+      } catch { resolve(deriveRuleFallback(pattern)); }
     });
   } catch {
     return deriveRuleFallback(pattern);

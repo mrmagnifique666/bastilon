@@ -21,6 +21,7 @@ import { getPersonalityPrompt } from "../personality/personality.js";
 import { getCurrentMoodContext } from "../personality/mood.js";
 import { getPluginSummary } from "../plugins/loader.js";
 import { buildLiveContext } from "../orchestrator/contextLoader.js";
+import { acquireCli, releaseCli } from "./cliSemaphore.js";
 
 const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 
@@ -163,7 +164,7 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- Si un tool échoue, essaie une approche alternative avant d'abandonner.`,
     `- La SEULE raison de poser une question: la tâche elle-même est ambiguë (ex: "quelle couleur?").`,
     `- Format Telegram: paragraphes courts, bullet points. < 500 chars quand possible.`,
-    `- Pour persister de l'info, utilise notes.add. Ta mémoire conversation = seulement 12 tours.`,
+    `- Pour persister de l'info, utilise notes.add. Ta mémoire conversation = les ${config.memoryTurns} derniers tours.`,
     `- Pour demander des changements de code, utilise code.request (l'Executor le prend en 5 min).`,
     ``,
     `## RÉPONSE OBLIGATOIRE APRÈS TOOL CALLS (CRITIQUE)`,
@@ -346,10 +347,10 @@ async function buildFullPrompt(
     parts.push(`\n${memory}`);
   }
 
-  // Conversation history — limit to prevent prompt bloat
-  // Agents (chatId 100-249) get fewer turns, users get more
+  // Conversation history — use configured MEMORY_TURNS for users
+  // Agents (chatId 100-249) get fewer turns, users get full history
   const isAgentChat = chatId >= 100 && chatId < 1000;
-  const maxTurns = isAgentChat ? 8 : 30;
+  const maxTurns = isAgentChat ? 8 : config.memoryTurns;
   const allTurns = getTurns(chatId);
   const turns = allTurns.slice(-maxTurns);
   if (turns.length > 0) {
@@ -418,6 +419,9 @@ export async function runClaude(
 
   log.debug(`Claude prompt length: ${prompt.length} (resume: ${isResume})`);
 
+  // Acquire semaphore slot (waits if max concurrent CLIs reached or low RAM)
+  await acquireCli();
+
   return new Promise<ParsedResult>((resolve) => {
     const model = modelOverride || config.claudeModel;
     const args = [
@@ -462,6 +466,17 @@ export async function runClaude(
       log.warn(`Claude CLI timed out after ${CLI_TIMEOUT_MS}ms`);
     }, CLI_TIMEOUT_MS);
 
+    // Guard ALL child process streams — unhandled stream errors crash the process silently on Windows
+    proc.stdout.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(`[cli] stdout error (${err.code || "unknown"}): ${err.message}`);
+    });
+    proc.stderr.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(`[cli] stderr error (${err.code || "unknown"}): ${err.message}`);
+    });
+    proc.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      log.warn(`[cli] stdin error (${err.code || "unknown"}): ${err.message}`);
+    });
+
     proc.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
@@ -471,11 +486,16 @@ export async function runClaude(
     });
 
     // Write the prompt to stdin and close it
-    proc.stdin.write(prompt);
-    proc.stdin.end();
+    try {
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    } catch (err) {
+      log.warn(`[cli] stdin write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     proc.on("error", (err) => {
       clearTimeout(timer);
+      releaseCli();
       log.error("Failed to spawn Claude CLI:", err.message);
       resolve({
         type: "message",
@@ -485,6 +505,7 @@ export async function runClaude(
 
     proc.on("close", (code) => {
       clearTimeout(timer);
+      releaseCli();
 
       if (killed) {
         resolve({

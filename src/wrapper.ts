@@ -25,6 +25,7 @@ import { spawn, execSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
+import { startTunnel, stopTunnel } from "./voice/tunnel.js";
 
 dotenv.config();
 
@@ -57,6 +58,61 @@ const TEST_MODE = process.argv.includes("--test");
 const ALPACA_BASE = "https://paper-api.alpaca.markets";
 const BINANCE_BASE = "https://api.binance.com";
 const CRYPTO_SYMBOLS = ["BTCUSDT", "ETHUSDT", "DOGEUSDT", "SOLUSDT"];
+
+// ═══════════════════════════════════════════
+// KEEP-ALIVE — Prevent Windows sleep while wrapper runs
+// ═══════════════════════════════════════════
+
+const KEEPALIVE_INTERVAL_MS = 120_000; // 2 minutes
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Tell Windows "this system is busy — don't sleep."
+ * Uses SetThreadExecutionState with ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED | ES_CONTINUOUS.
+ * Called every 2 minutes to maintain the flag.
+ */
+function preventSleep(): void {
+  try {
+    // ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED = 0x80000003
+    execSync(
+      `powershell -NoProfile -Command "Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class KeepAwake { [DllImport(\\\"kernel32.dll\\\") ] public static extern uint SetThreadExecutionState(uint f); }'; [KeepAwake]::SetThreadExecutionState([uint32]'0x80000003')"`,
+      { encoding: "utf-8", timeout: 5000, stdio: "ignore" },
+    );
+  } catch {
+    // Fallback: ensure powercfg sleep is disabled
+    try {
+      execSync("powercfg /change standby-timeout-ac 0", { timeout: 3000, stdio: "ignore" });
+    } catch { /* best effort */ }
+  }
+}
+
+/**
+ * Allow Windows to sleep again (clear the CONTINUOUS flag).
+ */
+function allowSleep(): void {
+  try {
+    // ES_CONTINUOUS only = 0x80000000 (clears SYSTEM_REQUIRED + DISPLAY_REQUIRED)
+    execSync(
+      `powershell -NoProfile -Command "Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class KeepAwake { [DllImport(\\\"kernel32.dll\\\")] public static extern uint SetThreadExecutionState(uint f); }'; [KeepAwake]::SetThreadExecutionState([uint32]'0x80000000')"`,
+      { encoding: "utf-8", timeout: 5000, stdio: "ignore" },
+    );
+  } catch { /* best effort */ }
+}
+
+function startKeepAlive(): void {
+  preventSleep();
+  keepAliveTimer = setInterval(preventSleep, KEEPALIVE_INTERVAL_MS);
+  logConsole("\u2615", "keepalive", "Windows sleep prevention active (ES_SYSTEM_REQUIRED)");
+}
+
+function stopKeepAlive(): void {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+  allowSleep();
+  logConsole("\u2615", "keepalive", "Windows sleep prevention released");
+}
 
 // ═══════════════════════════════════════════
 // TIME
@@ -360,6 +416,14 @@ let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
 let lastElectroshockTime = 0;
 let startInProgress = false;
 
+// Wake detection: track last tick time to detect sleep gaps
+let lastTickTime = Date.now();
+const SLEEP_GAP_THRESHOLD_MS = 3 * 60_000; // 3 minutes gap = system slept
+
+// Ollama health tracking
+let ollamaConsecutiveFails = 0;
+let ollamaRestartInProgress = false;
+
 function writeCrashReport(code: number | null, uptimeStr: string, signal?: string): void {
   try {
     const report = [
@@ -485,15 +549,21 @@ async function startBot(): Promise<void> {
   botLogStream.on("error", (err) => logConsole("\u26A0\uFE0F", "log.stream", `Log stream error: ${err.message}`));
 
   if (child.stdout) {
+    child.stdout.on("error", (err: NodeJS.ErrnoException) => {
+      logConsole("\u26A0\uFE0F", "bot.pipe", `child stdout error: ${err.code || err.message}`);
+    });
     child.stdout.on("data", (chunk: Buffer) => {
-      botLogStream.write(chunk);
+      try { botLogStream.write(chunk); } catch { /* log stream broken */ }
       // Echo to our stdout so tray.ts can detect "Bot online"
       try { process.stdout.write(chunk); } catch { /* EPIPE */ }
     });
   }
   if (child.stderr) {
+    child.stderr.on("error", (err: NodeJS.ErrnoException) => {
+      logConsole("\u26A0\uFE0F", "bot.pipe", `child stderr error: ${err.code || err.message}`);
+    });
     child.stderr.on("data", (chunk: Buffer) => {
-      botLogStream.write(chunk);
+      try { botLogStream.write(chunk); } catch { /* log stream broken */ }
       try { process.stderr.write(chunk); } catch { /* EPIPE */ }
     });
   }
@@ -538,12 +608,41 @@ async function startBot(): Promise<void> {
       crashTimes.shift();
     }
 
-    // Write crash report
-    writeCrashReport(code, uptimeStr, signal ?? undefined);
+    // Capture last 20 lines of bot output for crash diagnostics
+    try {
+      const botLog = path.join(DATA_DIR, "kingston-output.log");
+      if (fs.existsSync(botLog)) {
+        const tail = fs.readFileSync(botLog, "utf-8").split("\n").slice(-20).join("\n");
+        writeCrashReport(code, uptimeStr, signal ?? undefined);
+        fs.appendFileSync(CRASH_REPORT_FILE, `Bot tail:\n${tail}\n\n`);
+      } else {
+        writeCrashReport(code, uptimeStr, signal ?? undefined);
+      }
+    } catch {
+      writeCrashReport(code, uptimeStr, signal ?? undefined);
+    }
 
     // If uptime was > 5 minutes, reset consecutive crash counter (it was stable)
     if (uptimeSec > 300) {
       consecutiveCrashes = 1;
+    }
+
+    // Startup crash detection: if bot dies in <10s, something fundamental is broken
+    // Use aggressive backoff to avoid the 5s-crash infinite loop
+    if (uptimeSec < 10 && consecutiveCrashes >= 3) {
+      const startupCooldown = Math.min(consecutiveCrashes * 60_000, MAX_CRASH_DELAY_MS); // 3min, 4min, ... up to 10min
+      const cdStr = `${Math.round(startupCooldown / 60_000)}min`;
+      logConsole("\u{1F534}", "bot.crash", `Startup crash loop detected (${consecutiveCrashes}x <10s). Cooldown ${cdStr}`);
+      kingstonStatus = "crashed";
+      cleanLock();
+      sendTelegramDirect(`\u{1F534} *Kingston startup crash loop*\n${consecutiveCrashes} crashes < 10s.\nRecovery dans ${cdStr}.`);
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+      recoveryTimer = setTimeout(() => {
+        logConsole("\u{1F504}", "bot.recovery", "Startup crash recovery attempt");
+        consecutiveCrashes = 0;
+        startBot();
+      }, startupCooldown);
+      return;
     }
 
     if (crashTimes.length >= MAX_RAPID_CRASHES) {
@@ -1311,6 +1410,167 @@ registerTask("system.agents", "\u{1F9E0}", 30, async () => {
 });
 
 // ═══════════════════════════════════════════
+// TASK: system.disk — Monitor disk space (alert at 85%, critical at 95%)
+// ═══════════════════════════════════════════
+
+registerTask("system.disk", "\u{1F4BE}", 30, async () => {
+  try {
+    const out = execSync(
+      `powershell -NoProfile -Command "$d = Get-CimInstance Win32_LogicalDisk -Filter 'DeviceID=\\\"C:\\\"'; Write-Host ($d.FreeSpace / 1GB).ToString('F1') ($d.Size / 1GB).ToString('F1')"`,
+      { encoding: "utf-8", timeout: 8000 },
+    ).trim();
+    const parts = out.split(/\s+/);
+    const freeGb = parseFloat(parts[0]);
+    const totalGb = parseFloat(parts[1]);
+    if (isNaN(freeGb) || isNaN(totalGb) || totalGb === 0) {
+      return { ok: false, summary: `Parse error: ${out}` };
+    }
+
+    const usedPct = Math.round(((totalGb - freeGb) / totalGb) * 100);
+    const summary = `C: ${usedPct}% used (${freeGb.toFixed(1)} GB free / ${totalGb.toFixed(0)} GB)`;
+
+    if (usedPct >= 95) {
+      const alert = `\u{1F534} *CRITICAL: Disk C: at ${usedPct}%* (${freeGb.toFixed(1)} GB free)\nRisk: DB corruption, crash imminent. Free space NOW.`;
+      return { ok: false, summary, alert };
+    }
+    if (usedPct >= 85) {
+      const alert = `\u26A0\uFE0F *Disk C: at ${usedPct}%* (${freeGb.toFixed(1)} GB free)\nConsider cleanup: old logs, temp files, npm cache.`;
+      return { ok: false, summary, alert };
+    }
+
+    return { ok: true, summary };
+  } catch (e) {
+    return { ok: false, summary: `Error: ${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+
+// ═══════════════════════════════════════════
+// TASK: system.ollama — Health check + auto-restart Ollama
+// ═══════════════════════════════════════════
+
+registerTask("system.ollama", "\u{1F999}", 5, async () => {
+  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+  try {
+    const resp = await fetch(`${ollamaUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) {
+      ollamaConsecutiveFails = 0;
+      return { ok: true, summary: "Ollama alive" };
+    }
+    throw new Error(`HTTP ${resp.status}`);
+  } catch (e) {
+    ollamaConsecutiveFails++;
+    const errMsg = e instanceof Error ? e.message : String(e);
+
+    // Only restart after 2 consecutive failures (avoid false positives)
+    if (ollamaConsecutiveFails >= 2 && !ollamaRestartInProgress) {
+      ollamaRestartInProgress = true;
+      logConsole("\u{1F504}", "ollama.restart", `Ollama down (${ollamaConsecutiveFails}x) — restarting...`);
+
+      try {
+        // Launch ollama serve (detached, won't block wrapper)
+        const child = spawn("ollama", ["serve"], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.unref();
+
+        // Wait up to 15s for it to come back
+        let recovered = false;
+        for (let i = 0; i < 15; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          try {
+            const check = await fetch(`${ollamaUrl}/api/tags`, {
+              signal: AbortSignal.timeout(2000),
+            });
+            if (check.ok) { recovered = true; break; }
+          } catch { /* still starting */ }
+        }
+
+        ollamaRestartInProgress = false;
+        if (recovered) {
+          ollamaConsecutiveFails = 0;
+          const alert = `\u2705 Ollama auto-restarted successfully`;
+          sendTelegramDirect(alert);
+          return { ok: true, summary: "Ollama restarted OK", alert };
+        } else {
+          const alert = `\u{1F534} Ollama restart failed — agents falling back to Groq/Haiku`;
+          return { ok: false, summary: `Restart failed after 15s`, alert };
+        }
+      } catch (restartErr) {
+        ollamaRestartInProgress = false;
+        return { ok: false, summary: `Restart error: ${restartErr instanceof Error ? restartErr.message : String(restartErr)}` };
+      }
+    }
+
+    return { ok: false, summary: `Down (${ollamaConsecutiveFails}x): ${errMsg}` };
+  }
+});
+
+// ═══════════════════════════════════════════
+// TASK: system.wake — Detect Windows sleep/wake and recover
+// ═══════════════════════════════════════════
+
+registerTask("system.wake", "\u{1F4A4}", 1, async () => {
+  const nowMs = Date.now();
+  const gap = nowMs - lastTickTime;
+  lastTickTime = nowMs;
+
+  // Normal tick gap (TICK_MS ≈ 60s + execution time, so up to ~120s is normal)
+  if (gap < SLEEP_GAP_THRESHOLD_MS) {
+    return { ok: true, summary: `OK (gap ${Math.round(gap / 1000)}s)` };
+  }
+
+  // Detected a sleep gap!
+  const gapMin = Math.round(gap / 60_000);
+  logConsole("\u{1F6A8}", "wake.detect", `SLEEP DETECTED — system was asleep for ~${gapMin}min`);
+
+  // 1. Clear stale CLI sessions (they're dead after sleep)
+  try {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(DB_PATH);
+    const cleared = db.prepare("DELETE FROM sessions WHERE 1=1").run();
+    db.close();
+    logConsole("\u{1F9F9}", "wake.cleanup", `Cleared ${cleared.changes} stale CLI sessions`);
+  } catch (e) {
+    logConsole("\u26A0\uFE0F", "wake.cleanup", `Session cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // 2. Check if Ollama is still alive (often dies during sleep)
+  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+  let ollamaOk = false;
+  try {
+    const resp = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    ollamaOk = resp.ok;
+  } catch { /* down */ }
+
+  if (!ollamaOk) {
+    logConsole("\u{1F504}", "wake.ollama", "Ollama dead after sleep — restarting...");
+    try {
+      const child = spawn("ollama", ["serve"], { detached: true, stdio: "ignore", windowsHide: true });
+      child.unref();
+    } catch { /* best effort */ }
+  }
+
+  // 3. Refresh keep-alive (Windows sleep flag was cleared by sleep)
+  preventSleep();
+
+  // 4. If bot is running, force restart to clear stale connections
+  if (kingstonStatus === "running" && kingston && !kingston.killed) {
+    logConsole("\u{1F504}", "wake.bot", "Restarting bot to clear stale connections...");
+    try { kingston.kill("SIGTERM"); } catch { /* already dead */ }
+    // The exit handler will restart via the wrapper's crash recovery
+  }
+
+  const alert = `\u{1F4A4} *Windows sleep d\u00E9tect\u00E9* (~${gapMin}min)\nRecovery: sessions clear\u00E9es, Ollama ${ollamaOk ? "OK" : "restart\u00E9"}, bot restart\u00E9`;
+  sendTelegramDirect(alert);
+
+  return { ok: true, summary: `Sleep ~${gapMin}min — recovery triggered`, alert };
+});
+
+// ═══════════════════════════════════════════
 // TRADING JOURNAL
 // ═══════════════════════════════════════════
 
@@ -1664,6 +1924,8 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     }
     cleanLock();
     releaseHeartbeatLock();
+    stopKeepAlive();
+    stopTunnel();
     setTimeout(() => process.exit(0), 2000);
   });
 }
@@ -1720,8 +1982,22 @@ if (process.argv.includes("--test")) {
 
   killRivalSupervisors();
 
-  // Start bot
-  startBot();
+  // Prevent Windows from sleeping while Kingston is running
+  startKeepAlive();
+
+  // Start Cloudflare tunnel for voice server (auto-updates .env + Twilio webhooks)
+  if (process.env.VOICE_ENABLED === "true") {
+    const voicePort = Number(process.env.VOICE_PORT || "3100");
+    startTunnel(voicePort)
+      .then((url) => {
+        if (url) logConsole("\u{1F310}", "tunnel", `Active: ${url}`);
+        else logConsole("\u26A0\uFE0F", "tunnel", "Failed to start — voice calls may not work");
+      })
+      .catch((e) => logConsole("\u274C", "tunnel", `Error: ${e}`));
+  }
+
+  // Start bot (slight delay if tunnel is starting, to let .env update propagate)
+  setTimeout(() => startBot(), process.env.VOICE_ENABLED === "true" ? 5000 : 0);
 
   // Tick loop with overlap guard
   let tickRunning = false;
