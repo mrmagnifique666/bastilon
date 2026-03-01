@@ -182,9 +182,11 @@ export function handleTwilioStreamLive(twilioWs: WebSocket): void {
     onReady() {
       ready = true;
       log.info("[pipeline-live] Gemini Live session ready — audio streaming enabled");
-      // IMPORTANT: do not force a second spoken intro here.
-      // TwiML already handles the greeting (VOICE_GREETING) before stream starts.
-      // This avoids repeated "Bonjour, ici Kingston" loops.
+      // Nudge Gemini to speak immediately — Twilio will hang up if no audio flows within ~10s.
+      // TwiML <Say> plays a greeting first, then the stream starts. Gemini must speak to keep the line alive.
+      if (session) {
+        session.sendText("[SYSTÈME: L'appel téléphonique est connecté. Dis bonjour à Nicolas brièvement.]");
+      }
     },
     onError(msg: string) {
       log.error(`[pipeline-live] Gemini Live error: ${msg}`);

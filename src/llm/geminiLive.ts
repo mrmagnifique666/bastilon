@@ -31,7 +31,7 @@ const MODEL = "gemini-2.5-flash-native-audio-latest";
 const SESSION_TIMEOUT_MS = 14 * 60 * 1000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const MAX_LIVE_TOOLS = 80;
-const MAX_PHONE_TOOLS = 25; // Phone calls: enough tools to be useful, truncated results prevent 1008
+const MAX_PHONE_TOOLS = 25; // Phone calls: keep payload small to avoid 1008 (dungeon.* included via priority)
 
 /** Paths for persistent voice session files */
 const VOICE_CONV_FILE = path.resolve("relay/voice-conversation.json");
@@ -42,7 +42,7 @@ const BLOCKED_PREFIXES = ["browser.", "ollama.", "pdf."];
 
 /** Additional blocked prefixes for phone calls — prevent infinite loops + reduce tool count */
 const PHONE_BLOCKED_PREFIXES = [
-  "phone.", "sms.", "wakeword.", "dungeon.", "printful.", "shopify.",
+  "phone.", "sms.", "wakeword.", "printful.", "shopify.",
   "cohere.", "mistral.", "together.", "replicate.", "workflow.",
   "tutor.", "jobs.", "travel.", "health.", "invoice.", "youtube.",
   "brand.", "autofix.", "price.", "plugin.", "verify.", "xp.",
@@ -72,6 +72,13 @@ const PRIORITY_PREFIXES = [
   "dungeon.",
 ];
 
+/** Phone-only priority — minimal set to keep payload small + dungeon */
+const PHONE_PRIORITY_PREFIXES = [
+  "help", "notes.", "web.", "memory.", "time.", "weather.",
+  "trading.", "stocks.", "crypto.", "calendar.", "scheduler.",
+  "image.", "dungeon.",
+];
+
 // ── Gemini type mapping ────────────────────────────────────────────
 
 function toGeminiType(t: string): string {
@@ -90,12 +97,17 @@ interface LiveToolDecl {
 
 /** Convert a Kingston skill to a Gemini Live function declaration (dots → underscores). */
 function skillToLiveDecl(skill: Skill): LiveToolDecl {
-  const properties: Record<string, { type: string; description?: string }> = {};
+  const properties: Record<string, Record<string, unknown>> = {};
   for (const [key, prop] of Object.entries(skill.argsSchema.properties)) {
-    properties[key] = {
+    const entry: Record<string, unknown> = {
       type: toGeminiType(prop.type),
-      ...(prop.description ? { description: prop.description } : {}),
     };
+    if (prop.description) entry.description = prop.description;
+    // Array types MUST have an "items" field for Gemini schema validation
+    if (prop.type === "array") {
+      entry.items = { type: toGeminiType(prop.items?.type || "string") };
+    }
+    properties[key] = entry;
   }
   return {
     name: skill.name.replace(/\./g, "_"),
@@ -158,12 +170,14 @@ function buildLiveTools(isPhoneCall = false): {
   );
 
   // Sort: priority prefixes first, then rest
+  // Phone calls use a smaller priority set to keep payload under 15KB
+  const priorityList = isPhoneCall ? PHONE_PRIORITY_PREFIXES : PRIORITY_PREFIXES;
   const priority: Skill[] = [];
   const rest: Skill[] = [];
   for (const s of allSkills) {
     const isPriority =
       s.name === "help" ||
-      PRIORITY_PREFIXES.some((p) => s.name.startsWith(p));
+      priorityList.some((p) => s.name.startsWith(p));
     if (isPriority) priority.push(s);
     else rest.push(s);
   }
@@ -422,8 +436,8 @@ export class GeminiLiveSession {
     this.saveConversationSummary();
     this.saveEpisodicSummary();
     this.persistConversation();
-    // Clean up conversation file after close (session is over)
-    try { fs.unlinkSync(VOICE_CONV_FILE); } catch (e) { log.debug(`[gemini-live] Cleanup: ${e}`); }
+    // No longer delete — let the file expire naturally via TTL (4h)
+    // so Nicolas can hang up and call back with context preserved
     // Emit voice session end hook (fire-and-forget)
     emitHookAsync("voice:session:end", {
       chatId: this.opts.chatId,
@@ -726,6 +740,18 @@ export class GeminiLiveSession {
         `RÈGLE #6: Tu te présentes UNE SEULE FOIS au début de l'appel. Après ça, NE RÉPÈTE PLUS JAMAIS la salutation. Même après un outil, une pause, ou une reconnexion, continue la conversation naturellement.`,
         ``,
       );
+      // D&D DM instructions for phone mode (only when a session is active)
+      if (this.dndContext) {
+        systemParts.push(
+          `## MODE DUNGEON MASTER (TÉLÉPHONE)`,
+          `Tu es aussi le Dungeon Master de la partie D&D en cours.`,
+          `Narration immersive et concise — décris les scènes avec ambiance mais en phrases courtes.`,
+          `Annonce les jets de dés à voix haute: "Tu lances un d20... 14 plus 3, ça fait 17, c'est une réussite!"`,
+          `Pas de markdown, pas de tableaux. Tout doit être parlé naturellement.`,
+          `Utilise dungeon_play pour les actions, dungeon_roll pour les jets, dungeon_status pour l'état.`,
+          ``,
+        );
+      }
     } else {
       systemParts.push(
         `## Mode vocal`,
@@ -775,25 +801,40 @@ export class GeminiLiveSession {
     // Inject rich context (memories + telegram history + episodic + notes)
     // For phone: truncate aggressively to keep setup payload small (avoid 1008)
     if (this.cachedMemoryContext) {
+      // Phone: aggressive truncation to keep total payload < 15KB
+      // On reconnect, summary + conv log add ~2KB so we need less memory context
+      const hasReconnectData = this.conversationSummary || this.conversationLog.length > 0;
+      const phoneLimit = this.opts.isPhoneCall
+        ? (hasReconnectData ? 800 : (this.dndContext ? 1200 : 2000))
+        : Infinity;
       const ctx = this.opts.isPhoneCall
-        ? this.cachedMemoryContext.slice(0, 2000)
+        ? this.cachedMemoryContext.slice(0, phoneLimit)
         : this.cachedMemoryContext;
       systemParts.push(``, `## Contexte`, ctx);
     }
 
-    // Inject D&D context if a session is active (skip for phone — too heavy)
-    if (this.dndContext && !this.opts.isPhoneCall) {
-      systemParts.push(``, `## PARTIE D&D EN COURS`, this.dndContext);
-      systemParts.push(
-        `Tu es aussi le Dungeon Master. Continue la narration en cours.`,
-        `Utilise les outils dungeon_play, dungeon_roll, dungeon_status pour gérer la partie.`,
-        `Garde le même ton, les mêmes personnages, et l'intrigue en cours.`,
-      );
+    // Inject D&D context if a session is active
+    if (this.dndContext) {
+      if (this.opts.isPhoneCall) {
+        // Phone: compact D&D context (~600-800 chars) to avoid 1008
+        systemParts.push(``, `## PARTIE D&D EN COURS`, this.buildCompactDndContext());
+      } else {
+        // Dashboard voice: full context
+        systemParts.push(``, `## PARTIE D&D EN COURS`, this.dndContext);
+        systemParts.push(
+          `Tu es aussi le Dungeon Master. Continue la narration en cours.`,
+          `Utilise les outils dungeon_play, dungeon_roll, dungeon_status pour gérer la partie.`,
+          `Garde le même ton, les mêmes personnages, et l'intrigue en cours.`,
+        );
+      }
     }
 
     // Inject conversation summary (compressed by Gemini Flash before reconnect)
     if (this.conversationSummary) {
-      systemParts.push(``, `## Résumé de la conversation précédente`, this.conversationSummary);
+      const summary = this.opts.isPhoneCall
+        ? this.conversationSummary.slice(0, 400)
+        : this.conversationSummary;
+      systemParts.push(``, `## Résumé de la conversation précédente`, summary);
     }
 
     // Inject recent conversation log for continuity across reconnects
@@ -914,8 +955,14 @@ export class GeminiLiveSession {
     const { userId, isAdmin, callbacks } = this.opts;
 
     // Map Gemini tool name (underscores) → Kingston skill name (dots)
-    const skillName =
-      this.toolNameMap.get(geminiName) || geminiName.replace(/_/g, ".");
+    // Priority: exact map lookup → underscore replacement → fuzzy via getSkill
+    const mappedName = this.toolNameMap.get(geminiName);
+    const skillName = mappedName || geminiName.replace(/_/g, ".");
+    if (!mappedName) {
+      log.warn(
+        `[gemini-live] Tool "${geminiName}" not in nameMap — using fallback: "${skillName}"`,
+      );
+    }
 
     log.info(
       `[gemini-live] Tool call: ${geminiName} → ${skillName}(${JSON.stringify(args).slice(0, 100)})`,
@@ -979,10 +1026,11 @@ export class GeminiLiveSession {
         return;
       }
 
-      // Resolve skill
+      // Resolve skill (getSkill now includes Levenshtein fuzzy matching)
       const skill = getSkill(skillName);
       if (!skill) {
-        const err = `Unknown tool: ${skillName}`;
+        log.warn(`[gemini-live] Unknown tool after fuzzy matching: "${geminiName}" → "${skillName}"`);
+        const err = `Unknown tool: ${skillName}. Check the tool name spelling.`;
         this.sendToolResponse(id, geminiName, { error: err });
         callbacks.onToolResult(skillName, err);
         return;
@@ -1138,17 +1186,17 @@ export class GeminiLiveSession {
     }
   }
 
-  /** Restore conversation from a previous session file (if recent — within 30 min). */
+  /** Restore conversation from a previous session file (if recent — within 4h). */
   private restoreConversation(): void {
     try {
       if (!fs.existsSync(VOICE_CONV_FILE)) return;
       const raw = fs.readFileSync(VOICE_CONV_FILE, "utf-8");
       const data = JSON.parse(raw);
 
-      // Only restore if the saved conversation is recent (< 30 min old)
+      // Only restore if the saved conversation is recent (< 4h old)
       const savedAt = new Date(data.timestamp).getTime();
       const age = Date.now() - savedAt;
-      if (age > 30 * 60 * 1000) {
+      if (age > 4 * 60 * 60 * 1000) {
         log.debug(`[gemini-live] Saved conversation too old (${Math.round(age / 60000)}min), ignoring`);
         return;
       }
@@ -1269,6 +1317,44 @@ ${conversationText}`;
     } catch (err) {
       log.debug(`[gemini-live] D&D context check failed: ${err instanceof Error ? err.message : err}`);
       this.dndContext = "";
+    }
+  }
+
+  /** Build a compact D&D context for phone calls (~600-800 chars instead of full context). */
+  private buildCompactDndContext(): string {
+    try {
+      const sessions = dungeonListSessions();
+      const active = sessions.find((s: any) => s.status === "active");
+      if (!active) return "";
+
+      const session = dungeonGetSession(active.id);
+      if (!session) return "";
+
+      const characters = dungeonGetCharacters(active.id);
+      const recentTurns = dungeonGetTurns(active.id, 3);
+
+      // Compact character summaries (name + class + HP only)
+      const chars = characters
+        .map((c: any) => `${c.name}${c.is_npc ? "(PNJ)" : ""}: ${c.class} HP:${c.hp}/${c.hp_max}`)
+        .join(", ");
+
+      // Last 3 turns — truncated narratives
+      const turns = recentTurns.reverse()
+        .map((t: any) => {
+          const action = t.player_action ? `[Action] ${t.player_action.slice(0, 80)}` : "";
+          const dm = t.dm_narrative ? `[DM] ${t.dm_narrative.slice(0, 120)}` : "";
+          return `T${t.turn_number}: ${action} ${dm}`.trim();
+        })
+        .join("\n");
+
+      return [
+        `"${session.name}" — ${session.current_location} (Tour ${session.turn_number})`,
+        `Persos: ${chars}`,
+        turns,
+      ].join("\n");
+    } catch (err) {
+      log.debug(`[gemini-live] Compact D&D context failed: ${err instanceof Error ? err.message : err}`);
+      return this.dndContext.slice(0, 700); // Fallback: truncate full context
     }
   }
 

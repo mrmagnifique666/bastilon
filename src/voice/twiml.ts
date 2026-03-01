@@ -13,9 +13,16 @@ function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** Get Polly voice + BCP-47 lang for TwiML (fr-CA for Quebec, en-US otherwise) */
+function getVoiceAndLang(): { voice: string; lang: string } {
+  if (config.voiceLanguage === "fr") {
+    return { voice: "Polly.Liam", lang: "fr-CA" };
+  }
+  return { voice: "Polly.Matthew", lang: "en-US" };
+}
+
 export function buildGatherTwiml(prompt?: string): string {
-  const voice = config.voiceLanguage === "fr" ? "Polly.Mathieu" : "Polly.Matthew";
-  const lang = config.voiceLanguage === "fr" ? "fr-FR" : "en-US";
+  const { voice, lang } = getVoiceAndLang();
   const greeting = escapeXml(config.voiceGreeting || "Bonjour, ici Kingston.");
   const sayPrompt = escapeXml(prompt || "Je t'écoute.");
 
@@ -32,8 +39,7 @@ export function buildGatherTwiml(prompt?: string): string {
 }
 
 export function buildTurnReplyTwiml(reply: string): string {
-  const voice = config.voiceLanguage === "fr" ? "Polly.Mathieu" : "Polly.Matthew";
-  const lang = config.voiceLanguage === "fr" ? "fr-FR" : "en-US";
+  const { voice, lang } = getVoiceAndLang();
   const safeReply = escapeXml(reply || "Je n'ai pas bien entendu. Peux-tu répéter?");
 
   return [
@@ -46,23 +52,20 @@ export function buildTurnReplyTwiml(reply: string): string {
 }
 
 export function buildTwiml(): string {
-  const voice = config.voiceLanguage === "fr" ? "Polly.Mathieu" : "Polly.Matthew";
-  const lang = config.voiceLanguage === "fr" ? "fr-FR" : "en-US";
+  const { voice, lang } = getVoiceAndLang();
   const greeting = escapeXml(config.voiceGreeting || "Bonjour, ici Kingston.");
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     "<Response>",
-    `  <Say voice="${voice}" language="${lang}">${greeting}</Say>`,
-    '  <Pause length="1"/>',
+    `  <Say voice="Polly.Mathieu" language="fr-FR">${greeting}</Say>`,
     `  <Connect><Stream url="${getStreamUrl()}" /></Connect>`,
     "</Response>",
   ].join("\n");
 }
 
 export function buildOutboundTwiml(reason: string): string {
-  const voice = config.voiceLanguage === "fr" ? "Polly.Mathieu" : "Polly.Matthew";
-  const lang = config.voiceLanguage === "fr" ? "fr-FR" : "en-US";
+  const { voice, lang } = getVoiceAndLang();
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     "<Response>",
