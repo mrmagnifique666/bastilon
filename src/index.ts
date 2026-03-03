@@ -14,6 +14,7 @@ import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import { startVoiceServer } from "./voice/server.js";
 import { startXttsServer } from "./voice/xttsLauncher.js";
+import { startWhisperServer } from "./voice/whisperLauncher.js";
 import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
 import { startAgents, shutdownAgents } from "./agents/startup.js";
 import { cleanupDatabase } from "./storage/store.js";
@@ -325,6 +326,12 @@ async function main() {
     startXttsServer();
   } catch (err) {
     log.warn(`[xtts] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    startWhisperServer();
+  } catch (err) {
+    log.warn(`[whisper] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // Start deferred memory queue (background processing of embeddings/KG ops)

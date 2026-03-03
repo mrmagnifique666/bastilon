@@ -2176,9 +2176,10 @@ export function startDashboard(): void {
     });
   });
 
-  // ─── STT WebSocket (Deepgram proxy with RPG keyword boosting) ───
-  const sttWss = new WebSocketServer({ noServer: true });
-  sttWss.on("connection", (clientWs: WebSocket) => {
+  // ─── STT WebSocket (Deepgram or Whisper proxy with RPG keyword boosting) ───
+
+  /** Handle STT via Deepgram cloud. */
+  function handleDeepgramStt(clientWs: WebSocket, authMsg: { sampleRate?: number; language?: string }) {
     const dgApiKey = config.deepgramApiKey;
     if (!dgApiKey) {
       clientWs.send(JSON.stringify({ type: "error", message: "Deepgram API key not configured" }));
@@ -2186,7 +2187,155 @@ export function startDashboard(): void {
       return;
     }
 
-    let dgWs: WebSocket | null = null;
+    // RPG keywords to boost recognition — Shadowrun + D&D terms
+    const rpgKeywords = [
+      "rigger:2", "decker:2", "street samurai:2", "adept:2", "shaman:2",
+      "technomancer:2", "face:1",
+      "ork:2", "troll:2", "elf:1", "dwarf:1", "human:1",
+      "shadowrun:2", "runner:2", "chummer:2", "nuyen:2", "Johnson:2",
+      "cyberware:2", "bioware:2", "commlink:2", "datajack:2", "simsense:2",
+      "Matrix:1", "astral:1", "mana:1", "essence:1", "karma:1",
+      "Renraku:2", "Aztechnology:2", "Ares:2", "Saeder-Krupp:2", "NeoNET:2",
+      "Lone Star:2", "DocWagon:2", "Shadowland:2", "jackpoint:2",
+      "barbarian:2", "bard:2", "cleric:2", "druid:2", "fighter:1",
+      "monk:1", "paladin:2", "ranger:1", "rogue:2", "sorcerer:2",
+      "warlock:2", "wizard:1",
+      "halfling:2", "tiefling:2", "dragonborn:2", "gnome:2",
+      "half-elf:2", "half-orc:2",
+      "dungeon:1", "initiative:1", "cantrip:2", "spell slot:2",
+      "nain:2", "elfe:2", "orque:2", "mage:1", "guerrier:1",
+      "voleur:1", "paladin:1", "druide:2", "barde:2",
+      "d20:2", "d12:2", "d10:2", "d8:2", "d6:2", "d4:2",
+    ];
+
+    const sampleRate = authMsg.sampleRate || 16000;
+    const params = new URLSearchParams({
+      encoding: "linear16",
+      sample_rate: String(sampleRate),
+      channels: "1",
+      model: "nova-2",
+      language: authMsg.language || "fr",
+      punctuate: "true",
+      endpointing: "400",
+      smart_format: "true",
+      interim_results: "true",
+      utterance_end_ms: "3000",
+    });
+    for (const kw of rpgKeywords) {
+      params.append("keywords", kw);
+    }
+
+    const dgUrl = `wss://api.deepgram.com/v1/listen?${params}`;
+    const dgWs = new WebSocket(dgUrl, {
+      headers: { Authorization: `Token ${dgApiKey}` },
+    });
+
+    dgWs.on("open", () => {
+      clientWs.send(JSON.stringify({ type: "ready" }));
+      log.info("[stt] Deepgram STT connected");
+    });
+
+    dgWs.on("message", (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "Results" && msg.channel?.alternatives?.[0]) {
+          const alt = msg.channel.alternatives[0];
+          const text = alt.transcript as string;
+          if (text) {
+            clientWs.send(JSON.stringify({
+              type: "transcript",
+              text,
+              is_final: !!msg.is_final,
+              speech_final: !!msg.speech_final,
+            }));
+          }
+        } else if (msg.type === "UtteranceEnd") {
+          clientWs.send(JSON.stringify({ type: "utterance_end" }));
+        }
+      } catch (err) {
+        log.warn("[stt] Deepgram parse error:", String(err));
+      }
+    });
+
+    dgWs.on("error", (err: Error) => {
+      log.error("[stt] Deepgram error:", String(err));
+      clientWs.send(JSON.stringify({ type: "error", message: String(err) }));
+    });
+
+    dgWs.on("close", () => {
+      log.info("[stt] Deepgram connection closed");
+      clientWs.send(JSON.stringify({ type: "closed" }));
+      if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+    });
+
+    // Forward audio from client to Deepgram
+    clientWs.on("message", (raw: Buffer | string) => {
+      if (dgWs.readyState === WebSocket.OPEN) {
+        dgWs.send(raw);
+      }
+    });
+
+    clientWs.on("close", () => {
+      if (dgWs.readyState === WebSocket.OPEN) {
+        dgWs.send(JSON.stringify({ type: "CloseStream" }));
+        dgWs.close();
+      }
+    });
+  }
+
+  /** Handle STT via local Whisper server (proxy to faster-whisper WS). */
+  function handleWhisperStt(clientWs: WebSocket, authMsg: { token?: string; sampleRate?: number; language?: string }) {
+    const whisperUrl = `ws://localhost:${config.whisperPort}/ws/transcribe`;
+    const whisperWs = new WebSocket(whisperUrl);
+
+    whisperWs.on("open", () => {
+      // Forward auth to Whisper server with RPG mode
+      whisperWs.send(JSON.stringify({
+        type: "auth",
+        token: config.dashboardToken,
+        sampleRate: authMsg.sampleRate || 16000,
+        language: authMsg.language || "fr",
+        rpgMode: config.whisperRpgMode || "shadowrun",
+      }));
+    });
+
+    whisperWs.on("message", (data: Buffer) => {
+      // Forward all Whisper responses to client (same protocol)
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(data.toString());
+      }
+    });
+
+    whisperWs.on("error", (err: Error) => {
+      log.error("[stt] Whisper WS error:", String(err));
+      clientWs.send(JSON.stringify({ type: "error", message: `Whisper: ${err.message}` }));
+    });
+
+    whisperWs.on("close", () => {
+      log.info("[stt] Whisper connection closed");
+      clientWs.send(JSON.stringify({ type: "closed" }));
+      if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+    });
+
+    // Forward audio + control messages from client to Whisper
+    clientWs.on("message", (raw: Buffer | string) => {
+      if (whisperWs.readyState === WebSocket.OPEN) {
+        whisperWs.send(raw);
+      }
+    });
+
+    clientWs.on("close", () => {
+      if (whisperWs.readyState === WebSocket.OPEN) {
+        whisperWs.send(JSON.stringify({ type: "finalize" }));
+        setTimeout(() => {
+          if (whisperWs.readyState === WebSocket.OPEN) whisperWs.close();
+        }, 1000);
+      }
+    });
+  }
+
+  const sttWss = new WebSocketServer({ noServer: true });
+  sttWss.on("connection", (clientWs: WebSocket) => {
     let authenticated = false;
 
     const authTimeout = setTimeout(() => {
@@ -2196,128 +2345,41 @@ export function startDashboard(): void {
       }
     }, 5000);
 
-    clientWs.on("message", (raw: Buffer | string) => {
-      // First message must be JSON auth + config
-      if (!authenticated) {
-        try {
-          const msg = JSON.parse(raw.toString());
-          if (msg.type === "auth") {
-            const token = config.dashboardToken;
-            if (token && msg.token !== token) {
-              clientWs.send(JSON.stringify({ type: "error", message: "Invalid token" }));
-              clientWs.close();
-              return;
-            }
-            clearTimeout(authTimeout);
-            authenticated = true;
-
-            // RPG keywords to boost recognition — Shadowrun + D&D terms
-            const rpgKeywords = [
-              // Shadowrun archetypes
-              "rigger:2", "decker:2", "street samurai:2", "adept:2", "shaman:2",
-              "technomancer:2", "face:1",
-              // Shadowrun metatypes
-              "ork:2", "troll:2", "elf:1", "dwarf:1", "human:1",
-              // Shadowrun terms
-              "shadowrun:2", "runner:2", "chummer:2", "nuyen:2", "Johnson:2",
-              "cyberware:2", "bioware:2", "commlink:2", "datajack:2", "simsense:2",
-              "Matrix:1", "astral:1", "mana:1", "essence:1", "karma:1",
-              "Renraku:2", "Aztechnology:2", "Ares:2", "Saeder-Krupp:2", "NeoNET:2",
-              "Lone Star:2", "DocWagon:2", "Shadowland:2", "jackpoint:2",
-              // D&D classes
-              "barbarian:2", "bard:2", "cleric:2", "druid:2", "fighter:1",
-              "monk:1", "paladin:2", "ranger:1", "rogue:2", "sorcerer:2",
-              "warlock:2", "wizard:1",
-              // D&D races
-              "halfling:2", "tiefling:2", "dragonborn:2", "gnome:2",
-              "half-elf:2", "half-orc:2",
-              // D&D terms
-              "dungeon:1", "initiative:1", "cantrip:2", "spell slot:2",
-              // General RPG
-              "nain:2", "elfe:2", "orque:2", "mage:1", "guerrier:1",
-              "voleur:1", "paladin:1", "druide:2", "barde:2",
-              "d20:2", "d12:2", "d10:2", "d8:2", "d6:2", "d4:2",
-            ];
-
-            // Connect to Deepgram with RPG-optimized config
-            const sampleRate = msg.sampleRate || 16000;
-            const params = new URLSearchParams({
-              encoding: "linear16",
-              sample_rate: String(sampleRate),
-              channels: "1",
-              model: "nova-2",
-              language: msg.language || "fr",
-              punctuate: "true",
-              endpointing: "400",
-              smart_format: "true",
-              interim_results: "true",
-              utterance_end_ms: "3000",
-            });
-            for (const kw of rpgKeywords) {
-              params.append("keywords", kw);
-            }
-
-            const dgUrl = `wss://api.deepgram.com/v1/listen?${params}`;
-            dgWs = new WebSocket(dgUrl, {
-              headers: { Authorization: `Token ${dgApiKey}` },
-            });
-
-            dgWs.on("open", () => {
-              clientWs.send(JSON.stringify({ type: "ready" }));
-              log.info("[stt] Deepgram STT connected for dungeon");
-            });
-
-            dgWs.on("message", (data: Buffer) => {
-              try {
-                const msg = JSON.parse(data.toString());
-                if (msg.type === "Results" && msg.channel?.alternatives?.[0]) {
-                  const alt = msg.channel.alternatives[0];
-                  const text = alt.transcript as string;
-                  if (text) {
-                    clientWs.send(JSON.stringify({
-                      type: "transcript",
-                      text,
-                      is_final: !!msg.is_final,
-                      speech_final: !!msg.speech_final,
-                    }));
-                  }
-                } else if (msg.type === "UtteranceEnd") {
-                  clientWs.send(JSON.stringify({ type: "utterance_end" }));
-                }
-              } catch (err) {
-                log.warn("[stt] Deepgram parse error:", String(err));
-              }
-            });
-
-            dgWs.on("error", (err: Error) => {
-              log.error("[stt] Deepgram error:", String(err));
-              clientWs.send(JSON.stringify({ type: "error", message: String(err) }));
-            });
-
-            dgWs.on("close", () => {
-              log.info("[stt] Deepgram connection closed");
-              clientWs.send(JSON.stringify({ type: "closed" }));
-              if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
-            });
-
-            clientWs.send(JSON.stringify({ type: "authenticated" }));
+    // Wait for auth message, then route to correct backend
+    const onFirstMessage = (raw: Buffer | string) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === "auth") {
+          const token = config.dashboardToken;
+          if (token && msg.token !== token) {
+            clientWs.send(JSON.stringify({ type: "error", message: "Invalid token" }));
+            clientWs.close();
+            return;
           }
-        } catch { /* not JSON — ignore before auth */ }
-        return;
-      }
+          clearTimeout(authTimeout);
+          authenticated = true;
+          clientWs.send(JSON.stringify({ type: "authenticated" }));
 
-      // After auth: forward raw audio to Deepgram
-      if (dgWs && dgWs.readyState === WebSocket.OPEN) {
-        dgWs.send(raw);
-      }
-    });
+          // Remove this one-shot listener — backend handlers will add their own
+          clientWs.removeListener("message", onFirstMessage);
+
+          // Route to correct STT backend
+          const backend = config.sttBackend;
+          if (backend === "whisper") {
+            log.info("[stt] Routing to Whisper (local)");
+            handleWhisperStt(clientWs, msg);
+          } else {
+            log.info("[stt] Routing to Deepgram (cloud)");
+            handleDeepgramStt(clientWs, msg);
+          }
+        }
+      } catch { /* not JSON — ignore before auth */ }
+    };
+
+    clientWs.on("message", onFirstMessage);
 
     clientWs.on("close", () => {
       clearTimeout(authTimeout);
-      if (dgWs && dgWs.readyState === WebSocket.OPEN) {
-        dgWs.send(JSON.stringify({ type: "CloseStream" }));
-        dgWs.close();
-      }
     });
   });
 

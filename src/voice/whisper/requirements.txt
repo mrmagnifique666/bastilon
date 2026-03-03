@@ -1,0 +1,8 @@
+# Faster-Whisper STT Server — Python 3.12 required (CTranslate2 compatibility)
+# Install CUDA PyTorch first: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Then: pip install -r requirements.txt
+faster-whisper>=1.1.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+numpy<2.0

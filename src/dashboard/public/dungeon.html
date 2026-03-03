@@ -4659,23 +4659,35 @@ function renderLeftPanel() {
       <div class="hp-bar-outer" style="height:6px;background:rgba(255,255,255,0.06);border-radius:3px;margin-bottom:2px;">
         <div style="height:100%;width:${hpPct}%;background:${hpColor};border-radius:3px;transition:width 0.3s;"></div>
       </div>
-      <div style="font-size:10px;color:var(--text-dim);margin-bottom:2px;">PV ${c.hp||'?'}/${c.hpMax||'?'} &nbsp; CA ${c.ac||'?'}</div>
+      ${c.isShadowrun
+        ? `<div style="font-size:10px;color:var(--text-dim);margin-bottom:2px;">PV ${c.hp||'?'}/${c.hpMax||'?'} &nbsp; Stun ${c.stunMax||'?'}</div>`
+        : `<div style="font-size:10px;color:var(--text-dim);margin-bottom:2px;">PV ${c.hp||'?'}/${c.hpMax||'?'} &nbsp; CA ${c.ac||'?'}</div>`}
       ${condHtml ? `<div style="margin-bottom:4px;display:flex;gap:3px;flex-wrap:wrap;">${condHtml}</div>` : ''}
       ${c.xp !== undefined ? `<div class="xp-bar-outer"><div class="xp-bar-fill" style="width:${xpPct}%"></div></div><div style="font-size:9px;color:var(--text-dim);margin-bottom:4px;">XP ${xpCur}/${xpMax}</div>` : ''}
       ${spellHtml}
-      <div class="pc-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;font-size:10px;text-align:center;margin-bottom:6px;">
+      ${c.isShadowrun
+        ? `<div class="pc-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;font-size:10px;text-align:center;margin-bottom:6px;">
+        <span class="pc-tag">BOD ${s.body||'?'}</span><span class="pc-tag">AGI ${s.agility||'?'}</span><span class="pc-tag">REA ${s.reaction||'?'}</span>
+        <span class="pc-tag">FOR ${s.strength||'?'}</span><span class="pc-tag">LOG ${s.logic||'?'}</span><span class="pc-tag">INT ${s.intuition||'?'}</span>
+        <span class="pc-tag">CHA ${s.charisma||'?'}</span><span class="pc-tag">EDGE ${s.edge||'?'}</span><span class="pc-tag">ESS ${s.essence||'?'}</span>
+      </div>`
+        : `<div class="pc-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;font-size:10px;text-align:center;margin-bottom:6px;">
         <span class="pc-tag">FOR ${s.str||'?'}</span><span class="pc-tag">DEX ${s.dex||'?'}</span><span class="pc-tag">CON ${s.con||'?'}</span>
         <span class="pc-tag">INT ${s.int||'?'}</span><span class="pc-tag">SAG ${s.wis||'?'}</span><span class="pc-tag">CHA ${s.cha||'?'}</span>
-      </div>
+      </div>`}
       <details class="pc-detail"><summary>Equipement & Maitrises</summary>
         <div style="font-size:11px;color:var(--text-dim);padding:4px 0;white-space:pre-wrap;">${esc(c.equipment||'')}\n${esc(c.proficiencies||'')}</div>
       </details>
       <details class="pc-detail"><summary>Personnalite</summary>
         <div style="font-size:11px;color:var(--text-dim);padding:4px 0;">
-          <div><strong>Traits:</strong> ${esc(c.traits||'')}</div>
+          ${c.isShadowrun
+            ? `<div><strong>Traits:</strong> ${esc(c.traits||'')}</div>
+          <div><strong>Defaut:</strong> ${esc(c.flaw||'')}</div>
+          <div><strong>Motivation:</strong> ${esc(c.bond||'')}</div>`
+            : `<div><strong>Traits:</strong> ${esc(c.traits||'')}</div>
           <div><strong>Defaut:</strong> ${esc(c.flaw||'')}</div>
           <div><strong>Lien:</strong> ${esc(c.bond||'')}</div>
-          <div><strong>Ideal:</strong> ${esc(c.ideal||'')}</div>
+          <div><strong>Ideal:</strong> ${esc(c.ideal||'')}</div>`}
         </div>
       </details>
     </div>`;

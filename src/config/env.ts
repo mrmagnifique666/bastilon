@@ -173,6 +173,8 @@ function buildConfig() {
     facebookAppSecret: optional("FACEBOOK_APP_SECRET", ""),
     facebookPageAccessToken: optional("FACEBOOK_PAGE_ACCESS_TOKEN", ""),
     facebookPageId: optional("FACEBOOK_PAGE_ID", ""),
+    facebookPageAccessToken2: optional("FACEBOOK_PAGE_ACCESS_TOKEN_2", ""),
+    facebookPageId2: optional("FACEBOOK_PAGE_ID_2", ""),
     instagramBusinessAccountId: optional("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""),
 
     // Agent notification mute (agents run but don't send to Telegram)
@@ -199,6 +201,16 @@ function buildConfig() {
     // XTTS Voice Cloning
     xttsPort: Number(optional("XTTS_PORT", "3300")),
     xttsEnabled: optional("XTTS_ENABLED", "true") === "true",
+
+    // Whisper STT (local faster-whisper)
+    sttBackend: optional("STT_BACKEND", "deepgram") as "deepgram" | "whisper",
+    whisperEnabled: optional("WHISPER_ENABLED", "false") === "true",
+    whisperPort: Number(optional("WHISPER_PORT", "3301")),
+    whisperModel: optional("WHISPER_MODEL", "large-v3"),
+    whisperComputeType: optional("WHISPER_COMPUTE_TYPE", "float16"),
+    whisperModelCache: optional("WHISPER_MODEL_CACHE", "D:/whisper-models"),
+    whisperLanguage: optional("WHISPER_LANGUAGE", "fr"),
+    whisperRpgMode: optional("WHISPER_RPG_MODE", "shadowrun"),
 
     // Free API keys
     newsApiKey: optional("NEWS_API_KEY", ""),
